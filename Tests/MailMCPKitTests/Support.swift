@@ -1,0 +1,118 @@
+import Foundation
+import MCP
+import MailAutomation
+import MailFixtures
+import MailStore
+
+@testable import MailMCPKit
+
+/// Records every request instead of talking to Mail.
+final class RecordingAutomation: MailAutomating, @unchecked Sendable {
+    enum Call: Equatable {
+        case move([Int64], MailboxTarget, MailboxTarget)
+        case setState([Int64], MailboxTarget, Bool?, Bool?, FlagColor?)
+        case trash([Int64], MailboxTarget)
+        case createMailbox(MailboxTarget)
+        case check(String?)
+        case compose(OutgoingMessage, DeliveryMode)
+        case reply(Int64, MailboxTarget, String, Bool, DeliveryMode)
+        case open(Int64)
+    }
+
+    private let lock = NSLock()
+    private var _calls: [Call] = []
+    var calls: [Call] { lock.withLock { _calls } }
+    /// Runs inside `move`, e.g. to simulate Mail re-inserting the message under a new id.
+    var onMove: (@Sendable ([Int64], MailboxTarget) -> Void)?
+
+    private func record(_ call: Call) { lock.withLock { _calls.append(call) } }
+
+    func accounts() async throws -> [AutomationAccount] { [] }
+
+    func move(ids: [Int64], from: MailboxTarget, to: MailboxTarget) async throws -> Int {
+        record(.move(ids, from, to))
+        onMove?(ids, to)
+        return ids.count
+    }
+
+    func setState(ids: [Int64], in mailbox: MailboxTarget, read: Bool?, flagged: Bool?, flagColor: FlagColor?) async throws -> Int {
+        record(.setState(ids, mailbox, read, flagged, flagColor))
+        return ids.count
+    }
+
+    func trash(ids: [Int64], in mailbox: MailboxTarget) async throws -> Int {
+        record(.trash(ids, mailbox))
+        return ids.count
+    }
+
+    func createMailbox(_ target: MailboxTarget) async throws { record(.createMailbox(target)) }
+    func checkForNewMail(accountID: String?) async throws { record(.check(accountID)) }
+    func compose(_ message: OutgoingMessage, mode: DeliveryMode) async throws -> ComposeHandle? {
+        record(.compose(message, mode))
+        return nil
+    }
+
+    func closeCompose(_ handle: ComposeHandle) async throws {}
+
+    func reply(
+        to id: Int64, in mailbox: MailboxTarget, body: String, replyAll: Bool, cc: [String], bcc: [String],
+        attachments: [String], mode: DeliveryMode
+    ) async throws -> ComposeHandle? {
+        record(.reply(id, mailbox, body, replyAll, mode))
+        return nil
+    }
+
+    func open(_ id: Int64, in mailbox: MailboxTarget) async throws { record(.open(id)) }
+}
+
+/// A toolbox over the standard fixture, with its own settings, approvals and log in a temp folder.
+struct Harness {
+    let fixture: StandardFixture
+    let toolbox: MailToolbox
+    let automation: RecordingAutomation
+    let support: URL
+    let approvals: ApprovalCenter
+
+    init(settings: Settings = Settings(), readOnly: Bool = false) throws {
+        fixture = try StandardFixture.make()
+        support = fixture.store.directory.appending(path: "support")
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        try settings.save(to: support.appending(path: "settings.json"))
+        automation = RecordingAutomation()
+        approvals = ApprovalCenter(directory: support.appending(path: "approvals"), heartbeat: support.appending(path: "agent.heartbeat"))
+        toolbox = MailToolbox(
+            store: try fixture.openStore(), automation: automation,
+            settings: SettingsProvider(url: support.appending(path: "settings.json")), approvals: approvals,
+            activity: ActivityLog(url: support.appending(path: "activity.jsonl")),
+            bodyIndexURL: support.appending(path: "body-index.sqlite"), readOnly: readOnly)
+    }
+
+    func id(_ name: String) -> Int64 { fixture.ids[name]! }
+
+    /// Calls a tool and returns its text and error flag.
+    func call(_ name: String, _ arguments: [String: Value] = [:]) async -> (text: String, isError: Bool) {
+        let result = await toolbox.call(name, arguments: arguments)
+        let text = result.content.compactMap { content -> String? in
+            if case .text(let text, _, _) = content { return text }
+            return nil
+        }.joined()
+        return (text, result.isError == true)
+    }
+
+    /// Calls a tool expecting success and decodes its JSON.
+    func json(_ name: String, _ arguments: [String: Value] = [:]) async throws -> [String: Any] {
+        let (text, isError) = await call(name, arguments)
+        guard !isError else { throw ToolError("tool \(name) failed: \(text)") }
+        return try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] ?? [:]
+    }
+
+    func remove() { fixture.store.remove() }
+}
+
+func ids(_ messages: Any?) -> [Int64] {
+    (messages as? [[String: Any]] ?? []).compactMap { ($0["id"] as? NSNumber)?.int64Value }
+}
+
+func subjects(_ messages: Any?) -> [String] {
+    (messages as? [[String: Any]] ?? []).compactMap { $0["subject"] as? String }
+}

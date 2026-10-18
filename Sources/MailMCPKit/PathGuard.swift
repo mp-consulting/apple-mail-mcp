@@ -115,11 +115,18 @@ public struct PathGuard: Sendable {
         return resolved
     }
 
+    /// `.env`, `.env.local`, `.env.production`…; the checked-in `.env.example` kind holds no secrets.
+    static func isEnvSecrets(_ name: String) -> Bool {
+        let lower = name.lowercased()
+        guard lower == ".env" || lower.hasPrefix(".env.") else { return false }
+        return !["example", "sample", "template", "dist"].contains(String(lower.dropFirst(5)))
+    }
+
     /// Validates a file to attach to an outgoing message; returns the resolved path.
     public func checkAttachment(_ path: String) throws -> String {
         guard !path.trimmingCharacters(in: .whitespaces).isEmpty else { throw Denied(description: "A file path is required.") }
         let resolved = Self.resolve(path)
-        if (resolved as NSString).lastPathComponent.lowercased() == ".env" {
+        if Self.isEnvSecrets((resolved as NSString).lastPathComponent) {
             throw Denied(description: "Cannot attach .env secrets files: \(resolved)")
         }
         if Self.isUnder(resolved, homeRoots(Self.deniedReadHome)) {

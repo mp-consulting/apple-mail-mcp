@@ -39,6 +39,8 @@ public final class SQLiteConnection {
     let handle: OpaquePointer
     public let path: String
     private var statementCache: [String: OpaquePointer] = [:]
+    /// Statements stepping right now (a row callback may run another query); never finalized by eviction.
+    private var activeStatements: Set<OpaquePointer> = []
 
     /// Opens a database. `readOnly` uses a `mode=ro` URI so SQLite never takes
     /// a write lock on Mail's live index, but still sees WAL-committed data.
@@ -87,9 +89,11 @@ public final class SQLiteConnection {
     /// Runs `sql` with `bindings` and calls `row` for each result row.
     public func query(_ sql: String, _ bindings: [SQLValue] = [], row: (Row) throws -> Void) throws {
         let statement = try prepared(sql)
+        let outermost = activeStatements.insert(statement).inserted
         defer {
             sqlite3_reset(statement)
             sqlite3_clear_bindings(statement)
+            if outermost { activeStatements.remove(statement) }
         }
         try bind(bindings, to: statement)
         while true {
@@ -152,9 +156,12 @@ public final class SQLiteConnection {
             throw SQLiteError.prepare(sql: sql, message: lastErrorMessage)
         }
         // Keep the cache bounded: dynamic search SQL varies with the filter set.
+        // Statements still stepping in an enclosing query stay; finalizing them would be a use-after-free.
         if statementCache.count > 256 {
-            for cached in statementCache.values { sqlite3_finalize(cached) }
-            statementCache.removeAll()
+            for (key, cached) in statementCache where !activeStatements.contains(cached) {
+                sqlite3_finalize(cached)
+                statementCache[key] = nil
+            }
         }
         statementCache[sql] = statement
         return statement

@@ -60,6 +60,36 @@ struct PathGuardTests {
         let restricted = PathGuard(attachAllowlist: [home + "/Downloads"], home: home)
         #expect(throws: PathGuard.Denied.self) { try restricted.checkAttachment(home + "/Documents/report.pdf") }
     }
+
+    @Test func envVariantsAreSecrets() throws {
+        for name in [".env.local", ".ENV.production"] {
+            FileManager.default.createFile(atPath: home + "/Documents/" + name, contents: Data("SECRET=1".utf8))
+            #expect(throws: PathGuard.Denied.self, "\(name)") { try guardian.checkAttachment(home + "/Documents/" + name) }
+        }
+        FileManager.default.createFile(atPath: home + "/Documents/.env.example", contents: Data("SECRET=".utf8))
+        #expect(throws: Never.self) { try guardian.checkAttachment(home + "/Documents/.env.example") }
+        #expect(!PathGuard.isEnvSecrets(".environment"))
+    }
+}
+
+@Suite("Saved attachments")
+struct SavedAttachmentTests {
+    @Test func filenamesLoseSeparatorsControlAndBidiCharacters() {
+        #expect(MailToolbox.safeFilename("../../.zshrc", fallback: "x") == "-..-.zshrc")
+        #expect(MailToolbox.safeFilename("invoice\u{202E}fdp.app", fallback: "x") == "invoicefdp.app")
+        #expect(MailToolbox.safeFilename("a\u{0}b\u{7F}c\u{200B}.pdf", fallback: "x") == "abc.pdf")
+        #expect(MailToolbox.safeFilename("\u{202E}", fallback: "attachment-2") == "attachment-2")
+        #expect(MailToolbox.safeFilename(".hidden", fallback: "x") == "hidden")
+    }
+
+    @Test func savedFilesAreQuarantined() throws {
+        let file = FileManager.default.temporaryDirectory.appending(path: "quarantine-\(UUID().uuidString).command")
+        try Data("echo hi".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        MailToolbox.quarantine(file.path)
+        let size = getxattr(file.path, "com.apple.quarantine", nil, 0, 0, 0)
+        #expect(size > 0)
+    }
 }
 
 @Suite("Arguments and JSON")

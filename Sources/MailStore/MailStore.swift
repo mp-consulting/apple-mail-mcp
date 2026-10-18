@@ -307,6 +307,11 @@ public final class MailStore: @unchecked Sendable {
     public func messages(ids: [Int64]) throws -> [MessageSummary] {
         guard !ids.isEmpty else { return [] }
         let (mailboxes, names) = try lookupTables()
+        return try messages(ids: ids, mailboxes: mailboxes, accountNames: names)
+    }
+
+    private func messages(ids: [Int64], mailboxes: [Int64: Mailbox], accountNames names: [String: String]) throws -> [MessageSummary] {
+        guard !ids.isEmpty else { return [] }
         let json = "[" + ids.map(String.init).joined(separator: ",") + "]"
         let found = try withDB { db in
             try db.all(
@@ -372,7 +377,10 @@ public final class MailStore: @unchecked Sendable {
 
     /// Builds the WHERE clause shared by search and counting.
     func whereClause(for query: MessageQuery, mailboxes: [Int64: Mailbox]) -> (String, [SQLValue]) {
-        var clauses = ["m.deleted = 0"]
+        // With a mailbox, conversation or id scope, `+` keeps SQLite off the (deleted, date_received)
+        // index, which otherwise wins and walks every message instead of the scope's own index.
+        let scoped = !query.mailboxIDs.isEmpty || query.conversationID != nil || !query.ids.isEmpty
+        var clauses = [scoped ? "+m.deleted = 0" : "m.deleted = 0"]
         var bindings: [SQLValue] = []
 
         if !query.ids.isEmpty {
@@ -486,18 +494,24 @@ public final class MailStore: @unchecked Sendable {
         let offset = max(0, query.offset)
 
         guard let bodyText = query.bodyText?.trimmingCharacters(in: .whitespaces), !bodyText.isEmpty else {
-            let rows = try withDB { db in
+            // Page ids first, then envelopes for just those: when the scope spans several mailboxes
+            // SQLite sorts every matching row, and sorting bare ids is far cheaper than full envelopes.
+            let pageIDs = try withDB { db in
                 try db.all(
-                    "SELECT \(summaryColumns) \(Self.summaryJoins) WHERE \(whereSQL) \(order) LIMIT ? OFFSET ?",
+                    "SELECT m.ROWID \(Self.minimalJoins(for: whereSQL)) WHERE \(whereSQL) \(order) LIMIT ? OFFSET ?",
                     bindings + [.int(Int64(limit)), .int(Int64(offset))]
-                ) { summary(from: $0, mailboxes: mailboxes, accountNames: names) }
+                ) { $0.int(0) }
             }
-            let total = try withDB { db in
-                try db.scalarInt("SELECT COUNT(*) \(Self.minimalJoins(for: whereSQL)) WHERE \(whereSQL)", bindings) ?? 0
-            }
+            let rows = try messages(ids: pageIDs, mailboxes: mailboxes, accountNames: names)
+            // A short page that started inside the results already gives the total.
+            let total = !pageIDs.isEmpty && pageIDs.count < limit || offset == 0 && pageIDs.isEmpty
+                ? Int64(offset + pageIDs.count)
+                : try withDB { db in
+                    try db.scalarInt("SELECT COUNT(*) \(Self.minimalJoins(for: whereSQL)) WHERE \(whereSQL)", bindings) ?? 0
+                }
             return SearchPage(
                 messages: rows, total: Int(total), offset: offset, limit: limit,
-                hasMore: offset + rows.count < Int(total), bodySearchMode: nil, scanLimited: false, scannedMessages: 0)
+                hasMore: offset + pageIDs.count < Int(total), bodySearchMode: nil, scanLimited: false, scannedMessages: 0)
         }
 
         // Body search: indexed matches, plus a scan of whatever the index has not covered yet.
@@ -559,7 +573,7 @@ public final class MailStore: @unchecked Sendable {
         let complete = cursor >= candidates.count && !scanLimited
         let pageIDs = Array(matchedIDs.dropFirst(offset).prefix(limit))
         return SearchPage(
-            messages: try messages(ids: pageIDs), total: complete ? matchedIDs.count : nil, offset: offset, limit: limit,
+            messages: try messages(ids: pageIDs, mailboxes: mailboxes, accountNames: names), total: complete ? matchedIDs.count : nil, offset: offset, limit: limit,
             hasMore: matchedIDs.count > offset + pageIDs.count || !complete, bodySearchMode: mode,
             scanLimited: scanLimited, scannedMessages: scanned)
     }

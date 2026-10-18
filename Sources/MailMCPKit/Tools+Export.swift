@@ -80,7 +80,7 @@ extension MailToolbox {
             let maxRows = min(200_000, max(1, try arguments.int("max_rows") ?? 50_000))
 
             // Rows, 500 envelopes at a time.
-            let bodyIndex = query.bodyText == nil ? nil : self.bodyIndex
+            let bodyIndex = self.searchIndex(for: query).index
             let matches = try store.allMatchingIDs(query, bodyIndex: bodyIndex, cap: dedupe ? maxRows * 2 : maxRows)
             var rows: [[Cell]] = []
             var seenMessages = Set<String>()
@@ -290,7 +290,7 @@ extension MailToolbox {
             if ids.isEmpty {
                 var query = try self.messageQuery(arguments)
                 query.limit = min(200, max(1, try arguments.int("limit") ?? 50))
-                ids = try store.search(query, bodyIndex: query.bodyText == nil ? nil : self.bodyIndex).messages.map(\.id)
+                ids = try store.search(query, bodyIndex: self.searchIndex(for: query).index).messages.map(\.id)
             }
             guard ids.count <= 200 else { throw ToolError("ids must contain at most 200 message ids; use export_search for more") }
             let messages = try store.messages(ids: ids)

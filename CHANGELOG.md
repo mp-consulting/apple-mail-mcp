@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-18
+
 ### Added
 
 - **`export_search`**: writes every message matching a search to one CSV, JSON or XLSX file and returns
@@ -37,6 +39,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Security
 
+- **The body search index no longer holds readable mail.** It used contentless FTS5, but the terms and their
+  positions are enough to rebuild every message, and the file is not behind Full Disk Access. It now stores only
+  keyed hashes of words and word pairs, without positions, with the key in the login Keychain. Existing indexes
+  are deleted and rebuilt on first use. The file is owner-only and excluded from backups. Prefix search
+  needs at least 3 characters; shorter words match whole.
 - Exported cells never run as formulas: CSV text starting with `=`, `+`, `-` or `@` gets a leading `'`,
   and XLSX cells are plain strings and numbers. Exports keep their format's extension.
 - Saved attachments are quarantined like Mail's own, so Gatekeeper checks emailed apps and scripts.
@@ -113,7 +120,8 @@ First release.
   and a reply or forward waiting for approval links to the original.
 - Skills in the Claude tab are listed by their Claude Code slash command (`/mail-triage`…); click to copy.
 
-[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.1.0...v0.2.0

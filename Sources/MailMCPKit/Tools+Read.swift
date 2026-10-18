@@ -179,8 +179,14 @@ extension MailToolbox {
             query.limit = min(200, max(1, try arguments.int("limit") ?? 20))
             query.offset = max(0, try arguments.int("offset") ?? 0)
             query.sortAscending = try arguments.string("sort") == "oldest"
-            let page = try store.search(query, bodyIndex: query.bodyText == nil ? nil : self.bodyIndex)
+            // Without the Keychain key the index is unreadable: scan instead, and say why.
+            let index = query.bodyText == nil ? nil : self.bodyIndex
+            let unlocked = index.flatMap { $0.isUnlocked ? $0 : nil }
+            let page = try store.search(query, bodyIndex: unlocked)
             var notes: [JSON] = []
+            if index != nil, unlocked == nil {
+                notes.append(.string("The search index key was not available from the Keychain, so recent messages were scanned instead."))
+            }
             if page.scanLimited {
                 notes.append(
                     .string(

@@ -91,6 +91,15 @@ public final class ActivityLog: @unchecked Sendable {
 /// A request to send mail, waiting for the user's decision in the menu bar app.
 public struct ApprovalRequest: Codable, Sendable, Hashable, Identifiable {
     public enum Status: String, Codable, Sendable { case pending, approved, denied }
+    /// What the user is asked to allow.
+    public enum Kind: String, Codable, Sendable {
+        /// Send an email (now, or at `sendAt`).
+        case send
+        /// Move or trash many messages; `subject` says what, `bodyPreview` lists them.
+        case change
+        /// Unsubscribe from a mailing list; `to` holds where the request goes.
+        case unsubscribe
+    }
 
     public var id: UUID
     public var created: Date
@@ -107,12 +116,21 @@ public struct ApprovalRequest: Codable, Sendable, Hashable, Identifiable {
     public var decided: Date?
     /// For a reply or forward: the original message, to look at before deciding.
     public var originalLink: String?
+    /// Nil for requests written by older servers, which only asked about sending.
+    public var kind: Kind?
+    /// A scheduled send: when it goes out.
+    public var sendAt: Date?
+
+    public var action: Kind { kind ?? .send }
 
     public init(
         id: UUID, created: Date, tool: String, client: String?, from: String?, to: [String], cc: [String], bcc: [String],
-        subject: String, bodyPreview: String, attachments: [String], status: Status, decided: Date?, originalLink: String? = nil
+        subject: String, bodyPreview: String, attachments: [String], status: Status, decided: Date?, originalLink: String? = nil,
+        kind: Kind = .send, sendAt: Date? = nil
     ) {
         self.originalLink = originalLink
+        self.kind = kind
+        self.sendAt = sendAt
         self.id = id
         self.created = created
         self.tool = tool

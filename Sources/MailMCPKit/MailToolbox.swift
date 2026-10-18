@@ -217,7 +217,7 @@ public final class MailToolbox: @unchecked Sendable {
     /// Applies the send policy; may wait for approval in the menu bar app.
     func authorizeSend(
         tool: String, from: String?, to: [String], cc: [String], bcc: [String], subject: String, body: String,
-        attachments: [String], originalLink: String? = nil
+        attachments: [String], originalLink: String? = nil, sendAt: Date? = nil
     ) async throws {
         let current = settings.current
         switch current.sendPolicy {
@@ -226,19 +226,41 @@ public final class MailToolbox: @unchecked Sendable {
         case .never:
             throw ToolError("Sending is turned off (send policy \"never\"). Use mode \"draft\" or \"open\" instead.")
         case .confirm:
-            guard approvals.isAgentRunning() else {
-                throw ToolError(
-                    "Sending needs approval in the Apple Mail MCP menu bar app, which is not running. Start it, or use mode \"draft\".")
-            }
-            let request = ApprovalRequest(
-                id: UUID(), created: Date(), tool: tool, client: clientName, from: from, to: to, cc: cc, bcc: bcc,
-                subject: subject, bodyPreview: Render.truncate(body, 600), attachments: attachments.map { ($0 as NSString).lastPathComponent },
-                status: .pending, decided: nil, originalLink: originalLink)
-            switch try await approvals.requestApproval(request, timeout: current.approvalTimeout) {
-            case .approved: return
-            case .denied: throw ToolError("The user declined to send this message. Nothing was sent.")
-            case .pending: throw ToolError("No approval within \(Int(current.approvalTimeout)) s. Nothing was sent.")
-            }
+            try await askUser(
+                ApprovalRequest(
+                    id: UUID(), created: Date(), tool: tool, client: clientName, from: from, to: to, cc: cc, bcc: bcc,
+                    subject: subject, bodyPreview: Render.truncate(body, 600),
+                    attachments: attachments.map { ($0 as NSString).lastPathComponent }, status: .pending, decided: nil,
+                    originalLink: originalLink, sendAt: sendAt),
+                what: "Sending", declined: "The user declined to send this message. Nothing was sent.", nothing: "Nothing was sent.")
+        }
+    }
+
+    /// Asks before moving or trashing more messages than the user's threshold (Settings: "Ask me before changing more than").
+    func authorizeChange(tool: String, summary: String, messages: [MessageSummary]) async throws {
+        let threshold = settings.current.approveChangesAbove
+        guard threshold > 0, messages.count > threshold else { return }
+        var lines = messages.prefix(15).map { "\($0.sender.name ?? $0.sender.address) — \($0.subject)" }
+        if messages.count > 15 { lines.append("… and \(messages.count - 15) more") }
+        try await askUser(
+            ApprovalRequest(
+                id: UUID(), created: Date(), tool: tool, client: clientName, from: nil, to: [], cc: [], bcc: [], subject: summary,
+                bodyPreview: lines.joined(separator: "\n"), attachments: [], status: .pending, decided: nil, kind: .change),
+            what: "Changing more than \(threshold) messages",
+            declined: "The user declined this change. Nothing was moved.", nothing: "Nothing was moved.")
+    }
+
+    /// Waits for the user's decision in the menu bar app; throws unless approved.
+    func askUser(_ request: ApprovalRequest, what: String, declined: String, nothing: String) async throws {
+        guard approvals.isAgentRunning() else {
+            throw ToolError(
+                "\(what) needs approval in the Apple Mail MCP menu bar app, which is not running. Start it\(request.action == .send ? ", or use mode \"draft\"" : "").")
+        }
+        let timeout = settings.current.approvalTimeout
+        switch try await approvals.requestApproval(request, timeout: timeout) {
+        case .approved: return
+        case .denied: throw ToolError(declined)
+        case .pending: throw ToolError("No approval within \(Int(timeout)) s. \(nothing)")
         }
     }
 

@@ -234,6 +234,9 @@ extension MailToolbox {
                 ])
                 return ToolReply(json: json, summary: "dry run: \(plan.reduce(0) { $0 + $1.messages.count }) to move")
             }
+            let moving = plan.flatMap(\.messages)
+            try await self.authorizeChange(
+                tool: "move_messages", summary: "Move \(moving.count) messages to \(plan.first?.target.path ?? destinationName)", messages: moving)
             let steps = plan.map { ChangeStep(source: $0.source, destination: $0.target, messages: $0.messages, mustArrive: true) }
             let report = try await self.applyVerified(steps) { step in
                 guard let target = step.destination else { return }
@@ -330,6 +333,8 @@ extension MailToolbox {
                     ]), summary: "dry run")
             }
             let store = try self.store
+            let trashing = eligible.flatMap(\.1)
+            try await self.authorizeChange(tool: "trash_messages", summary: "Move \(trashing.count) messages to Trash", messages: trashing)
             let steps = try eligible.map { mailbox, messages in
                 let trash = try store.mailboxes(accountID: mailbox.accountID).filter { $0.role == .trash }
                 return ChangeStep(source: mailbox, destination: trash.count == 1 ? trash[0] : nil, messages: messages, mustArrive: false)

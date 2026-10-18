@@ -56,6 +56,10 @@ public struct Settings: Codable, Sendable, Equatable {
     public var checkForUpdates = true
     /// Refresh installed Claude skills when the app ships newer versions of them.
     public var updateInstalledSkills = true
+    /// Let the menu bar app post a notification when mail from a person starts waiting for a reply.
+    public var notifyNeedsReply = false
+    /// Moves and trashes of more messages than this wait for the user's OK in the menu bar app (0 = never ask).
+    public var approveChangesAbove = 0
 
     public init() {}
 
@@ -74,6 +78,8 @@ public struct Settings: Codable, Sendable, Equatable {
         approvalTimeout = try container.decodeIfPresent(Double.self, forKey: .approvalTimeout) ?? defaults.approvalTimeout
         checkForUpdates = try container.decodeIfPresent(Bool.self, forKey: .checkForUpdates) ?? defaults.checkForUpdates
         updateInstalledSkills = try container.decodeIfPresent(Bool.self, forKey: .updateInstalledSkills) ?? defaults.updateInstalledSkills
+        notifyNeedsReply = try container.decodeIfPresent(Bool.self, forKey: .notifyNeedsReply) ?? defaults.notifyNeedsReply
+        approveChangesAbove = try container.decodeIfPresent(Int.self, forKey: .approveChangesAbove) ?? defaults.approveChangesAbove
     }
 
     public static func load(from url: URL = SharedPaths.settings) -> Settings {

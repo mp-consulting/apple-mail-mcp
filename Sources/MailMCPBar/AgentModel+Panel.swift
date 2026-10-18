@@ -33,7 +33,7 @@ extension AgentModel {
 
     var headline: String {
         if !pending.isEmpty {
-            return pending.count == 1 ? "1 email waiting for your OK" : "\(pending.count) emails waiting for your OK"
+            return pending.count == 1 ? "1 request waiting for your OK" : "\(pending.count) requests waiting for your OK"
         }
         if !attention.isEmpty {
             return attention.count == 1 ? "1 thing needs attention" : "\(attention.count) things need attention"

@@ -17,6 +17,9 @@ final class AgentModel {
     var indexStatus: BodyIndex.Status?
     var notIndexed = 0
     var messageCount = 0
+    /// Mail from people in the last 3 days still waiting for a reply.
+    var needsReply: [MessageSummary] = []
+    private var seenNeedsReply: Set<Int64>?
     var isIndexing = false
     var indexProgress: (done: Int, total: Int)?
     var lastError: String?
@@ -127,12 +130,43 @@ final class AgentModel {
     private func notify(_ request: ApprovalRequest) {
         guard Bundle.main.bundleIdentifier != nil else { return }
         let content = UNMutableNotificationContent()
-        content.title = "Send this email?"
+        switch request.action {
+        case .send: content.title = request.sendAt == nil ? "Send this email?" : "Schedule this email?"
+        case .change: content.title = "Change these messages?"
+        case .unsubscribe: content.title = "Unsubscribe?"
+        }
         content.subtitle = request.subject.isEmpty ? "(no subject)" : request.subject
-        content.body = "To " + request.to.joined(separator: ", ") + (request.client.map { " · from \($0)" } ?? "")
+        let target = request.to.isEmpty ? "" : "To " + request.to.joined(separator: ", ")
+        content.body = target + (request.client.map { (target.isEmpty ? "" : " · ") + "from \($0)" } ?? "")
         content.sound = .default
         UNUserNotificationCenter.current().add(
             UNNotificationRequest(identifier: request.id.uuidString, content: content, trigger: nil))
+    }
+
+    // MARK: Needs a reply
+
+    func refreshNeedsReply(_ store: MailStore) {
+        guard let current = try? store.needsResponse(days: 3, limit: 50) else { return }
+        needsReply = current
+        // The first look only learns what is already waiting; later ones notify about what is new.
+        if let seen = seenNeedsReply, settings.notifyNeedsReply {
+            for message in current.filter({ !seen.contains($0.id) }).prefix(3) { notifyNeedsReply(message) }
+        }
+        seenNeedsReply = (seenNeedsReply ?? []).union(current.map(\.id))
+    }
+
+    private func notifyNeedsReply(_ message: MessageSummary) {
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "Waiting for your reply"
+        content.subtitle = message.sender.name ?? message.sender.address
+        content.body = message.subject
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: "needs-reply-\(message.id)", content: content, trigger: nil))
+    }
+
+    func openMail() {
+        NSWorkspace.shared.open(URL(filePath: "/System/Applications/Mail.app"))
     }
 
     // MARK: Status
@@ -146,6 +180,7 @@ final class AgentModel {
         if store == nil { store = try? MailStore.open() }
         if let store {
             messageCount = (try? store.messageCount()) ?? 0
+            refreshNeedsReply(store)
             if let index = BodyIndex.openIfPresent(url: SharedPaths.bodyIndex), let status = try? index.status() {
                 indexStatus = status
                 notIndexed = (try? store.countMessages(after: status.coveredThrough)) ?? 0

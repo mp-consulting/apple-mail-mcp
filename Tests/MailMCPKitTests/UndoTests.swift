@@ -381,3 +381,50 @@ final class UpdateBox: @unchecked Sendable {
     var uris: [String] { lock.withLock { _uris } }
     func add(_ uri: String) { lock.withLock { _uris.append(uri) } }
 }
+
+@Suite("Change approvals")
+struct ChangeApprovalTests {
+    @Test func largeChangesWaitForTheUser() async throws {
+        var settings = Settings()
+        settings.approveChangesAbove = 1
+        settings.approvalTimeout = 10
+        let h = try Harness(settings: settings)
+        defer { h.remove() }
+        let two: Value = [.int(Int(h.id("invoice"))), .int(Int(h.id("digest")))]
+        // Without the menu bar app the change is refused before anything moves.
+        let refused = await h.call("trash_messages", ["ids": two])
+        #expect(refused.isError && refused.text.contains("menu bar app"))
+        // One message is under the threshold.
+        _ = try await h.json("trash_messages", ["ids": [.int(Int(h.id("receipt")))], "dry_run": false])
+        #expect(h.automation.calls.count == 1)
+
+        h.approvals.beat()
+        let approvals = h.approvals
+        let agent = Task { () -> ApprovalRequest? in
+            for _ in 0..<200 {
+                if let request = approvals.pending().first {
+                    try approvals.decide(request.id, approve: false)
+                    return request
+                }
+                try await Task.sleep(nanoseconds: 20_000_000)
+            }
+            return nil
+        }
+        let denied = await h.call("move_messages", ["ids": two, "to_mailbox": "archive"])
+        let request = try #require(try await agent.value)
+        #expect(denied.isError && denied.text.contains("declined this change"))
+        #expect(request.action == .change && request.subject == "Move 2 messages to Archive")
+        #expect(request.bodyPreview.contains("Carol, Billing — Invoice 42"))
+        #expect(h.automation.calls.count == 1)
+        // A dry run never asks.
+        #expect(!(await h.call("move_messages", ["ids": two, "to_mailbox": "archive", "dry_run": true]).isError))
+    }
+
+    @Test func olderRequestsDecodeAsSends() throws {
+        let json = #"{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","created":"2026-10-18T10:00:00Z","tool":"compose_email","to":["a@x.test"],"cc":[],"bcc":[],"subject":"s","bodyPreview":"b","attachments":[],"status":"pending"}"#
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let request = try decoder.decode(ApprovalRequest.self, from: Data(json.utf8))
+        #expect(request.action == .send && request.sendAt == nil)
+    }
+}

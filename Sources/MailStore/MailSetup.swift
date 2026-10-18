@@ -128,7 +128,7 @@ extension MailStore {
         let folders = [
             mailData.appending(path: "Signatures"),
             location.root.deletingLastPathComponent().deletingLastPathComponent()
-                .appending(path: "Mobile Documents/com~apple~mail/Data/V10/MailData/Signatures"),
+                .appending(path: "Mobile Documents/com~apple~mail/Data/MailData/Signatures"),
         ]
         return list.compactMap { entry in
             guard let id = entry["SignatureUniqueId"] as? String else { return nil }

@@ -210,6 +210,16 @@ struct MailTab: View {
                 }
             }
         }
+        if !model.needsReply.isEmpty {
+            let count = model.needsReply.count
+            Row(
+                systemImage: "arrowshape.turn.up.left", iconColor: .accentColor,
+                title: count == 1 ? "1 email waits for your reply" : "\(count) emails wait for your reply",
+                detail: model.needsReply.prefix(3).map { $0.sender.name ?? $0.sender.address }.joined(separator: ", "))
+            {
+                Button("Open Mail") { model.openMail() }.glassButton().controlSize(.small)
+            }
+        }
         SectionHeader("Activity")
         if model.activity.isEmpty {
             Text("No requests yet. Ask Claude about your mail.").font(.caption).foregroundStyle(.secondary)
@@ -301,6 +311,11 @@ struct SettingsTab: View {
         SettingRow("Messages per change, at most") {
             Stepper("\(model.settings.maxBatchSize)", value: $model.settings.maxBatchSize, in: 1...500).fixedSize()
         }
+        SettingRow("Ask me before changing more than") {
+            Stepper(model.settings.approveChangesAbove == 0 ? "never ask" : "\(model.settings.approveChangesAbove)",
+                    value: $model.settings.approveChangesAbove, in: 0...500, step: 5).fixedSize()
+        }
+        SettingRow("Notify me when mail waits for a reply") { Toggle("", isOn: $model.settings.notifyNeedsReply).labelsHidden() }
         SectionDivider()
         SectionHeader("Search and updates")
         SettingRow("Keep the search index up to date") { Toggle("", isOn: $model.settings.autoUpdateBodyIndex).labelsHidden() }
@@ -446,7 +461,7 @@ struct ApprovalQueue: View {
                             Image(systemName: "envelope").foregroundStyle(.orange).frame(width: 16)
                             Text(other.subject.isEmpty ? "(no subject)" : other.subject).lineLimit(1)
                             Spacer(minLength: 6)
-                            Text(other.to.first ?? "").foregroundStyle(.secondary).lineLimit(1)
+                            Text(other.to.first ?? (other.action == .change ? "change" : "")).foregroundStyle(.secondary).lineLimit(1)
                             Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
                         }
                         .font(.caption)
@@ -475,10 +490,19 @@ struct ApprovalBlock: View {
         self.decide = decide
     }
 
+    /// The question and the two answers, by what is asked.
+    var wording: (question: String, yes: String, no: String) {
+        switch request.action {
+        case .send: (request.sendAt == nil ? "SEND THIS EMAIL?" : "SEND THIS EMAIL LATER?", request.sendAt == nil ? "Send" : "Schedule", "Don't Send")
+        case .change: ("CHANGE THESE MESSAGES?", "Go Ahead", "Don't")
+        case .unsubscribe: ("UNSUBSCRIBE?", "Unsubscribe", "Don't")
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("SEND THIS EMAIL?").font(.caption2.weight(.bold)).tracking(0.5).foregroundStyle(.orange)
+                Text(wording.question).font(.caption2.weight(.bold)).tracking(0.5).foregroundStyle(.orange)
                 if let (index, count) = position {
                     HStack(spacing: 2) {
                         Button { page(-1) } label: { Image(systemName: "chevron.left") }.accessibilityLabel("Previous email")
@@ -496,9 +520,17 @@ struct ApprovalBlock: View {
             }
             Text(request.subject.isEmpty ? "(no subject)" : request.subject).font(.headline).lineLimit(2)
             Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 2) {
-                GridRow {
-                    Text("To").foregroundStyle(.secondary)
-                    Text(request.to.joined(separator: ", ")).lineLimit(2)
+                if !request.to.isEmpty {
+                    GridRow {
+                        Text("To").foregroundStyle(.secondary)
+                        Text(request.to.joined(separator: ", ")).lineLimit(2)
+                    }
+                }
+                if let sendAt = request.sendAt {
+                    GridRow {
+                        Text("When").foregroundStyle(.secondary)
+                        Text(sendAt.formatted(date: .abbreviated, time: .shortened))
+                    }
                 }
                 if !request.cc.isEmpty {
                     GridRow {
@@ -527,8 +559,8 @@ struct ApprovalBlock: View {
                     ShowInMailButton(url: url, compact: false, title: "Show original in Mail")
                 }
                 Spacer()
-                Button("Don't Send", role: .cancel) { decide(false) }.glassButton()
-                Button("Send") { decide(true) }.glassButton(prominent: true).keyboardShortcut(.defaultAction)
+                Button(wording.no, role: .cancel) { decide(false) }.glassButton()
+                Button(wording.yes) { decide(true) }.glassButton(prominent: true).keyboardShortcut(.defaultAction)
             }
         }
         .padding(12)
@@ -546,7 +578,7 @@ struct ApprovalWindow: View {
                 Text("Nothing is waiting for approval.").foregroundStyle(.secondary)
             }
             if !model.pending.isEmpty { ApprovalQueue(model: model) }
-            Text("Nothing is sent without your OK. Requests cancel after \(Int(model.settings.approvalTimeout)) seconds.")
+            Text("Nothing is sent, unsubscribed or changed in bulk without your OK. Requests cancel after \(Int(model.settings.approvalTimeout)) seconds.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .padding(16)
@@ -638,6 +670,13 @@ struct SettingsView: View {
             Section("Changes to mail") {
                 Toggle("Allow moving, flagging, trashing and new mailboxes", isOn: $model.settings.allowMailChanges)
                 Stepper("At most \(model.settings.maxBatchSize) messages per change", value: $model.settings.maxBatchSize, in: 1...500)
+                Stepper(
+                    model.settings.approveChangesAbove == 0
+                        ? "Never ask before moving or trashing" : "Ask me before moving or trashing more than \(model.settings.approveChangesAbove)",
+                    value: $model.settings.approveChangesAbove, in: 0...500, step: 5)
+            }
+            Section("Notifications") {
+                Toggle("Notify me when mail from a person waits for my reply", isOn: $model.settings.notifyNeedsReply)
             }
             Section("Search") {
                 Toggle("Keep the body index up to date", isOn: $model.settings.autoUpdateBodyIndex)

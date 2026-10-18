@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Claude extension would not open**: double-clicking `AppleMailMCP-0.2.1.mcpb` failed with "Invalid comment
+  length. Expected: 4203. Found: 0." `mcpb sign` appends the signature after the zip without updating the zip's
+  comment length, and Claude's zip reader rejects that. Releases now set the comment length to cover the
+  signature before signing (`Scripts/sign-mcpb.sh`), and `Scripts/verify-mcpb.sh` fails if it does not match.
+
 ## [0.2.1] - 2026-10-18
 
 ### Fixed

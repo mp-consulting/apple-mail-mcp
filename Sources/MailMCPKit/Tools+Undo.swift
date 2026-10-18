@@ -179,7 +179,7 @@ extension MailToolbox {
         ) { arguments in
             let records = self.changes?.records() ?? []
             if (try arguments.string("action") ?? "list") == "list" {
-                let limit = try arguments.int("limit") ?? 10
+                let limit = try arguments.int("limit", default: 10, in: 1...200)
                 return ToolReply(
                     json: .obj([("changes", .array(records.prefix(limit).map(Self.changeJSON)))]),
                     summary: "\(min(limit, records.count)) changes")

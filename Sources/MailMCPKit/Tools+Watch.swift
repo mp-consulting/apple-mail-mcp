@@ -38,7 +38,7 @@ extension MailToolbox {
             var query = try self.messageQuery(arguments)
             if !arguments.has("direction") { query.direction = .received }
             let start = try arguments.int("after_id").map(Int64.init) ?? store.maxMessageRowID()
-            let deadline = Date().addingTimeInterval(Double(min(300, max(1, try arguments.int("timeout") ?? 60))))
+            let deadline = Date().addingTimeInterval(Double(try arguments.int("timeout", default: 60, in: 1...300)))
             var found: [MessageSummary] = []
             var version: Int64 = -1
             repeat {

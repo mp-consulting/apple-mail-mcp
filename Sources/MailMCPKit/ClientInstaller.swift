@@ -3,7 +3,7 @@ import Foundation
 /// Registers the server with Claude Code and Claude Desktop.
 ///
 /// Claude Code goes through its own CLI (`claude mcp add --scope user`), falling back to
-/// `~/.claude.json` when the CLI is missing. Claude Desktop's
+/// `~/.claude.json` when the CLI is missing or cannot be launched. Claude Desktop's
 /// `claude_desktop_config.json` is edited in place: other servers and settings are kept,
 /// and a `.bak` copy is written first.
 public struct ClientInstaller: Sendable {
@@ -122,12 +122,13 @@ public struct ClientInstaller: Sendable {
     public func install(_ client: Client) throws -> String {
         switch client {
         case .claudeCode:
-            if let cli = locateClaudeCLI() {
-                // Re-adding fails if the name exists, so remove first (ignore "not found").
-                _ = try? run(cli, ["mcp", "remove", "--scope", "user", Self.serverName])
+            // Re-adding fails if the name exists, so remove first (ignore "not found").
+            if let cli = locateClaudeCLI(), (try? run(cli, ["mcp", "remove", "--scope", "user", Self.serverName])) != nil {
                 let output = try run(cli, ["mcp", "add", "--scope", "user", Self.serverName, "--", serverPath])
                 guard output.status == 0 else { throw Failure(description: "claude mcp add failed: \(output.text)") }
             } else {
+                // No CLI, or one that does not launch (a Homebrew install can lose its execute bit while an ACL
+                // still makes it look executable): Claude Code reads the same entry from ~/.claude.json.
                 try editJSON(claudeCodeConfig, backup: true) { root in
                     var servers = root["mcpServers"] as? [String: Any] ?? [:]
                     servers[Self.serverName] = ["type": "stdio", "command": serverPath, "args": [String](), "env": [String: String]()]
@@ -148,9 +149,8 @@ public struct ClientInstaller: Sendable {
     public func uninstall(_ client: Client) throws {
         switch client {
         case .claudeCode:
-            if let cli = locateClaudeCLI() {
-                _ = try run(cli, ["mcp", "remove", "--scope", "user", Self.serverName])
-            } else {
+            let removedByCLI = locateClaudeCLI().flatMap { try? run($0, ["mcp", "remove", "--scope", "user", Self.serverName]) } != nil
+            if !removedByCLI {
                 try editJSON(claudeCodeConfig, backup: true) { root in
                     var servers = root["mcpServers"] as? [String: Any] ?? [:]
                     servers.removeValue(forKey: Self.serverName)

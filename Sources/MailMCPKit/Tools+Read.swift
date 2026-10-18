@@ -83,7 +83,7 @@ extension MailToolbox {
         ) { arguments in
             let store = try self.store
             let accountID = try self.resolveAccountID(arguments)
-            let recentCount = try arguments.int("recent") ?? 10
+            let recentCount = try arguments.int("recent", default: 10, in: 0...50)
             let accounts = try store.accounts().filter { accountID == nil || $0.id == accountID }
             let inboxes = try store.mailboxes(accountID: accountID).filter { $0.role == .inbox }
             var unread = MessageQuery()
@@ -189,7 +189,7 @@ extension MailToolbox {
             }
             return value
         }
-        if let days = try arguments.int("days") { query.dateFrom = Date().addingTimeInterval(-Double(days) * 86_400) }
+        if let days = try arguments.int("days").map({ min(36_500, max(1, $0)) }) { query.dateFrom = Date().addingTimeInterval(-Double(days) * 86_400) }
         if let from = try arguments.date("date_from") { query.dateFrom = from }
         query.dateTo = try arguments.date("date_to", endOfDay: true)
         query.includeTrashAndJunk = try arguments.bool("include_trash") ?? false
@@ -223,7 +223,7 @@ extension MailToolbox {
             let (bodyIndex, indexLocked) = self.searchIndex(for: query)
             if let group = try arguments.string("group_by") {
                 guard let key = GroupKey(rawValue: group.lowercased()) else { throw ToolError("group_by must be sender, domain or month") }
-                let groups = try store.groupCounts(query, by: key, bodyIndex: bodyIndex, limit: try arguments.int("limit") ?? 50)
+                let groups = try store.groupCounts(query, by: key, bodyIndex: bodyIndex, limit: try arguments.int("limit", default: 50, in: 1...500))
                 let json = JSON.obj([
                     ("group_by", .string(key.rawValue)),
                     ("groups", .array(groups.map { g in
@@ -235,8 +235,8 @@ extension MailToolbox {
                 ])
                 return ToolReply(json: json, summary: "\(groups.count) groups")
             }
-            query.limit = min(200, max(1, try arguments.int("limit") ?? 20))
-            query.offset = max(0, try arguments.int("offset") ?? 0)
+            query.limit = try arguments.int("limit", default: 20, in: 1...200)
+            query.offset = try arguments.int("offset", default: 0, in: 0...Int(Int32.max))
             let compact = try arguments.bool("compact") ?? false
             let page = try store.search(query, bodyIndex: bodyIndex)
             var notes: [JSON] = []
@@ -281,7 +281,7 @@ extension MailToolbox {
             let store = try self.store
             guard let id = try arguments.ids("id").first else { throw ToolError("id is required") }
             let detail = try store.detail(id: id)
-            let maxChars = try arguments.int("max_chars") ?? 20_000
+            let maxChars = try arguments.int("max_chars", default: 20_000, in: 0...Int.max)
             var body = detail.textBody ?? ""
             if try arguments.bool("strip_quotes") ?? false { body = MessageContent.stripQuotedReply(body) }
             let truncated = maxChars > 0 && body.count > maxChars
@@ -339,7 +339,7 @@ extension MailToolbox {
         ) { arguments in
             let store = try self.store
             guard let id = try arguments.ids("id").first else { throw ToolError("id is required") }
-            let maxChars = try arguments.int("max_chars") ?? 3000
+            let maxChars = try arguments.int("max_chars", default: 3000, in: 0...Int.max)
             let strip = try arguments.bool("strip_quotes") ?? true
             let messages = try store.thread(of: id, limit: 50)
             let items: [JSON] = messages.map { message in
@@ -398,7 +398,7 @@ extension MailToolbox {
             if try arguments.bool("headers_only") ?? true {
                 if let range = text.range(of: "\r\n\r\n") ?? text.range(of: "\n\n") { text = String(text[..<range.lowerBound]) }
             }
-            let maxBytes = try arguments.int("max_bytes") ?? 100_000
+            let maxBytes = try arguments.int("max_bytes", default: 100_000, in: 1000...Int.max)
             let truncated = text.utf8.count > maxBytes
             if truncated { text = String(decoding: text.utf8.prefix(maxBytes), as: UTF8.self) }
             return ToolReply(
@@ -424,7 +424,7 @@ extension MailToolbox {
             let store = try self.store
             let accountID = try self.resolveAccountID(arguments)
             let mailboxes = try self.resolveMailboxIDs(arguments, accountID: accountID)
-            let days = try arguments.int("days") ?? 30
+            let days = try arguments.int("days", default: 30, in: 1...36_500)
             let stats = try store.statistics(accountID: accountID, mailboxIDs: mailboxes, days: days)
             let busiestDays = stats.perDay.sorted { $0.value > $1.value }.prefix(5)
             let json = JSON.obj([
@@ -467,10 +467,10 @@ extension MailToolbox {
             let store = try self.store
             let accountID = try self.resolveAccountID(arguments)
             let mailboxes = try self.resolveMailboxIDs(arguments, accountID: accountID)
-            let days = try arguments.int("days") ?? 30
+            let days = try arguments.int("days", default: 30, in: 0...36_500)
             let senders = try store.topSenders(
                 accountID: accountID, mailboxIDs: mailboxes, days: days == 0 ? nil : days,
-                byDomain: try arguments.bool("by_domain") ?? false, limit: try arguments.int("limit") ?? 15)
+                byDomain: try arguments.bool("by_domain") ?? false, limit: try arguments.int("limit", default: 15, in: 1...200))
             return ToolReply(json: .obj([("senders", .array(senders.map(Self.senderJSON)))]), summary: "\(senders.count) senders")
         }
     }
@@ -490,8 +490,8 @@ extension MailToolbox {
         ) { arguments in
             let store = try self.store
             let list = try store.awaitingReply(
-                days: try arguments.int("days") ?? 14, minimumAgeHours: try arguments.int("min_age_hours") ?? 24,
-                accountID: try self.resolveAccountID(arguments), limit: try arguments.int("limit") ?? 25)
+                days: try arguments.int("days", default: 14, in: 1...36_500), minimumAgeHours: try arguments.int("min_age_hours", default: 24, in: 0...87_600),
+                accountID: try self.resolveAccountID(arguments), limit: try arguments.int("limit", default: 25, in: 1...200))
             return ToolReply(json: .obj([("messages", .array(list.map { Render.message($0) }))]), summary: "\(list.count) awaiting reply")
         }
     }
@@ -514,8 +514,8 @@ extension MailToolbox {
         ) { arguments in
             let store = try self.store
             let list = try store.needsResponse(
-                days: try arguments.int("days") ?? 7, accountID: try self.resolveAccountID(arguments),
-                includeRead: try arguments.bool("include_read") ?? true, limit: try arguments.int("limit") ?? 25)
+                days: try arguments.int("days", default: 7, in: 1...36_500), accountID: try self.resolveAccountID(arguments),
+                includeRead: try arguments.bool("include_read") ?? true, limit: try arguments.int("limit", default: 25, in: 1...200))
             return ToolReply(json: .obj([("messages", .array(list.map { Render.message($0) }))]), summary: "\(list.count) need a response")
         }
     }
@@ -539,7 +539,7 @@ extension MailToolbox {
             var updated: BodyIndex.UpdateResult?
             if action == "update" {
                 let index = try self.openBodyIndexForWriting()
-                updated = try index.update(from: store, timeBudget: Double(try arguments.int("time_budget") ?? 25))
+                updated = try index.update(from: store, timeBudget: Double(try arguments.int("time_budget", default: 25, in: 1...600)))
             }
             guard let index = self.bodyIndex else {
                 return ToolReply(

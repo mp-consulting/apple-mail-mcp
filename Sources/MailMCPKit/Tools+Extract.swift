@@ -34,7 +34,7 @@ extension MailToolbox {
             var ids = try arguments.ids("ids")
             if ids.isEmpty {
                 var query = try self.messageQuery(arguments)
-                query.limit = min(200, max(1, try arguments.int("limit") ?? 30))
+                query.limit = try arguments.int("limit", default: 30, in: 1...200)
                 ids = try store.search(query, bodyIndex: self.searchIndex(for: query).index).messages.map(\.id)
             }
             guard ids.count <= 200 else { throw ToolError("ids must contain at most 200 message ids") }

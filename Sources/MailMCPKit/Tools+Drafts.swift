@@ -23,7 +23,7 @@ extension MailToolbox {
             let accountID = try self.resolveAccountID(arguments)
             var query = MessageQuery()
             query.mailboxIDs = try self.draftMailboxes().filter { accountID == nil || $0.accountID == accountID }.map(\.id)
-            query.limit = min(200, max(1, try arguments.int("limit") ?? 20))
+            query.limit = try arguments.int("limit", default: 20, in: 1...200)
             guard !query.mailboxIDs.isEmpty else {
                 return ToolReply(json: .obj([("drafts", .array([]))]), summary: "no Drafts mailbox")
             }

@@ -124,6 +124,20 @@ struct ClientInstallerTests {
         #expect(root?["numStartups"] as? Int == 3)
     }
 
+    @Test func claudeCodeFallsBackWhenTheCLIDoesNotLaunch() throws {
+        defer { try? FileManager.default.removeItem(at: home) }
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let cli = home.appending(path: "claude")
+        try Data([0, 1, 2, 3]).write(to: cli)  // "executable", but not a program
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: cli.path)
+        let installer = ClientInstaller(serverPath: "/Applications/Apple Mail MCP.app/Contents/MacOS/apple-mail-mcp", home: home, claudeCLI: cli.path)
+        #expect(installer.locateClaudeCLI() == cli.path)
+        try installer.install(.claudeCode)
+        #expect(installer.status(.claudeCode) == .installed)
+        try installer.uninstall(.claudeCode)
+        #expect(installer.status(.claudeCode) == .notInstalled)
+    }
+
     @Test func refusesToRewriteBrokenJSON() throws {
         try FileManager.default.createDirectory(at: desktopConfig.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("[1,2".utf8).write(to: desktopConfig)

@@ -77,7 +77,7 @@ extension MailToolbox {
             let wantsAttachments = fields.contains("attachment_names")
             let readPDFs = try arguments.bool("read_pdfs") ?? true
             let dedupe = try arguments.bool("dedupe") ?? true
-            let maxRows = min(200_000, max(1, try arguments.int("max_rows") ?? 50_000))
+            let maxRows = try arguments.int("max_rows", default: 50_000, in: 1...200_000)
 
             // Rows, 500 envelopes at a time.
             let bodyIndex = self.searchIndex(for: query).index
@@ -212,7 +212,7 @@ extension MailToolbox {
             let store = try self.store
             let ids = try arguments.ids("ids")
             guard !ids.isEmpty, ids.count <= 200 else { throw ToolError("ids must contain 1 to 200 message ids") }
-            let maxChars = try arguments.int("max_chars") ?? 2000
+            let maxChars = try arguments.int("max_chars", default: 2000, in: 0...Int.max)
             let strip = try arguments.bool("strip_quotes") ?? true
             var items: [JSON] = []
             var missing: [Int64] = []
@@ -289,7 +289,7 @@ extension MailToolbox {
             var ids = try arguments.ids("ids")
             if ids.isEmpty {
                 var query = try self.messageQuery(arguments)
-                query.limit = min(200, max(1, try arguments.int("limit") ?? 50))
+                query.limit = try arguments.int("limit", default: 50, in: 1...200)
                 ids = try store.search(query, bodyIndex: self.searchIndex(for: query).index).messages.map(\.id)
             }
             guard ids.count <= 200 else { throw ToolError("ids must contain at most 200 message ids; use export_search for more") }

@@ -85,7 +85,7 @@ extension MailToolbox {
             let store = try self.store
             let query = try arguments.requiredString("query")
             guard query.trimmingCharacters(in: .whitespaces).count >= 2 else { throw ToolError("query needs at least 2 characters") }
-            let limit = try arguments.int("limit") ?? 10
+            let limit = try arguments.int("limit", default: 10, in: 1...200)
             let history = try store.correspondents(matching: query, limit: limit)
             let lookup = await self.contacts.search(query, limit: limit)
             var cards: [JSON] = []

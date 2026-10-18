@@ -581,7 +581,10 @@ struct SkillRow: View {
         {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(skill.title).font(.callout)
+                    HStack(spacing: 6) {
+                        Text(skill.title).font(.callout)
+                        SlashCommand(name: skill.name)
+                    }
                     Text(skill.summary).font(.caption).foregroundStyle(.secondary)
                         .lineLimit(2).fixedSize(horizontal: false, vertical: true)
                 }
@@ -593,6 +596,30 @@ struct SkillRow: View {
         .disabled(state == .foreign)
         .padding(.horizontal, 16)
         .padding(.vertical, 4)
+    }
+}
+
+/// `/mail-triage`: how to run a skill in Claude Code. Click copies it.
+struct SlashCommand: View {
+    let name: String
+    @State private var copied = false
+
+    var body: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString("/\(name)", forType: .string)
+            copied = true
+            Task {
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                copied = false
+            }
+        } label: {
+            Text(copied ? "Copied" : "/\(name)")
+                .font(.caption.monospaced())
+                .foregroundStyle(copied ? AnyShapeStyle(.green) : AnyShapeStyle(.tint))
+        }
+        .buttonStyle(.borderless)
+        .help("Type /\(name) in Claude Code to run this skill. Click to copy.")
     }
 }
 

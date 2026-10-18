@@ -613,7 +613,7 @@ struct SlashCommand: View {
         } label: {
             Text(copied ? "Copied /\(name)" : "/\(name)")
                 .font(.callout.monospaced())
-                .foregroundStyle(copied ? AnyShapeStyle(.green) : AnyShapeStyle(.primary))
+                .foregroundStyle(copied ? Color.green : Color.orange)
         }
         .buttonStyle(.borderless)
         .help("Type /\(name) in Claude Code to run this skill. Click to copy.")

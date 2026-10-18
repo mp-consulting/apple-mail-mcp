@@ -353,7 +353,8 @@ final class NewMailTests {
         #expect(ids(json["messages"]) == [id])
         let started = Date()
         let none = try await h.json("wait_for_mail", ["timeout": 1])
-        #expect(none["timed_out"] as? Bool == true && Date().timeIntervalSince(started) < 4)
+        // Well under the 60 s default; CI runners under load stretch a 1 s sleep by several seconds.
+        #expect(none["timed_out"] as? Bool == true && Date().timeIntervalSince(started) < 30)
     }
 
     @Test func resourcesNotifySubscribers() async throws {

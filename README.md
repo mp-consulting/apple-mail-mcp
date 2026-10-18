@@ -27,6 +27,21 @@ file attachments, and it can only send an email after you click **Send**.
   <picture><source media="(prefers-color-scheme: light)" srcset="docs/images/tab-settings-light.png"><img src="docs/images/tab-settings.png" width="300" alt="Settings tab: send policy, changes, search index and updates"></picture>
 </p>
 
+## Any email account, ready for AI
+
+Apple Mail MCP turns **any email account you can add to Apple Mail** into one that Claude and other MCP
+clients can work with: iCloud, Gmail and Google Workspace, Microsoft 365, Outlook.com and Exchange, Yahoo,
+Fastmail, your company's or your hosting provider's IMAP server, even old POP mailboxes.
+
+Your provider needs no API, no developer account and no MCP support of its own. Add the account in
+Mail › Settings › Accounts as you normally would. As soon as Mail syncs it, the account gets the same tools as
+every other one: search, threads, needs-a-reply, drafts, sending with your approval, filing, snoozing,
+unsubscribing, extraction and authenticity checks. Several accounts work side by side, and every tool can be
+limited to one of them with `account`.
+
+Your password stays in Mail and in your keychain: this app never sees it and never connects to your provider.
+It reads what Mail has already downloaded and asks Mail itself to move, draft or send.
+
 ## Why another Mail server?
 
 Most Mail servers drive Mail with AppleScript for everything, including reading. Mail then walks its

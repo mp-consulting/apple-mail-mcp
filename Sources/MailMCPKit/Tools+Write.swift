@@ -44,7 +44,8 @@ extension MailToolbox {
                         "overwrite": Schema.boolean("Replace existing files with the same name (default false)"),
                     ], required: ["id"]), kind: .fileWrite, idempotent: true),
             kind: .fileWrite
-        ) { [store] arguments in
+        ) { arguments in
+            let store = try self.store
             guard let id = try arguments.ids("id").first else { throw ToolError("id is required") }
             let directory = try self.pathGuard.checkWrite(try arguments.string("directory") ?? "~/Downloads")
             let overwrite = try arguments.bool("overwrite") ?? false
@@ -78,7 +79,8 @@ extension MailToolbox {
                         "format": Schema.string("eml (default) or markdown", enum: ["eml", "markdown"]),
                     ], required: ["ids", "directory"]), kind: .fileWrite, idempotent: true),
             kind: .fileWrite
-        ) { [store] arguments in
+        ) { arguments in
+            let store = try self.store
             let ids = try arguments.ids("ids")
             guard !ids.isEmpty, ids.count <= 200 else { throw ToolError("ids must contain 1 to 200 message ids") }
             let directory = try self.pathGuard.checkWrite(try arguments.requiredString("directory"))
@@ -152,7 +154,8 @@ extension MailToolbox {
                         "dry_run": Schema.boolean("Only report what would move (default false)"),
                     ], required: ["ids", "to_mailbox"]), kind: .mailChange),
             kind: .mailChange
-        ) { [store, automation] arguments in
+        ) { [automation] arguments in
+            let store = try self.store
             try self.requireMailChanges()
             let ids = try arguments.ids("ids")
             try self.checkBatch(ids)
@@ -296,7 +299,8 @@ extension MailToolbox {
                         "account": Schema.string("Account name, id or address (omit for On My Mac)"),
                     ], required: ["path"]), kind: .mailChange),
             kind: .mailChange
-        ) { [store, automation] arguments in
+        ) { [automation] arguments in
+            let store = try self.store
             try self.requireMailChanges()
             let path = try arguments.requiredString("path").trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
             let accountID = try self.resolveAccountID(arguments)

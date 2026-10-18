@@ -374,31 +374,32 @@ public final class MailStore: @unchecked Sendable {
                 if allowed.isEmpty { clauses.append("0") }
             }
         }
+        // Text filters match the small lookup tables first, then use the messages indexes
+        // (subject, sender, recipients_address) instead of joining every message.
+        let subjectsLike = "SELECT ROWID FROM subjects WHERE subject LIKE ? ESCAPE '\\'"
+        let addressesLike = "SELECT ROWID FROM addresses WHERE address LIKE ? ESCAPE '\\' OR comment LIKE ? ESCAPE '\\'"
         if let text = query.text?.trimmingCharacters(in: .whitespaces), !text.isEmpty {
             let pattern = SQLiteConnection.likePattern(containing: text)
             clauses.append(
                 """
-                (s.subject LIKE ? ESCAPE '\\' OR a.address LIKE ? ESCAPE '\\' OR a.comment LIKE ? ESCAPE '\\' \
-                OR su.summary LIKE ? ESCAPE '\\')
+                (m.subject IN (\(subjectsLike)) OR m.sender IN (\(addressesLike)) \
+                OR m.summary IN (SELECT ROWID FROM summaries WHERE summary LIKE ? ESCAPE '\\'))
                 """)
             bindings += Array(repeating: .text(pattern), count: 4)
         }
         let terms = query.subjectTerms.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         if !terms.isEmpty {
-            clauses.append("(" + terms.map { _ in "s.subject LIKE ? ESCAPE '\\'" }.joined(separator: " OR ") + ")")
+            let likes = terms.map { _ in "subject LIKE ? ESCAPE '\\'" }.joined(separator: " OR ")
+            clauses.append("m.subject IN (SELECT ROWID FROM subjects WHERE \(likes))")
             bindings += terms.map { .text(SQLiteConnection.likePattern(containing: $0)) }
         }
         if let sender = query.sender?.trimmingCharacters(in: .whitespaces), !sender.isEmpty {
-            clauses.append("(a.address LIKE ? ESCAPE '\\' OR a.comment LIKE ? ESCAPE '\\')")
+            clauses.append("m.sender IN (\(addressesLike))")
             let pattern = SQLiteConnection.likePattern(containing: sender)
             bindings += [.text(pattern), .text(pattern)]
         }
         if let recipient = query.recipient?.trimmingCharacters(in: .whitespaces), !recipient.isEmpty {
-            clauses.append(
-                """
-                EXISTS (SELECT 1 FROM recipients r JOIN addresses ra ON ra.ROWID = r.address WHERE r.message = m.ROWID \
-                AND (ra.address LIKE ? ESCAPE '\\' OR ra.comment LIKE ? ESCAPE '\\'))
-                """)
+            clauses.append("m.ROWID IN (SELECT message FROM recipients WHERE address IN (\(addressesLike)))")
             let pattern = SQLiteConnection.likePattern(containing: recipient)
             bindings += [.text(pattern), .text(pattern)]
         }
@@ -414,10 +415,11 @@ public final class MailStore: @unchecked Sendable {
         if let color = query.flagColor {
             // Mail keeps the flag colour in bits 39-41 of `flags` (red = 0 … gray = 6);
             // the `flag_color` column does not track it.
-            clauses.append("m.flagged != 0 AND ((m.flags >> 39) & 7) = ?")
+            clauses.append("m.ROWID IN (SELECT ROWID FROM messages WHERE flagged = 1) AND ((m.flags >> 39) & 7) = ?")
             bindings.append(.int(Int64(color.rawValue)))
         } else if let isFlagged = query.isFlagged {
-            clauses.append(isFlagged ? "m.flagged != 0" : "m.flagged = 0")
+            // The flagged set is small: go through messages_flagged_index rather than the date index.
+            clauses.append(isFlagged ? "m.ROWID IN (SELECT ROWID FROM messages WHERE flagged = 1)" : "m.flagged = 0")
         }
         if let hasAttachments = query.hasAttachments {
             clauses.append((hasAttachments ? "" : "NOT ") + "EXISTS (SELECT 1 FROM attachments t WHERE t.message = m.ROWID)")

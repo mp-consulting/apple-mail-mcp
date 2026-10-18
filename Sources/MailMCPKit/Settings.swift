@@ -48,6 +48,10 @@ public struct Settings: Codable, Sendable, Equatable {
     public var autoUpdateBodyIndex = true
     /// Seconds to wait for a send approval.
     public var approvalTimeout: Double = 120
+    /// Let the menu bar app look for a new release once a day.
+    public var checkForUpdates = true
+    /// Refresh installed Claude skills when the app ships newer versions of them.
+    public var updateInstalledSkills = true
 
     public init() {}
 
@@ -63,6 +67,8 @@ public struct Settings: Codable, Sendable, Equatable {
         ownAddresses = try container.decodeIfPresent([String].self, forKey: .ownAddresses) ?? []
         autoUpdateBodyIndex = try container.decodeIfPresent(Bool.self, forKey: .autoUpdateBodyIndex) ?? defaults.autoUpdateBodyIndex
         approvalTimeout = try container.decodeIfPresent(Double.self, forKey: .approvalTimeout) ?? defaults.approvalTimeout
+        checkForUpdates = try container.decodeIfPresent(Bool.self, forKey: .checkForUpdates) ?? defaults.checkForUpdates
+        updateInstalledSkills = try container.decodeIfPresent(Bool.self, forKey: .updateInstalledSkills) ?? defaults.updateInstalledSkills
     }
 
     public static func load(from url: URL = SharedPaths.settings) -> Settings {

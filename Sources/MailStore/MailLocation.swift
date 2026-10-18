@@ -38,7 +38,10 @@ public struct MailLocation: Sendable, Hashable {
         home: URL = FileManager.default.homeDirectoryForCurrentUser,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) throws -> MailLocation {
-        let accounts = home.appending(path: "Library/Accounts/Accounts4.sqlite")
+        var accounts = home.appending(path: "Library/Accounts/Accounts4.sqlite")
+        if let override = environment["APPLE_MAIL_MCP_ACCOUNTS_DB"], !override.isEmpty {
+            accounts = URL(filePath: (override as NSString).expandingTildeInPath)
+        }
         if let override = environment["APPLE_MAIL_MCP_MAIL_ROOT"], !override.isEmpty {
             return MailLocation(root: URL(filePath: (override as NSString).expandingTildeInPath), accountsDatabase: accounts)
         }

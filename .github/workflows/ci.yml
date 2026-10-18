@@ -1,0 +1,36 @@
+name: CI
+
+# Tests and builds every push to main and every pull request. The release workflow tests again
+# before it signs anything.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # macOS 26 and its Xcode: the menu bar app uses the Liquid Glass APIs and Swift 6.2.
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Skills are embedded
+        run: |
+          Scripts/embed-skills.sh
+          git diff --exit-code Sources/MailMCPKit/SkillCatalog+Generated.swift
+
+      - name: Test
+        run: swift test
+
+      - name: Build
+        run: swift build -c release --arch arm64
+
+      - name: Benchmark (synthetic mailbox, no personal data)
+        run: .build/arm64-apple-macosx/release/mail-bench synthetic --messages 20000 --runs 5 >> "$GITHUB_STEP_SUMMARY"

@@ -18,7 +18,8 @@ extension MailToolbox {
                 "list_accounts", "List accounts", "Mail accounts with their addresses and inbox counts.",
                 Schema.object([:]), kind: .read),
             kind: .read
-        ) { [store] _ in
+        ) { _ in
+            let store = try self.store
             let accounts = try store.accounts()
             let mailboxes = try store.mailboxes()
             let items: [JSON] = accounts.map { account in
@@ -46,7 +47,8 @@ extension MailToolbox {
                     "include_empty": Schema.boolean("Include mailboxes with no messages (default true)"),
                 ]), kind: .read),
             kind: .read
-        ) { [store] arguments in
+        ) { arguments in
+            let store = try self.store
             let accountID = try self.resolveAccountID(arguments)
             let includeEmpty = try arguments.bool("include_empty") ?? true
             let accounts = Dictionary(uniqueKeysWithValues: try store.accounts().map { ($0.id, $0.name) })
@@ -78,7 +80,8 @@ extension MailToolbox {
                     "recent": Schema.integer("How many recent unread messages to include (default 10)", minimum: 0, maximum: 50),
                 ]), kind: .read),
             kind: .read
-        ) { [store] arguments in
+        ) { arguments in
+            let store = try self.store
             let accountID = try self.resolveAccountID(arguments)
             let recentCount = try arguments.int("recent") ?? 10
             let accounts = try store.accounts().filter { accountID == nil || $0.id == accountID }
@@ -147,7 +150,8 @@ extension MailToolbox {
                     "sort": Schema.string("newest (default) or oldest", enum: ["newest", "oldest"]),
                 ]), kind: .read),
             kind: .read
-        ) { [store] arguments in
+        ) { arguments in
+            let store = try self.store
             var query = MessageQuery()
             let accountID = try self.resolveAccountID(arguments)
             if let accountID { query.accountIDs = [accountID] }
@@ -211,7 +215,8 @@ extension MailToolbox {
                         "include_headers": Schema.boolean("Include every header (default false)"),
                     ], required: ["id"]), kind: .read),
             kind: .read
-        ) { [store] arguments in
+        ) { arguments in
+            let store = try self.store
             guard let id = try arguments.ids("id").first else { throw ToolError("id is required") }
             let detail = try store.detail(id: id)
             let maxChars = try arguments.int("max_chars") ?? 20_000
@@ -269,7 +274,8 @@ extension MailToolbox {
                         "strip_quotes": Schema.boolean("Drop quoted text from each body (default true)"),
                     ], required: ["id"]), kind: .read),
             kind: .read
-        ) { [store] arguments in
+        ) { arguments in
+            let store = try self.store
             guard let id = try arguments.ids("id").first else { throw ToolError("id is required") }
             let maxChars = try arguments.int("max_chars") ?? 3000
             let strip = try arguments.bool("strip_quotes") ?? true
@@ -298,7 +304,8 @@ extension MailToolbox {
                 "list_attachments", "List attachments", "Attachments of a message with part ids, names, types and sizes.",
                 Schema.object(["id": Schema.integer("Message id")], required: ["id"]), kind: .read),
             kind: .read
-        ) { [store] arguments in
+        ) { arguments in
+            let store = try self.store
             guard let id = try arguments.ids("id").first else { throw ToolError("id is required") }
             let detail = try store.detail(id: id)
             return ToolReply(
@@ -319,7 +326,8 @@ extension MailToolbox {
                         "max_bytes": Schema.integer("Truncate to this many bytes (default 100000)", minimum: 1000),
                     ], required: ["id"]), kind: .read),
             kind: .read
-        ) { [store] arguments in
+        ) { arguments in
+            let store = try self.store
             guard let id = try arguments.ids("id").first else { throw ToolError("id is required") }
             let data = try store.rawSource(id: id)
             var text = MIME.decodeText(data, charset: "utf-8")
@@ -348,7 +356,8 @@ extension MailToolbox {
                     "days": Schema.integer("Period in days (default 30)", minimum: 1),
                 ]), kind: .read),
             kind: .read
-        ) { [store] arguments in
+        ) { arguments in
+            let store = try self.store
             let accountID = try self.resolveAccountID(arguments)
             let mailboxes = try self.resolveMailboxIDs(arguments, accountID: accountID)
             let days = try arguments.int("days") ?? 30
@@ -390,7 +399,8 @@ extension MailToolbox {
                     "limit": Schema.integer("How many (default 15)", minimum: 1, maximum: 200),
                 ]), kind: .read),
             kind: .read
-        ) { [store] arguments in
+        ) { arguments in
+            let store = try self.store
             let accountID = try self.resolveAccountID(arguments)
             let mailboxes = try self.resolveMailboxIDs(arguments, accountID: accountID)
             let days = try arguments.int("days") ?? 30
@@ -413,7 +423,8 @@ extension MailToolbox {
                     "limit": Schema.integer("Maximum results (default 25)", minimum: 1, maximum: 200),
                 ]), kind: .read),
             kind: .read
-        ) { [store] arguments in
+        ) { arguments in
+            let store = try self.store
             let list = try store.awaitingReply(
                 days: try arguments.int("days") ?? 14, minimumAgeHours: try arguments.int("min_age_hours") ?? 24,
                 accountID: try self.resolveAccountID(arguments), limit: try arguments.int("limit") ?? 25)
@@ -436,7 +447,8 @@ extension MailToolbox {
                     "limit": Schema.integer("Maximum results (default 25)", minimum: 1, maximum: 200),
                 ]), kind: .read),
             kind: .read
-        ) { [store] arguments in
+        ) { arguments in
+            let store = try self.store
             let list = try store.needsResponse(
                 days: try arguments.int("days") ?? 7, accountID: try self.resolveAccountID(arguments),
                 includeRead: try arguments.bool("include_read") ?? true, limit: try arguments.int("limit") ?? 25)
@@ -457,7 +469,8 @@ extension MailToolbox {
                     "time_budget": Schema.integer("Seconds to spend updating (default 25)", minimum: 1, maximum: 600),
                 ]), kind: .read),
             kind: .read
-        ) { [store] arguments in
+        ) { arguments in
+            let store = try self.store
             let action = try arguments.string("action") ?? "status"
             var updated: BodyIndex.UpdateResult?
             if action == "update" {

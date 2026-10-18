@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>Apple Mail MCP</string>
+	<key>CFBundleExecutable</key>
+	<string>Apple Mail MCP</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.mpconsulting.AppleMailMCP</string>
+	<key>CFBundleName</key>
+	<string>Apple Mail MCP</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>__VERSION__</string>
+	<key>CFBundleVersion</key>
+	<string>__BUILD__</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Apple Mail MCP asks Mail to move, flag, draft and send messages when you ask your AI assistant to.</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 Mickael Palma. MIT License.</string>
+</dict>
+</plist>

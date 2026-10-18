@@ -1,0 +1,82 @@
+name: Release
+
+# Publishing a GitHub release builds Apple Mail MCP, signs it with a Developer ID certificate, packs it into
+# a disk image, notarizes it and attaches AppleMailMCP-<version>.dmg to the release. The version comes
+# from the release tag (v1.2.0 -> 1.2.0). Secrets are listed in the README under "Releases".
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  dmg:
+    # macOS 26 and its Xcode: the menu bar app uses the Liquid Glass APIs and Swift 6.2.
+    runs-on: macos-26
+    env:
+      TAG: ${{ github.event.release.tag_name }}
+      # Notarization is skipped when the key is missing; the DMG is then signed only. Only whether it
+      # is set lives here: the key itself is given to the one step that uses it, not to the tests.
+      NOTARIZE: ${{ secrets.APPLE_API_KEY != '' }}
+    steps:
+      # Pinned to a commit: a moved tag must not run in a job that holds the signing certificate.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Test
+        run: swift test
+
+      - name: Import signing certificate
+        env:
+          CERTIFICATE: ${{ secrets.DEVELOPER_ID_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          trap 'rm -f "$RUNNER_TEMP/certificate.p12"' EXIT
+          (umask 077 && echo "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12")
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$KEYCHAIN" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" | sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' | head -n 1)"
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::DEVELOPER_ID_CERTIFICATE holds no Developer ID Application identity"
+            exit 1
+          fi
+          echo "SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+
+      - name: Build app
+        run: VERSION="${TAG#v}" BUILD_NUMBER="$GITHUB_RUN_NUMBER" Scripts/build-app.sh
+
+      - name: Make disk image
+        run: |
+          DMG="$HOME/Library/Caches/AppleMailMCP/dist/AppleMailMCP-${TAG#v}.dmg"
+          Scripts/make-dmg.sh "$HOME/Library/Caches/AppleMailMCP/dist/Apple Mail MCP.app" "$DMG"
+          echo "DMG=$DMG" >> "$GITHUB_ENV"
+
+      - name: Notarize
+        if: env.NOTARIZE == 'true'
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          KEY="$RUNNER_TEMP/AuthKey_$APPLE_API_KEY_ID.p8"
+          trap 'rm -f "$KEY"' EXIT
+          (umask 077 && printf '%s\n' "$APPLE_API_KEY" > "$KEY")
+          xcrun notarytool submit "$DMG" --key "$KEY" --key-id "$APPLE_API_KEY_ID" \
+            --issuer "$APPLE_API_ISSUER" --wait
+          xcrun stapler staple "$DMG"
+          spctl --assess --type open --context context:primary-signature --verbose "$DMG"
+
+      - name: Attach to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" "$DMG" --clobber
+
+      - name: Remove keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true

@@ -149,7 +149,8 @@ extension MailToolbox {
                         "mode": Self.modeSchema,
                     ], required: ["id", "body"]), kind: .compose, openWorld: true),
             kind: .compose
-        ) { [store, automation] arguments in
+        ) { [automation] arguments in
+            let store = try self.store
             guard let id = try arguments.ids("id").first else { throw ToolError("id is required") }
             let body = try arguments.requiredString("body")
             let replyAll = try arguments.bool("reply_all") ?? false
@@ -248,7 +249,8 @@ extension MailToolbox {
                         "mode": Self.modeSchema,
                     ], required: ["id", "to"]), kind: .compose, openWorld: true),
             kind: .compose
-        ) { [store, automation] arguments in
+        ) { [automation] arguments in
+            let store = try self.store
             guard let id = try arguments.ids("id").first else { throw ToolError("id is required") }
             let to = try arguments.strings("to")
             let cc = try arguments.strings("cc")
@@ -293,7 +295,8 @@ extension MailToolbox {
                 "open_in_mail", "Show in Mail", "Open a message in Mail so the user can see it.",
                 Schema.object(["id": Schema.integer("Message id")], required: ["id"]), kind: .compose, idempotent: true),
             kind: .compose
-        ) { [store, automation] arguments in
+        ) { [automation] arguments in
+            let store = try self.store
             guard let id = try arguments.ids("id").first else { throw ToolError("id is required") }
             let message = try store.message(id: id)
             // A message:// link needs no Apple Events or automation permission.

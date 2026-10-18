@@ -12,6 +12,19 @@ public struct ActivityEntry: Codable, Sendable, Hashable, Identifiable {
     /// Short outcome, e.g. "12 results" or "moved 3 to Archive".
     public var summary: String
     public var isWrite: Bool
+
+    public init(
+        date: Date, pid: Int32, client: String?, tool: String, ok: Bool, milliseconds: Int, summary: String, isWrite: Bool
+    ) {
+        self.date = date
+        self.pid = pid
+        self.client = client
+        self.tool = tool
+        self.ok = ok
+        self.milliseconds = milliseconds
+        self.summary = summary
+        self.isWrite = isWrite
+    }
 }
 
 /// Append-only JSON-lines journal shared by all server processes.
@@ -88,6 +101,25 @@ public struct ApprovalRequest: Codable, Sendable, Hashable, Identifiable {
     public var attachments: [String]
     public var status: Status
     public var decided: Date?
+
+    public init(
+        id: UUID, created: Date, tool: String, client: String?, from: String?, to: [String], cc: [String], bcc: [String],
+        subject: String, bodyPreview: String, attachments: [String], status: Status, decided: Date?
+    ) {
+        self.id = id
+        self.created = created
+        self.tool = tool
+        self.client = client
+        self.from = from
+        self.to = to
+        self.cc = cc
+        self.bcc = bcc
+        self.subject = subject
+        self.bodyPreview = bodyPreview
+        self.attachments = attachments
+        self.status = status
+        self.decided = decided
+    }
 }
 
 /// File-based approval queue: the server writes a request, the menu bar app

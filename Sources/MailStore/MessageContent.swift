@@ -25,6 +25,21 @@ public enum MessageContent {
         return body.count > maxCharacters ? String(body.prefix(maxCharacters)) : body
     }
 
+    /// Subject without reply/forward prefixes (`Re:`, `Fwd:`, `TR:`, `AW:`…), repeated or not.
+    public static func normalizeSubject(_ subject: String) -> String {
+        var text = subject.trimmingCharacters(in: .whitespaces)
+        let prefixes = ["re:", "fwd:", "fw:", "tr:", "aw:", "wg:", "rv:", "res:", "sv:", "vs:"]
+        var changed = true
+        while changed {
+            changed = false
+            for prefix in prefixes where text.lowercased().hasPrefix(prefix) {
+                text = String(text.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+                changed = true
+            }
+        }
+        return text
+    }
+
     static func normalizeNewlines(_ text: String) -> String {
         text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
     }

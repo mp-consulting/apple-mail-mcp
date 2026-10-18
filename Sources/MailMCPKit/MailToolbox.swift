@@ -29,7 +29,20 @@ public struct ToolDefinition: Sendable {
 
 /// All MCP tools, bound to a store, an automation backend and the user's settings.
 public final class MailToolbox: @unchecked Sendable {
-    public let store: MailStore
+    /// The Mail store, opened on first use. Throws a setup message (e.g. Full Disk Access) until it opens,
+    /// so the server always starts and every tool can explain what is missing.
+    public var store: MailStore {
+        get throws {
+            try lock.withLock {
+                if let opened = _store { return opened }
+                let opened = try storeProvider()
+                _store = opened
+                return opened
+            }
+        }
+    }
+    private let storeProvider: @Sendable () throws -> MailStore
+    private var _store: MailStore?
     public let automation: any MailAutomating
     public let settings: SettingsProvider
     public let approvals: ApprovalCenter
@@ -48,12 +61,22 @@ public final class MailToolbox: @unchecked Sendable {
     private var registeredSettingsAddresses: [String] = []
     private var askedMailForAddresses = false
 
-    public init(
+    public convenience init(
         store: MailStore, automation: any MailAutomating, settings: SettingsProvider = SettingsProvider(),
         approvals: ApprovalCenter = ApprovalCenter(), activity: ActivityLog? = ActivityLog(),
         bodyIndexURL: URL = SharedPaths.bodyIndex, readOnly: Bool = false
     ) {
-        self.store = store
+        self.init(
+            storeProvider: { store }, automation: automation, settings: settings, approvals: approvals,
+            activity: activity, bodyIndexURL: bodyIndexURL, readOnly: readOnly)
+    }
+
+    public init(
+        storeProvider: @escaping @Sendable () throws -> MailStore, automation: any MailAutomating,
+        settings: SettingsProvider = SettingsProvider(), approvals: ApprovalCenter = ApprovalCenter(),
+        activity: ActivityLog? = ActivityLog(), bodyIndexURL: URL = SharedPaths.bodyIndex, readOnly: Bool = false
+    ) {
+        self.storeProvider = storeProvider
         self.automation = automation
         self.settings = settings
         self.approvals = approvals
@@ -94,6 +117,7 @@ public final class MailToolbox: @unchecked Sendable {
 
     /// Feeds "me" addresses from settings and, when already permitted, from Mail itself.
     private func refreshOwnAddresses() async {
+        guard let store = try? self.store else { return }
         let extra = settings.current.ownAddresses
         let accounts = (try? store.accounts()) ?? []
         if extra != registeredSettingsAddresses, let first = accounts.first {

@@ -24,7 +24,8 @@ public enum Doctor {
             let opened = try MailStore(location: location)
             store = opened
             let count = try opened.messageCount()
-            checks.append(Check(name: "Mail data", state: .ok, detail: "\(count) messages in \(location.root.path)"))
+            let path = location.root.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+            checks.append(Check(name: "Mail data", state: .ok, detail: "\(count.formatted()) messages in \(path)"))
             let accounts = try opened.accounts()
             checks.append(Check(name: "Accounts", state: .ok, detail: accounts.map(\.name).joined(separator: ", ")))
         } catch let error as MailLocation.LocationError {

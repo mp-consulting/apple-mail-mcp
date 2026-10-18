@@ -4,7 +4,9 @@ import MailAutomation
 import MailStore
 
 public enum MailMCPVersion {
-    public static let current = "0.1.0"
+    /// The app bundle's version when running from "Apple Mail MCP.app" (stamped at release), else the source version.
+    public static let current = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String)
+        .flatMap { $0.hasPrefix("__") ? nil : $0 } ?? "0.1.0"
 }
 
 /// Binds a ``MailToolbox`` to an MCP `Server`.

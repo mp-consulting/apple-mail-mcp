@@ -155,6 +155,11 @@ emails waiting you review them one by one; nothing goes out without a click on *
   keychains, browser profiles, Mail's own data) can't be attached. Optional allowlists in Settings.
 - **Read-only mode**: `apple-mail-mcp --read-only` offers only the reading tools.
 - **Activity**: every tool call is listed in the Mail tab (never with message content).
+- **Search index without text**: Mail's data is behind Full Disk Access; the body index in
+  `~/Library/Application Support/apple-mail-mcp` is not, so it stores no words, only keyed hashes (no order,
+  no positions). The key is in your login Keychain ("Apple Mail MCP search index key"), so another app has to
+  ask you before it can use the index, and even then it can only test guessed words. The file is owner-only
+  and kept out of Time Machine. If the key is missing or refused, body searches scan messages instead.
 
 ## Benchmarks
 
@@ -201,7 +206,7 @@ every server (changes apply immediately).
 
 ```text
 Claude ──MCP (stdio)──▶ apple-mail-mcp ─┬─ reads ──▶ ~/Library/Mail/V10/MailData/Envelope Index (SQLite, read-only)
-                                        │            .emlx files · local full-text index (FTS5)
+                                        │            .emlx files · local hashed full-text index (FTS5)
                                         └─ writes ─▶ Apple Events ─▶ Mail.app ─▶ your accounts
 Apple Mail MCP.app (menu bar) ── settings · approvals · activity · index updates · Claude setup · updates
 ```

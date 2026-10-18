@@ -378,7 +378,9 @@ case "synthetic":
     defer { fixture.remove() }
     let generated = milliseconds(since: start)
     let store = try MailStore(location: fixture.location)
-    let index = try BodyIndex(url: fixture.directory.appending(path: "body-index.sqlite"))
+    // Generated mail, thrown away afterwards: a throwaway key, not the Keychain's.
+    let key = BodyIndexKey.random()
+    let index = try BodyIndex(url: fixture.directory.appending(path: "body-index.sqlite"), key: { key })
     start = DispatchTime.now().uptimeNanoseconds
     let built = try index.update(from: store)
     let indexTime = milliseconds(since: start)

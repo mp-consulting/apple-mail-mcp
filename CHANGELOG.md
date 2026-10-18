@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- **The body search index no longer holds readable mail.** It used contentless FTS5, but the terms and their
+  positions are enough to rebuild every message, and the file is not behind Full Disk Access. It now stores only
+  keyed hashes of words and word pairs, without positions, with the key in the login Keychain. Existing indexes
+  are deleted and rebuilt on first use. The file is owner-only and excluded from backups. Prefix search
+  needs at least 3 characters; shorter words match whole.
+
 ## [0.2.2] - 2026-10-18
 
 ### Fixed

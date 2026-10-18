@@ -9,21 +9,81 @@ final class BodyIndexTests {
     let fixture: StandardFixture
     let store: MailStore
     let index: BodyIndex
+    /// Tests never read the Keychain.
+    static let key = BodyIndexKey(bytes: Array(0..<16))
+    var indexURL: URL { fixture.store.directory.appending(path: "index/body.sqlite") }
 
     init() throws {
         fixture = try StandardFixture.make()
         store = try fixture.openStore()
-        index = try BodyIndex(url: fixture.store.directory.appending(path: "index/body.sqlite"))
+        index = try BodyIndex(url: fixture.store.directory.appending(path: "index/body.sqlite"), key: { Self.key })
     }
 
     deinit { fixture.store.remove() }
 
-    @Test func ftsQueryNeutralizesSyntax() {
-        #expect(BodyIndex.ftsQuery(for: "kubernetes cluster") == "\"kubernetes\"* \"cluster\"*")
-        #expect(BodyIndex.ftsQuery(for: "say \"hello world\" now") == "\"say\"* \"hello world\" \"now\"*")
-        #expect(BodyIndex.ftsQuery(for: "NEAR(a b) OR c*") == "\"NEAR\"* \"a\"* \"b\"* \"OR\"* \"c\"*")
-        #expect(BodyIndex.ftsQuery(for: "me@icloud.test") == "\"me@icloud.test\"*")
-        #expect(BodyIndex.ftsQuery(for: "  ") == nil)
+    @Test func queryTermsNeutralizeSyntax() {
+        typealias Term = BodyIndex.QueryTerm
+        #expect(BodyIndex.queryTerms(for: "Kubernetes cluster") == [Term.prefix("kubernetes"), .prefix("cluster")])
+        #expect(BodyIndex.queryTerms(for: "say \"hello world\" now") == [Term.prefix("say"), .phrase(["hello", "world"]), .prefix("now")])
+        #expect(BodyIndex.queryTerms(for: "NEAR(a b) OR c*") == [Term.prefix("near"), .word("a"), .word("b"), .word("or"), .word("c")])
+        #expect(BodyIndex.queryTerms(for: "me@icloud.test") == [Term.phrase(["me", "icloud", "test"])])
+        #expect(BodyIndex.queryTerms(for: "\"Café\"") == [Term.word("cafe")])
+        #expect(BodyIndex.queryTerms(for: "  ").isEmpty)
+    }
+
+    @Test func sipHashMatchesReferenceVector() {
+        // Appendix A of the SipHash paper: key 00…0f, message 00…0e.
+        let hasher = SipHash24(key: Array(0..<16))
+        #expect(hasher.hash(Array(0..<15)) == 0xa129_ca61_49be_45e5)
+        #expect(hasher.hash([]) == 0x726f_db47_dd0e_0e31)
+    }
+
+    @Test func fileHoldsNoReadableText() throws {
+        try index.update(from: store)
+        try index.prune(against: store)
+        // Nothing the messages say is in the database, its WAL or the FTS shadow tables.
+        var bytes = Data()
+        for suffix in ["", "-wal"] { bytes.append((try? Data(contentsOf: URL(filePath: indexURL.path + suffix))) ?? Data()) }
+        for secret in ["kubernetes", "Kubernetes", "cluster", "carol", "Project kickoff", "server"] {
+            #expect(bytes.range(of: Data(secret.utf8)) == nil, "\(secret) found in the index file")
+        }
+        // Reading the terms back, as one could from contentless FTS5, yields only opaque hashes.
+        let db = try SQLiteConnection(path: indexURL.path, readOnly: false)
+        try db.execute("CREATE VIRTUAL TABLE temp.terms USING fts5vocab(main, 'body_fts', 'row')")
+        let terms = try db.all("SELECT term FROM temp.terms") { $0.string(0) }
+        #expect(!terms.isEmpty)
+        #expect(terms.allSatisfy { $0.count == 16 && $0.allSatisfy(\.isHexDigit) })
+        let permissions = try FileManager.default.attributesOfItem(atPath: indexURL.path)[.posixPermissions] as? NSNumber
+        #expect(permissions?.intValue == 0o600)
+    }
+
+    @Test func anotherKeyFindsNothingAndRebuilds() throws {
+        try index.update(from: store)
+        #expect(!(try index.matchingIDs(for: "kubernetes", limit: 10)).isEmpty)
+        let other = try BodyIndex(url: indexURL, key: { BodyIndexKey(bytes: Array(repeating: 7, count: 16)) })
+        #expect(try other.matchingIDs(for: "kubernetes", limit: 10).isEmpty)
+        #expect(try other.coveredThrough() == 0)
+        #expect(try other.status().indexedMessages == 0)
+        try other.update(from: store)
+        #expect(Set(try other.matchingIDs(for: "kubernetes", limit: 10)) == [fixture.ids["kickoff"]!])
+    }
+
+    @Test func plaintextIndexFromVersionOneIsDeleted() throws {
+        let url = fixture.store.directory.appending(path: "old/body.sqlite")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        do {
+            let old = try SQLiteConnection(path: url.path, readOnly: false, create: true)
+            try old.execute(
+                """
+                CREATE TABLE meta (key TEXT PRIMARY KEY, value); INSERT INTO meta VALUES ('schema_version', 1);
+                CREATE VIRTUAL TABLE body_fts USING fts5(subject, sender, body, content = '');
+                INSERT INTO body_fts (rowid, subject, sender, body) VALUES (1, 'secret', 'x', 'the launch code is hunter2');
+                """)
+        }
+        let upgraded = try BodyIndex(url: url, key: { Self.key })
+        #expect(try upgraded.status().indexedMessages == 0)
+        let bytes = try Data(contentsOf: url)
+        #expect(bytes.range(of: Data("hunter2".utf8)) == nil)
     }
 
     @Test func buildsAndSearches() throws {
@@ -37,6 +97,10 @@ final class BodyIndexTests {
         #expect(Set(try index.matchingIDs(for: "\"Kubernetes cluster\"", limit: 10)) == [fixture.ids["kickoff"]!])
         // Subject and sender are indexed too.
         #expect(Set(try index.matchingIDs(for: "carol", limit: 10)) == [fixture.ids["invoice"]!])
+        // Prefixes expand through the vocabulary; short words match whole.
+        #expect(Set(try index.matchingIDs(for: "kube", limit: 10)) == [fixture.ids["kickoff"]!])
+        #expect(try index.matchingIDs(for: "kubernetesx", limit: 10).isEmpty)
+        #expect(try index.matchingIDs(for: "\"kube\"", limit: 10).isEmpty)
 
         var query = MessageQuery()
         query.bodyText = "café"

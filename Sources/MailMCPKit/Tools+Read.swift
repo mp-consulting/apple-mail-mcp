@@ -5,8 +5,8 @@ import MailStore
 extension MailToolbox {
     var readTools: [ToolDefinition] {
         [
-            listAccounts, listMailboxes, inboxOverview, searchMessages, getMessage, getThread, listAttachments,
-            getMessageSource, statistics, topSenders, awaitingReply, needsResponse, bodyIndexTool,
+            listAccounts, listMailboxes, inboxOverview, searchMessages, getMessage, getMessages, getThread, listAttachments,
+            getMessageSource, extractInvoiceFields, statistics, topSenders, awaitingReply, needsResponse, bodyIndexTool,
         ]
     }
 
@@ -119,67 +119,125 @@ extension MailToolbox {
 
     // MARK: Search
 
+    /// Filters shared by search_messages, export_search and grouping.
+    static let filterSchema: [String: Value] = [
+        "query": Schema.string("Text in the subject, sender or preview; comma-separate alternatives (any matches)"),
+        "subject": Schema.string("Text in the subject (comma-separate alternatives)"),
+        "sender": Schema.string("Sender name or address (substring)"),
+        "recipient": Schema.string("To/Cc/Bcc name or address (substring)"),
+        "body": Schema.string("Words in the message body; \"quoted phrase\" for exact phrases"),
+        "exclude_subject": Schema.string("Leave out subjects containing any of these (comma-separated)"),
+        "exclude_sender": Schema.string("Leave out senders whose name or address contains any of these (comma-separated)"),
+        "exclude_replies": Schema.boolean("Leave out replies (Re:, AW:, SV:… subjects)"),
+        "exclude_from_self": Schema.boolean("Leave out mail from your own addresses and names (settings: own addresses and names)"),
+        "direction": Schema.string(
+            "received = not in Sent/Drafts/Outbox and not from you; sent = sent by you; any (default)",
+            enum: MessageDirection.allCases.map(\.rawValue)),
+        "account": Schema.string("Account name, id or address"),
+        "mailbox": Schema.string("Mailbox path or role (inbox, sent, drafts, archive, trash, junk); default all except Trash/Junk"),
+        "unread": Schema.boolean("true = only unread, false = only read"),
+        "flagged": Schema.boolean("Only flagged (true) or unflagged (false) messages"),
+        "flag_color": Schema.string("Flag colour", enum: FlagColor.allCases.map(\.name)),
+        "has_attachments": Schema.boolean("Only messages with (true) or without (false) attachments"),
+        "category": Schema.string(
+            "Mail's categories (macOS 15+), comma-separated: \(MailCategory.allCases.map(\.name).joined(separator: ", "))"),
+        "days": Schema.integer("Only the last N days", minimum: 1),
+        "date_from": Schema.string("Earliest date received, YYYY-MM-DD"),
+        "date_to": Schema.string("Latest date received, YYYY-MM-DD (inclusive)"),
+        "include_trash": Schema.boolean("Also search Trash and Junk (default false)"),
+        "sort": Schema.string("newest (default) or oldest", enum: ["newest", "oldest"]),
+    ]
+
+    /// A store query from the shared filter arguments (paging is left to the caller).
+    func messageQuery(_ arguments: Arguments) throws -> MessageQuery {
+        let store = try self.store
+        var query = MessageQuery()
+        let accountID = try resolveAccountID(arguments)
+        if let accountID { query.accountIDs = [accountID] }
+        query.mailboxIDs = try resolveMailboxIDs(arguments, accountID: accountID)
+        let terms = try arguments.strings("query")
+        // One term keeps commas-free text as typed; several become alternatives.
+        if terms.count == 1 { query.text = terms[0] } else { query.textTerms = terms }
+        query.subjectTerms = try arguments.strings("subject")
+        query.sender = try arguments.string("sender")
+        query.recipient = try arguments.string("recipient")
+        query.bodyText = try arguments.string("body")
+        query.excludeSubjectTerms = try arguments.strings("exclude_subject")
+        query.excludeSenders = try arguments.strings("exclude_sender")
+        query.excludeReplies = try arguments.bool("exclude_replies") ?? false
+        if try arguments.bool("exclude_from_self") ?? false {
+            let current = settings.current
+            query.excludeSenderAddresses = Array(try store.ownAddresses()) + current.ownAddresses
+            query.excludeSenders += current.ownNames
+        }
+        if let direction = try arguments.string("direction") {
+            guard let value = MessageDirection(rawValue: direction.lowercased()) else {
+                throw ToolError("direction must be received, sent or any")
+            }
+            query.direction = value
+        }
+        if let unread = try arguments.bool("unread") { query.isRead = !unread }
+        query.isFlagged = try arguments.bool("flagged")
+        if let color = try arguments.string("flag_color") {
+            guard let flag = FlagColor(name: color) else { throw ToolError("unknown flag_color \(color)") }
+            query.flagColor = flag
+        }
+        query.hasAttachments = try arguments.bool("has_attachments")
+        query.categories = try arguments.strings("category").map { name in
+            guard let value = MailCategory(name: name) else {
+                throw ToolError("unknown category \(name); use \(MailCategory.allCases.map(\.name).joined(separator: ", "))")
+            }
+            return value
+        }
+        if let days = try arguments.int("days") { query.dateFrom = Date().addingTimeInterval(-Double(days) * 86_400) }
+        if let from = try arguments.date("date_from") { query.dateFrom = from }
+        query.dateTo = try arguments.date("date_to", endOfDay: true)
+        query.includeTrashAndJunk = try arguments.bool("include_trash") ?? false
+        query.sortAscending = try arguments.string("sort") == "oldest"
+        return query
+    }
+
     var searchMessages: ToolDefinition {
         ToolDefinition(
             tool: Self.tool(
                 "search_messages", "Search messages",
                 """
-                Search mail by any combination of filters; results are newest first with ids for other tools. \
+                Search mail by any combination of filters; results are newest first with ids and message:// links. \
                 Fast on any mailbox size (reads Mail's index directly). `body` searches message text: instant when \
-                the body index is built (see body_index), otherwise a bounded scan of recent messages.
+                the body index is built (see body_index), otherwise a bounded scan of recent messages. \
+                For hundreds of results use export_search (writes a file) or group_by (counts only).
                 """,
-                Schema.object([
-                    "query": Schema.string("Free text matched against subject, sender and preview"),
-                    "subject": Schema.string("Text in the subject (comma-separate alternatives)"),
-                    "sender": Schema.string("Sender name or address (substring)"),
-                    "recipient": Schema.string("To/Cc/Bcc name or address (substring)"),
-                    "body": Schema.string("Words in the message body; \"quoted phrase\" for exact phrases"),
-                    "account": Schema.string("Account name, id or address"),
-                    "mailbox": Schema.string("Mailbox path or role (inbox, sent, drafts, archive, trash, junk); default all except Trash/Junk"),
-                    "unread": Schema.boolean("true = only unread, false = only read"),
-                    "flagged": Schema.boolean("Only flagged (true) or unflagged (false) messages"),
-                    "flag_color": Schema.string("Flag colour", enum: FlagColor.allCases.map(\.name)),
-                    "has_attachments": Schema.boolean("Only messages with (true) or without (false) attachments"),
-                    "category": Schema.string("Mail's category (macOS 15+)", enum: MailCategory.allCases.map(\.name)),
-                    "days": Schema.integer("Only the last N days", minimum: 1),
-                    "date_from": Schema.string("Earliest date received, YYYY-MM-DD"),
-                    "date_to": Schema.string("Latest date received, YYYY-MM-DD (inclusive)"),
-                    "include_trash": Schema.boolean("Also search Trash and Junk (default false)"),
-                    "limit": Schema.integer("Results per page (default 20, max 200)", minimum: 1, maximum: 200),
-                    "offset": Schema.integer("Skip this many results (pagination)", minimum: 0),
-                    "sort": Schema.string("newest (default) or oldest", enum: ["newest", "oldest"]),
-                ]), kind: .read),
+                Schema.object(
+                    Self.filterSchema.merging([
+                        "limit": Schema.integer("Results per page (default 20, max 200)", minimum: 1, maximum: 200),
+                        "offset": Schema.integer("Skip this many results (pagination)", minimum: 0),
+                        "compact": Schema.boolean("Leave out previews (smaller output; default false)"),
+                        "group_by": Schema.string(
+                            "Return counts per sender, domain or month instead of messages", enum: GroupKey.allCases.map(\.rawValue)),
+                    ]) { a, _ in a }), kind: .read),
             kind: .read
         ) { arguments in
             let store = try self.store
-            var query = MessageQuery()
-            let accountID = try self.resolveAccountID(arguments)
-            if let accountID { query.accountIDs = [accountID] }
-            query.mailboxIDs = try self.resolveMailboxIDs(arguments, accountID: accountID)
-            query.text = try arguments.string("query")
-            query.subjectTerms = try arguments.strings("subject")
-            query.sender = try arguments.string("sender")
-            query.recipient = try arguments.string("recipient")
-            query.bodyText = try arguments.string("body")
-            if let unread = try arguments.bool("unread") { query.isRead = !unread }
-            query.isFlagged = try arguments.bool("flagged")
-            if let color = try arguments.string("flag_color") {
-                guard let flag = FlagColor(name: color) else { throw ToolError("unknown flag_color \(color)") }
-                query.flagColor = flag
+            var query = try self.messageQuery(arguments)
+            let bodyIndex = query.bodyText == nil ? nil : self.bodyIndex
+            if let group = try arguments.string("group_by") {
+                guard let key = GroupKey(rawValue: group.lowercased()) else { throw ToolError("group_by must be sender, domain or month") }
+                let groups = try store.groupCounts(query, by: key, bodyIndex: bodyIndex, limit: try arguments.int("limit") ?? 50)
+                let json = JSON.obj([
+                    ("group_by", .string(key.rawValue)),
+                    ("groups", .array(groups.map { g in
+                        .obj([
+                            ("key", .string(g.key)), ("name", g.name.map { .string($0) }), ("count", .int(Int64(g.count))),
+                            ("unread", g.unread > 0 ? .int(Int64(g.unread)) : nil),
+                        ])
+                    })),
+                ])
+                return ToolReply(json: json, summary: "\(groups.count) groups")
             }
-            query.hasAttachments = try arguments.bool("has_attachments")
-            if let category = try arguments.string("category") {
-                guard let value = MailCategory(name: category) else { throw ToolError("unknown category \(category)") }
-                query.categories = [value]
-            }
-            if let days = try arguments.int("days") { query.dateFrom = Date().addingTimeInterval(-Double(days) * 86_400) }
-            if let from = try arguments.date("date_from") { query.dateFrom = from }
-            query.dateTo = try arguments.date("date_to", endOfDay: true)
-            query.includeTrashAndJunk = try arguments.bool("include_trash") ?? false
             query.limit = min(200, max(1, try arguments.int("limit") ?? 20))
             query.offset = max(0, try arguments.int("offset") ?? 0)
-            query.sortAscending = try arguments.string("sort") == "oldest"
-            let page = try store.search(query, bodyIndex: query.bodyText == nil ? nil : self.bodyIndex)
+            let compact = try arguments.bool("compact") ?? false
+            let page = try store.search(query, bodyIndex: bodyIndex)
             var notes: [JSON] = []
             if page.scanLimited {
                 notes.append(
@@ -193,7 +251,7 @@ extension MailToolbox {
                 ("has_more", .bool(page.hasMore)),
                 ("body_search", page.bodySearchMode.map { .string($0) }),
                 ("notes", notes.isEmpty ? nil : .array(notes)),
-                ("messages", .array(page.messages.map { Render.message($0) })),
+                ("messages", .array(page.messages.map { Render.message($0, preview: !compact, link: true) })),
             ])
             return ToolReply(json: json, summary: "\(page.total.map(String.init) ?? "\(page.messages.count)+") results")
         }

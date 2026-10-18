@@ -23,6 +23,20 @@ description: Find, save and organize email attachments from Apple Mail (invoices
 - Some locations are refused on purpose (startup folders, `~/Library`, dotfiles, `.git/hooks`): pick a
   normal folder such as `~/Documents/Invoices`.
 
+## Invoices and receipts to a spreadsheet
+
+1. Build one precise search, then check it with `search_messages` and `group_by: "sender"` (counts only):
+   - `query: "invoice, facture, fatura, receipt, Rechnung"` (any term matches)
+   - `direction: "received"` and `exclude_replies: true` to drop sent mail and replies
+   - `exclude_subject` for ads and newsletters ("économisez, newsletter, webinar"), `exclude_sender` for
+     noisy domains, `category: "transactions"` when Mail has classified them
+   - `exclude_from_self: true` drops invoices the user issued (their own names are set in the app's settings)
+2. `export_search` with the same filters, a `path` such as `~/Desktop/invoices.xlsx` (`csv`, `json` or `xlsx`)
+   and `include: ["amount", "invoice_number"]`: one call writes every match with vendor, total, currency
+   and invoice number (read from bodies and attached PDFs) and returns only the path and row count.
+3. Report the row count and how many rows got an amount (`with_amount`). Rows with
+   `amount_confidence: "low"` are worth a glance; `extract_invoice_fields` on a few ids shows why.
+
 ## Export messages
 
 - `export_messages` with `ids` and a `directory`: `format: "eml"` keeps the original message (opens in

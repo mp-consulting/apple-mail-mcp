@@ -29,16 +29,21 @@ struct SkillTests {
         }
     }
 
-    /// Every `snake_case` tool named in a skill must exist on the server.
+    /// Every `snake_case` tool or parameter named in a skill must exist on the server.
     @Test func skillsOnlyReferenceRealTools() throws {
         let h = try Harness()
         defer { h.remove() }
         let tools = Set(h.toolbox.definitions.map(\.tool.name))
-        let parameters: Set<String> = [
-            "dry_run", "new_ids", "strip_quotes", "max_chars", "has_more", "reply_all", "quote_original", "flag_color",
-            "min_age_hours", "has_attachments", "date_from", "date_to", "include_trash", "by_domain", "body_search",
-            "include_read", "to_mailbox", "not_found", "collateral_suspected",
+        // Parameters come from the tools' own schemas; output keys skills may mention are listed by hand.
+        var parameters: Set<String> = [
+            "new_ids", "has_more", "body_search", "not_found", "collateral_suspected", "with_amount", "amount_confidence",
+            "remaining_ids",
         ]
+        for definition in h.toolbox.definitions {
+            if case .object(let schema) = definition.tool.inputSchema, case .object(let properties)? = schema["properties"] {
+                parameters.formUnion(properties.keys)
+            }
+        }
         let regex = try NSRegularExpression(pattern: "`([a-z]+(?:_[a-z]+)+)`")
         for skill in SkillCatalog.all {
             let text = skill.content as NSString

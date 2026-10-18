@@ -5,6 +5,18 @@ import Foundation
 public struct MessageQuery: Sendable, Hashable {
     /// Free text matched against subject, sender and Mail's preview snippet.
     public var text: String?
+    /// More free-text alternatives: a message matches when `text` or any of these matches.
+    public var textTerms: [String] = []
+    /// Leave out messages whose subject contains any of these.
+    public var excludeSubjectTerms: [String] = []
+    /// Leave out messages whose sender address or name contains any of these.
+    public var excludeSenders: [String] = []
+    /// Leave out messages from exactly these addresses (case-insensitive).
+    public var excludeSenderAddresses: [String] = []
+    /// Received mail only, sent mail only, or both.
+    public var direction: MessageDirection = .any
+    /// Leave out replies (`Re:`, `AW:`, `SV:`… subjects).
+    public var excludeReplies = false
     /// Any of these must appear in the subject.
     public var subjectTerms: [String] = []
     /// Substring of the sender address or display name.
@@ -34,6 +46,39 @@ public struct MessageQuery: Sendable, Hashable {
     public var bodyScanBudget = 3000
 
     public init() {}
+}
+
+/// Which way a message went, judged by mailbox role and the user's own addresses.
+public enum MessageDirection: String, Sendable, Hashable, CaseIterable {
+    /// Everything.
+    case any
+    /// Not in Sent, Drafts or Outbox, and not from one of the user's addresses.
+    case received
+    /// In Sent, or from one of the user's addresses (never Drafts or Outbox).
+    case sent
+}
+
+/// Every match of a query, without paging (for exports and grouping).
+public struct MatchResult: Sendable {
+    /// Matching ROWIDs in the query's sort order.
+    public var ids: [Int64]
+    /// False when a body scan hit its budget or the cap stopped the list early.
+    public var complete: Bool
+    public var bodySearchMode: String?
+    public var scannedMessages: Int
+}
+
+/// Message counts per sender, sender domain or month.
+public struct GroupCount: Sendable, Hashable {
+    public var key: String
+    /// Display name, for sender groups.
+    public var name: String?
+    public var count: Int
+    public var unread: Int
+}
+
+public enum GroupKey: String, Sendable, CaseIterable {
+    case sender, domain, month
 }
 
 public struct SearchPage: Sendable {

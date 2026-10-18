@@ -647,6 +647,7 @@ struct SettingsView: View {
                 TextField("Save attachments only into (folders, comma-separated)", text: list(\.writeDirectories))
                 TextField("Attach files only from (folders, comma-separated)", text: list(\.attachDirectories))
                 TextField("My other addresses (comma-separated)", text: list(\.ownAddresses))
+                TextField("Names I send as, e.g. my company (comma-separated)", text: list(\.ownNames))
             }
             Section("Claude") {
                 ClaudeRows(model: model)

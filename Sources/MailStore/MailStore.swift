@@ -411,16 +411,71 @@ public final class MailStore: @unchecked Sendable {
         }
         // Text filters match the small lookup tables first, then use the messages indexes
         // (subject, sender, recipients_address) instead of joining every message.
-        let subjectsLike = "SELECT ROWID FROM subjects WHERE subject LIKE ? ESCAPE '\\'"
         let addressesLike = "SELECT ROWID FROM addresses WHERE address LIKE ? ESCAPE '\\' OR comment LIKE ? ESCAPE '\\'"
-        if let text = query.text?.trimmingCharacters(in: .whitespaces), !text.isEmpty {
-            let pattern = SQLiteConnection.likePattern(containing: text)
+        let textTerms = Self.cleaned(([query.text].compactMap { $0 }) + query.textTerms)
+        if !textTerms.isEmpty {
+            // Any term in the subject, the sender or Mail's preview: one lookup per table for all terms.
+            let patterns = textTerms.map { SQLValue.text(SQLiteConnection.likePattern(containing: $0)) }
+            let subjects = Self.repeated("subject LIKE ? ESCAPE '\\'", textTerms.count)
+            let senders = Self.repeated("address LIKE ? ESCAPE '\\' OR comment LIKE ? ESCAPE '\\'", textTerms.count)
+            let summaries = Self.repeated("summary LIKE ? ESCAPE '\\'", textTerms.count)
             clauses.append(
                 """
-                (m.subject IN (\(subjectsLike)) OR m.sender IN (\(addressesLike)) \
-                OR m.summary IN (SELECT ROWID FROM summaries WHERE summary LIKE ? ESCAPE '\\'))
+                (m.subject IN (SELECT ROWID FROM subjects WHERE \(subjects)) \
+                OR m.sender IN (SELECT ROWID FROM addresses WHERE \(senders)) \
+                OR m.summary IN (SELECT ROWID FROM summaries WHERE \(summaries)))
                 """)
-            bindings += Array(repeating: .text(pattern), count: 4)
+            bindings += patterns + patterns.flatMap { [$0, $0] } + patterns
+        }
+        let excludedSubjects = Self.cleaned(query.excludeSubjectTerms)
+        if !excludedSubjects.isEmpty {
+            clauses.append(
+                "m.subject NOT IN (SELECT ROWID FROM subjects WHERE \(Self.repeated("subject LIKE ? ESCAPE '\\'", excludedSubjects.count)))")
+            bindings += excludedSubjects.map { .text(SQLiteConnection.likePattern(containing: $0)) }
+        }
+        let excludedSenders = Self.cleaned(query.excludeSenders)
+        if !excludedSenders.isEmpty {
+            // IFNULL: a message without a sender row is not excluded (NOT IN NULL would drop it).
+            clauses.append(
+                """
+                IFNULL(m.sender, 0) NOT IN (SELECT ROWID FROM addresses WHERE \
+                \(Self.repeated("address LIKE ? ESCAPE '\\' OR comment LIKE ? ESCAPE '\\'", excludedSenders.count)))
+                """)
+            bindings += excludedSenders.flatMap { term -> [SQLValue] in
+                let pattern = SQLValue.text(SQLiteConnection.likePattern(containing: term))
+                return [pattern, pattern]
+            }
+        }
+        var excludedAddresses = Set(Self.cleaned(query.excludeSenderAddresses).map { $0.lowercased() })
+        switch query.direction {
+        case .any: break
+        case .received:
+            if let membership = Self.membership(roles: [.sent, .drafts, .outbox], mailboxes: mailboxes) {
+                clauses.append("NOT \(membership)")
+            }
+            excludedAddresses.formUnion(cachedOwnAddresses())
+        case .sent:
+            let own = cachedOwnAddresses()
+            var sent: [String] = []
+            if let membership = Self.membership(roles: [.sent], mailboxes: mailboxes) { sent.append(membership) }
+            if !own.isEmpty {
+                sent.append("IFNULL(m.sender, 0) IN (SELECT ROWID FROM addresses WHERE lower(address) IN (SELECT value FROM json_each(?)))")
+                bindings.append(.text(Self.jsonArray(own.sorted())))
+            }
+            clauses.append(sent.isEmpty ? "0" : "(" + sent.joined(separator: " OR ") + ")")
+            if let unsent = Self.membership(roles: [.drafts, .outbox], mailboxes: mailboxes) { clauses.append("NOT \(unsent)") }
+        }
+        if !excludedAddresses.isEmpty {
+            clauses.append(
+                "IFNULL(m.sender, 0) NOT IN (SELECT ROWID FROM addresses WHERE lower(address) IN (SELECT value FROM json_each(?)))")
+            bindings.append(.text(Self.jsonArray(excludedAddresses.sorted())))
+        }
+        if query.excludeReplies {
+            // Mail moves "Re: " into subject_prefix; older rows may keep it in the subject itself.
+            let prefixes = Self.replyPrefixes
+            let prefixGlobs = prefixes.map { "lower(ltrim(IFNULL(m.subject_prefix, ''))) GLOB '\($0):*'" }.joined(separator: " OR ")
+            let subjectLikes = prefixes.map { "subject LIKE '\($0):%'" }.joined(separator: " OR ")
+            clauses.append("NOT (\(prefixGlobs)) AND m.subject NOT IN (SELECT ROWID FROM subjects WHERE \(subjectLikes))")
         }
         let terms = query.subjectTerms.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         if !terms.isEmpty {
@@ -471,6 +526,37 @@ public final class MailStore: @unchecked Sendable {
         return (clauses.joined(separator: " AND "), bindings)
     }
 
+    /// Reply prefixes in the languages Mail users commonly see (constants, safe to inline in SQL).
+    static let replyPrefixes = ["re", "aw", "sv", "vs", "antw", "rif", "r", "res", "odp", "atb"]
+
+    static func cleaned(_ terms: [String]) -> [String] {
+        terms.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
+
+    static func repeated(_ condition: String, _ count: Int) -> String {
+        Array(repeating: "(\(condition))", count: count).joined(separator: " OR ")
+    }
+
+    /// Messages in any mailbox with one of `roles`, directly or through a label; nil when there is none.
+    static func membership(roles: Set<MailboxRole>, mailboxes: [Int64: Mailbox]) -> String? {
+        let matching = mailboxes.values.filter { roles.contains($0.role) }
+        let plain = matching.filter { $0.sourceMailboxID == nil }.map { String($0.id) }.sorted()
+        let labels = matching.filter { $0.sourceMailboxID != nil }.map { String($0.id) }.sorted()
+        var parts: [String] = []
+        if !plain.isEmpty { parts.append("m.mailbox IN (\(plain.joined(separator: ",")))") }
+        if !labels.isEmpty {
+            parts.append("m.ROWID IN (SELECT message_id FROM labels WHERE mailbox_id IN (\(labels.joined(separator: ","))))")
+        }
+        return parts.isEmpty ? nil : "(" + parts.joined(separator: " OR ") + ")"
+    }
+
+    /// The user's addresses as last loaded (callers refresh the caches first, e.g. via `lookupTables`).
+    func cachedOwnAddresses() -> Set<String> {
+        lock.lock()
+        defer { lock.unlock() }
+        return Set(cachedAccounts.flatMap(\.emailAddresses).map { $0.lowercased() })
+    }
+
     /// The joins a WHERE clause needs, so COUNT and id-only queries skip the rest.
     static func minimalJoins(for whereSQL: String) -> String {
         var joins = "FROM messages m"
@@ -487,7 +573,7 @@ public final class MailStore: @unchecked Sendable {
     /// given, with a bounded, parallel `.emlx` scan for anything the index has not covered yet.
     public func search(_ query: MessageQuery, bodyIndex: (any BodySearchIndex)? = nil) throws -> SearchPage {
         let (mailboxes, names) = try lookupTables()
-        var (whereSQL, bindings) = whereClause(for: query, mailboxes: mailboxes)
+        let (whereSQL, bindings) = whereClause(for: query, mailboxes: mailboxes)
         let direction = query.sortAscending ? "ASC" : "DESC"
         let order = "ORDER BY m.date_received \(direction), m.ROWID \(direction)"
         let limit = max(1, min(query.limit, 500))
@@ -515,6 +601,58 @@ public final class MailStore: @unchecked Sendable {
         }
 
         // Body search: indexed matches, plus a scan of whatever the index has not covered yet.
+        // Without an index, stop once the page is full: the total is then unknown.
+        let found = try bodyMatches(
+            bodyText, query: query, whereSQL: whereSQL, bindings: bindings, order: order, mailboxes: mailboxes,
+            bodyIndex: bodyIndex, stopAfter: bodyIndex == nil ? offset + limit + 1 : nil)
+        let matchedIDs = found.ids
+        let pageIDs = Array(matchedIDs.dropFirst(offset).prefix(limit))
+        return SearchPage(
+            messages: try messages(ids: pageIDs, mailboxes: mailboxes, accountNames: names),
+            total: found.complete ? matchedIDs.count : nil, offset: offset, limit: limit,
+            hasMore: matchedIDs.count > offset + pageIDs.count || !found.complete, bodySearchMode: found.mode,
+            scanLimited: found.scanLimited, scannedMessages: found.scanned)
+    }
+
+    /// Every message matching `query`, in its sort order, up to `cap` (exports, grouping). Body text is
+    /// matched like `search` does; without a complete index the scan stops at `query.bodyScanBudget`.
+    public func allMatchingIDs(_ query: MessageQuery, bodyIndex: (any BodySearchIndex)? = nil, cap: Int = 200_000) throws -> MatchResult {
+        let (mailboxes, _) = try lookupTables()
+        let (whereSQL, bindings) = whereClause(for: query, mailboxes: mailboxes)
+        let direction = query.sortAscending ? "ASC" : "DESC"
+        let order = "ORDER BY m.date_received \(direction), m.ROWID \(direction)"
+        guard let bodyText = query.bodyText?.trimmingCharacters(in: .whitespaces), !bodyText.isEmpty else {
+            let ids = try withDB { db in
+                try db.all(
+                    "SELECT m.ROWID \(Self.minimalJoins(for: whereSQL)) WHERE \(whereSQL) \(order) LIMIT ?",
+                    bindings + [.int(Int64(cap) + 1)]) { $0.int(0) }
+            }
+            return MatchResult(ids: Array(ids.prefix(cap)), complete: ids.count <= cap, bodySearchMode: nil, scannedMessages: 0)
+        }
+        let found = try bodyMatches(
+            bodyText, query: query, whereSQL: whereSQL, bindings: bindings, order: order, mailboxes: mailboxes,
+            bodyIndex: bodyIndex, stopAfter: cap + 1)
+        return MatchResult(
+            ids: Array(found.ids.prefix(cap)), complete: found.complete && found.ids.count <= cap,
+            bodySearchMode: found.mode, scannedMessages: found.scanned)
+    }
+
+    private struct BodyMatches {
+        var ids: [Int64]
+        var scanned: Int
+        var scanLimited: Bool
+        var complete: Bool
+        var mode: String
+    }
+
+    /// Candidates from SQL, kept when the body index lists them or a parallel `.emlx` scan finds the text.
+    /// Stops early once `stopAfter` matches are known (the result is then incomplete).
+    private func bodyMatches(
+        _ bodyText: String, query: MessageQuery, whereSQL baseWhere: String, bindings baseBindings: [SQLValue], order: String,
+        mailboxes: [Int64: Mailbox], bodyIndex: (any BodySearchIndex)?, stopAfter: Int?
+    ) throws -> BodyMatches {
+        var whereSQL = baseWhere
+        var bindings = baseBindings
         var mode = "scan"
         var covered: Int64 = 0
         if let bodyIndex {
@@ -536,7 +674,6 @@ public final class MailStore: @unchecked Sendable {
         var scanned = 0
         var scanLimited = false
         var cursor = 0
-        let wanted = offset + limit
         let chunkSize = 64
         while cursor < candidates.count {
             // Indexed candidates are already matches; collect a run of them cheaply.
@@ -544,6 +681,7 @@ public final class MailStore: @unchecked Sendable {
             if bodyIndex != nil && id <= covered {
                 matchedIDs.append(id)
                 cursor += 1
+                if let stopAfter, matchedIDs.count >= stopAfter { break }
                 continue
             }
             // Gather a chunk of unindexed candidates and scan them in parallel.
@@ -567,15 +705,70 @@ public final class MailStore: @unchecked Sendable {
             }
             if scanLimited { break }
             cursor = next
-            // Without an index, stop once the page is full: the total is then unknown.
-            if bodyIndex == nil, matchedIDs.count >= wanted + 1 { break }
+            if let stopAfter, matchedIDs.count >= stopAfter { break }
         }
-        let complete = cursor >= candidates.count && !scanLimited
-        let pageIDs = Array(matchedIDs.dropFirst(offset).prefix(limit))
-        return SearchPage(
-            messages: try messages(ids: pageIDs, mailboxes: mailboxes, accountNames: names), total: complete ? matchedIDs.count : nil, offset: offset, limit: limit,
-            hasMore: matchedIDs.count > offset + pageIDs.count || !complete, bodySearchMode: mode,
-            scanLimited: scanLimited, scannedMessages: scanned)
+        return BodyMatches(
+            ids: matchedIDs, scanned: scanned, scanLimited: scanLimited,
+            complete: cursor >= candidates.count && !scanLimited, mode: mode)
+    }
+
+    /// Attachment names per message, from Mail's index (no message files read).
+    public func attachmentNames(ids: [Int64]) throws -> [Int64: [String]] {
+        guard !ids.isEmpty else { return [:] }
+        let json = "[" + ids.map(String.init).joined(separator: ",") + "]"
+        var names: [Int64: [String]] = [:]
+        try withDB { db in
+            try db.query(
+                "SELECT message, name FROM attachments WHERE message IN (SELECT value FROM json_each(?)) ORDER BY message, ROWID",
+                [.text(json)]
+            ) { row in
+                let name = row.string(1)
+                if !name.isEmpty { names[row.int(0), default: []].append(name) }
+            }
+        }
+        return names
+    }
+
+    /// Counts of matching messages per sender, sender domain or month, largest first (months newest first).
+    public func groupCounts(
+        _ query: MessageQuery, by key: GroupKey, bodyIndex: (any BodySearchIndex)? = nil, limit: Int = 50
+    ) throws -> [GroupCount] {
+        var scoped = query
+        if let bodyText = query.bodyText, !bodyText.trimmingCharacters(in: .whitespaces).isEmpty {
+            // Body matches come from the index or a scan, not SQL: group the matched ids instead.
+            scoped = MessageQuery()
+            scoped.ids = try allMatchingIDs(query, bodyIndex: bodyIndex).ids
+            scoped.includeTrashAndJunk = true
+            if scoped.ids.isEmpty { return [] }
+        }
+        let (mailboxes, _) = try lookupTables()
+        let (whereSQL, bindings) = whereClause(for: scoped, mailboxes: mailboxes)
+        let expression: String
+        let ordering: String
+        switch key {
+        case .sender:
+            expression = "lower(IFNULL(a.address, ''))"
+            ordering = "n DESC, k"
+        case .domain:
+            expression = "lower(substr(IFNULL(a.address, ''), instr(IFNULL(a.address, ''), '@') + 1))"
+            ordering = "n DESC, k"
+        case .month:
+            expression = "strftime('%Y-%m', m.date_received, 'unixepoch', 'localtime')"
+            ordering = "k DESC"
+        }
+        return try withDB { db in
+            try db.all(
+                """
+                SELECT \(expression) AS k, MAX(a.comment), COUNT(*) AS n, SUM(m.read = 0)
+                \(Self.summaryJoins) WHERE \(whereSQL) GROUP BY k ORDER BY \(ordering) LIMIT ?
+                """, bindings + [.int(Int64(max(1, min(limit, 1000))))]
+            ) { row in
+                let name = row.optionalString(1)
+                return GroupCount(
+                    key: row.string(0), name: key == .sender && !(name?.isEmpty ?? true) ? name : nil,
+                    count: Int(row.int(2)), unread: Int(row.int(3)))
+            }
+        }
     }
 
     /// Checks a batch of messages for `pattern` across all cores.

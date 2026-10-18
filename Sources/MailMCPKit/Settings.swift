@@ -44,6 +44,9 @@ public struct Settings: Codable, Sendable, Equatable {
     public var attachDirectories: [String] = []
     /// Extra addresses that count as "me" (aliases Mail does not report).
     public var ownAddresses: [String] = []
+    /// Sender names that count as "me", e.g. your company as invoicing services show it
+    /// ("MP Consulting" matches "MP Consulting (via Shine)"). Used by `exclude_from_self`.
+    public var ownNames: [String] = []
     /// Keep the body index current from the menu bar app.
     public var autoUpdateBodyIndex = true
     /// Seconds to wait for a send approval.
@@ -65,6 +68,7 @@ public struct Settings: Codable, Sendable, Equatable {
         writeDirectories = try container.decodeIfPresent([String].self, forKey: .writeDirectories) ?? []
         attachDirectories = try container.decodeIfPresent([String].self, forKey: .attachDirectories) ?? []
         ownAddresses = try container.decodeIfPresent([String].self, forKey: .ownAddresses) ?? []
+        ownNames = try container.decodeIfPresent([String].self, forKey: .ownNames) ?? []
         autoUpdateBodyIndex = try container.decodeIfPresent(Bool.self, forKey: .autoUpdateBodyIndex) ?? defaults.autoUpdateBodyIndex
         approvalTimeout = try container.decodeIfPresent(Double.self, forKey: .approvalTimeout) ?? defaults.approvalTimeout
         checkForUpdates = try container.decodeIfPresent(Bool.self, forKey: .checkForUpdates) ?? defaults.checkForUpdates

@@ -121,18 +121,21 @@ extension MailStore {
         return all.compactMap(box)
     }
 
-    /// Signatures in Mail's order, with their text when the signature file is on this Mac (iCloud keeps
-    /// synced ones in its Mail container).
+    /// Signatures kept on this Mac, then those synced with iCloud (listed in iCloud's Mail container), with
+    /// their text when the signature file is there.
     public func signatures() -> [MailSignature] {
-        let list = plist("Signatures/AllSignatures.plist") as? [[String: Any]] ?? []
-        let folders = [
-            mailData.appending(path: "Signatures"),
-            location.root.deletingLastPathComponent().deletingLastPathComponent()
-                .appending(path: "Mobile Documents/com~apple~mail/Data/MailData/Signatures"),
-        ]
-        return list.compactMap { entry in
-            guard let id = entry["SignatureUniqueId"] as? String else { return nil }
-            let file = folders.flatMap { [$0.appending(path: "\(id).mailsignature"), $0.appending(path: "ubiquitous_\(id).mailsignature")] }
+        let local = mailData.appending(path: "Signatures")
+        let cloud = location.root.deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "Mobile Documents/com~apple~mail/Data/MailData/Signatures")
+        func list(_ url: URL) -> [[String: Any]] {
+            guard let data = try? Data(contentsOf: url) else { return [] }
+            return (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [[String: Any]] ?? []
+        }
+        var seen = Set<String>()
+        let entries = (list(local.appending(path: "AllSignatures.plist")) + list(cloud.appending(path: "ubiquitous_AllSignatures.plist")))
+        return entries.compactMap { entry in
+            guard let id = entry["SignatureUniqueId"] as? String, seen.insert(id).inserted else { return nil }
+            let file = [local.appending(path: "\(id).mailsignature"), cloud.appending(path: "ubiquitous_\(id).mailsignature")]
                 .first { FileManager.default.fileExists(atPath: $0.path) }
             return MailSignature(
                 id: id, name: entry["SignatureName"] as? String ?? "(unnamed)", isRich: entry["SignatureIsRich"] as? Bool ?? false,

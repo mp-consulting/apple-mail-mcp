@@ -239,6 +239,15 @@ final class MailSetupToolTests {
         #expect((json["smart_mailboxes"] as? [[String: Any]])?.first?["name"] as? String == "Unread work")
         let signature = (json["signatures"] as? [[String: Any]])?.first
         #expect(signature?["name"] as? String == "Work" && (signature?["text"] as? String)?.contains("MP Consulting") == true)
+        // Signatures synced with iCloud are listed in iCloud's Mail container, not in MailData.
+        let cloud = store.directory.appending(path: "Mobile Documents/com~apple~mail/Data/MailData/Signatures")
+        try FileManager.default.createDirectory(at: cloud, withIntermediateDirectories: true)
+        try PropertyListSerialization.data(
+            fromPropertyList: [["SignatureUniqueId": "SIG2", "SignatureName": "Personal", "SignatureIsRich": false]], format: .binary, options: 0
+        ).write(to: cloud.appending(path: "ubiquitous_AllSignatures.plist"))
+        try Data("Content-Type: text/plain;\n\tcharset=us-ascii\n\nCheers, Me".utf8).write(to: cloud.appending(path: "ubiquitous_SIG2.mailsignature"))
+        let both = try await h.json("mail_setup", ["include": ["signatures"]])["signatures"] as? [[String: Any]]
+        #expect(both?.map { $0["name"] as? String } == ["Work", "Personal"] && both?[1]["text"] as? String == "Cheers, Me")
 
         let onlyVIPs = try await h.json("mail_setup", ["include": ["vips"]])
         #expect(onlyVIPs["rules"] == nil && onlyVIPs["vips"] != nil)

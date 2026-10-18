@@ -127,6 +127,42 @@ struct MIMETests {
     }
 }
 
+@Suite("Body selection")
+struct BodySelectionTests {
+    func message(text: String, html: String) -> MIMEPart {
+        let raw = """
+            Content-Type: multipart/alternative; boundary="b"\r
+            \r
+            --b\r
+            Content-Type: text/plain; charset=utf-8\r
+            \r
+            \(text)\r
+            --b\r
+            Content-Type: text/html; charset=utf-8\r
+            \r
+            \(html)\r
+            --b--\r
+            """
+        return MIME.parse(Data(raw.utf8))
+    }
+
+    @Test func htmlWinsOverAStubTextPart() {
+        let html = "<html><body><p>Bonjour,</p><p>Le montant de votre facture est de 38,26&euro; TTC.</p><p>Il sera prélevé le 25/02.</p></body></html>"
+        let bodies = MessageContent.bodies(message(text: "This is an HTML message.", html: html))
+        #expect(bodies.text?.contains("38,26€ TTC") == true)
+        #expect(InvoiceExtractor.extract(text: bodies.text ?? "").total == "38.26")
+    }
+
+    @Test func realTextPartsAreKept() {
+        let text = "Hi Alice,\nThe plain version of this note is the one I wrote, and it is long enough to be the real body of the message, so it stays.\nBob"
+        let bodies = MessageContent.bodies(message(text: text, html: "<p>Formatted copy with <b>more</b> markup and a footer and more words than the text part has in it, honestly</p>"))
+        #expect(bodies.text?.hasPrefix("Hi Alice") == true)
+        // A short real reply stays when the HTML says no more than it does.
+        let short = MessageContent.bodies(message(text: "Yes, Thursday works.", html: "<p>Yes, Thursday works.</p>"))
+        #expect(short.text == "Yes, Thursday works.")
+    }
+}
+
 @Suite("HTML to text and folding")
 struct HTMLTextTests {
     @Test func blocksEntitiesAndSkippedContent() {
@@ -193,6 +229,43 @@ struct FileLayoutTests {
         #expect(try role("imap://A/Projects/Sent") == .other)
         #expect(try role("imap://A/%5BGmail%5D/Spam") == .junk)
         #expect(try role("ews://A/Courrier%20ind%C3%A9sirable") == .junk)
+    }
+
+    @Test func emlxSurvivesCorruptLengthLine() {
+        let huge = Data("\(Int.max)\nHello".utf8)
+        #expect(EmlxFile(url: URL(filePath: "/tmp/1.emlx"), data: huge).message == Data("Hello".utf8))
+        let short = Data("99\nHi".utf8)
+        #expect(EmlxFile(url: URL(filePath: "/tmp/1.emlx"), data: short).message == Data("Hi".utf8))
+    }
+
+    @Test func mailboxNamesCannotLeaveMailsFolder() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "locator-\(UUID().uuidString)")
+        let outside = root.deletingLastPathComponent().appending(path: "x.mbox/" + UUID().uuidString + "/Data")
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside.deletingLastPathComponent().deletingLastPathComponent())
+        }
+        let locator = MessageFileLocator(root: root)
+        let escaping = try #require(MailboxURL("imap://A/%2E%2E%2F%2E%2E%2Fx"))
+        #expect(locator.storeDirectories(for: escaping).isEmpty)
+        let inbox = try #require(MailboxURL("imap://A/INBOX"))
+        #expect(locator.attachmentFile(rowID: 1, mailbox: inbox, partID: "../../x") == nil)
+        #expect(MessageFileLocator.isInside(root.path + "/A/INBOX.mbox", root: root.path))
+        #expect(!MessageFileLocator.isInside(root.path + "-other/A", root: root.path))
+    }
+
+    @Test func statementCacheEvictionKeepsRunningStatements() throws {
+        let db = try SQLiteConnection(path: ":memory:", readOnly: false, create: true)
+        try db.execute("CREATE TABLE t (v INTEGER); INSERT INTO t VALUES (1), (2), (3);")
+        var seen: [Int64] = []
+        // Each row runs 150 distinct statements, overflowing the cache while the outer one steps.
+        try db.query("SELECT v FROM t ORDER BY v") { row in
+            seen.append(row.int(0))
+            for n in 0..<150 { _ = try db.scalarInt("SELECT \(n) + \(row.int(0) * 1000)") }
+        }
+        #expect(seen == [1, 2, 3])
     }
 
     @Test func likePatternEscapes() {

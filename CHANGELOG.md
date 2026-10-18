@@ -6,6 +6,51 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-18
+
+### Added
+
+- **`export_search`**: writes every message matching a search to one CSV, JSON or XLSX file and returns
+  only the path and row count, so thousands of results never come back inline. Choose the columns with
+  `fields`; `include: ["amount", "invoice_number"]` adds vendor, total, currency and invoice number;
+  `dedupe` (on by default) writes a message stored in several mailboxes once.
+- **Search filters** (also on `export_search`): several comma-separated `query` terms match any of them;
+  `exclude_subject`, `exclude_sender`, `exclude_replies`, `exclude_from_self`, `direction`
+  (`received`/`sent`), several `category` values. `group_by: "sender" | "domain" | "month"` returns counts.
+- **`get_messages`**: up to 200 messages in one call, quotes stripped, with a size budget and `remaining_ids`.
+- **`extract_invoice_fields`**: totals, currencies and invoice numbers from invoice and receipt bodies
+  (English, French, German, Spanish, Portuguese, Italian), falling back to the text of attached PDFs.
+- Search results carry the `message://` `link`; `compact: true` leaves out previews, and previews lose the
+  invisible padding some senders add.
+- Setting **"Names I send as"** (`ownNames`), e.g. your company as invoicing services show it, used by
+  `exclude_from_self`.
+
+### Changed
+
+- Search, conversations, awaiting-reply and needs-response queries use the right SQLite index for their
+  scope: 5 to 300 times faster on a 100,000-message mailbox. Result totals for sender, subject and other
+  unscoped searches count through the filter's own index or a table scan (sender search 41 → 9 ms).
+
+### Fixed
+
+- Messages whose plain-text part is only a stub ("This is an HTML message.") now show, search and index the
+  text of their HTML part. Telecom bills and other HTML-only senders were unreadable to `get_message`, body
+  search and amount extraction.
+
+### Security
+
+- **The body search index no longer holds readable mail.** It used contentless FTS5, but the terms and their
+  positions are enough to rebuild every message, and the file is not behind Full Disk Access. It now stores only
+  keyed hashes of words and word pairs, without positions, with the key in the login Keychain. Existing indexes
+  are deleted and rebuilt on first use. The file is owner-only and excluded from backups. Prefix search
+  needs at least 3 characters; shorter words match whole.
+- Exported cells never run as formulas: CSV text starting with `=`, `+`, `-` or `@` gets a leading `'`,
+  and XLSX cells are plain strings and numbers. Exports keep their format's extension.
+- Saved attachments are quarantined like Mail's own, so Gatekeeper checks emailed apps and scripts.
+- Attachment file names lose bidirectional-override and other invisible characters.
+- `.env.local`, `.env.production` and similar files cannot be attached.
+- Mailbox folders and attachment part ids from Mail's database cannot point outside Mail's folder.
+
 ## [0.2.2] - 2026-10-18
 
 ### Fixed
@@ -75,7 +120,8 @@ First release.
   and a reply or forward waiting for approval links to the original.
 - Skills in the Claude tab are listed by their Claude Code slash command (`/mail-triage`…); click to copy.
 
-[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.1.0...v0.2.0

@@ -5,17 +5,33 @@ import MailAutomation
 import MailStore
 
 extension MailToolbox {
-    var fileTools: [ToolDefinition] { [saveAttachment, exportMessages] }
+    var fileTools: [ToolDefinition] { [saveAttachment, exportMessages, exportSearch] }
     var changeTools: [ToolDefinition] { [moveMessages, updateMessages, trashMessages, createMailbox, checkNewMail] }
 
     // MARK: Files
 
     static func safeFilename(_ name: String, fallback: String) -> String {
         var cleaned = name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+        // Control characters, and format characters such as U+202E RIGHT-TO-LEFT OVERRIDE that make
+        // "invoice\u{202E}fdp.app" display as "invoiceppa.pdf".
+        cleaned = String(String.UnicodeScalarView(cleaned.unicodeScalars.filter {
+            $0.value >= 0x20 && $0.value != 0x7F && $0.properties.generalCategory != .format
+        }))
         cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ".")))
-        cleaned = String(cleaned.unicodeScalars.filter { $0.value >= 0x20 })
         if cleaned.isEmpty { cleaned = fallback }
         return String(cleaned.prefix(180))
+    }
+
+    /// Marks a saved attachment the way Mail does, so Gatekeeper checks it before it can run.
+    /// Without this an emailed app or `.command` script saved here would open unchecked.
+    static func quarantine(_ path: String) {
+        var url = URL(filePath: path)
+        var values = URLResourceValues()
+        values.quarantineProperties = [
+            kLSQuarantineTypeKey as String: kLSQuarantineTypeEmailAttachment as String,
+            kLSQuarantineAgentNameKey as String: "Apple Mail MCP",
+        ]
+        try? url.setResourceValues(values)
     }
 
     /// A path in `directory` for `name` that does not overwrite anything (unless asked).
@@ -61,6 +77,7 @@ extension MailToolbox {
                 let path = Self.destination(in: directory, name: name, overwrite: overwrite)
                 _ = try self.pathGuard.checkWrite(path)
                 try data.write(to: URL(filePath: path), options: .atomic)
+                Self.quarantine(path)
                 saved.append(.obj([("path", .string(path)), ("bytes", .int(Int64(data.count)))]))
             }
             return ToolReply(json: .obj([("saved", .array(saved))]), summary: "saved \(saved.count) attachment(s)", messageID: id)

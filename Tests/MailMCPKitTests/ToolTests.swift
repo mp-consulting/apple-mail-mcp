@@ -21,7 +21,7 @@ final class ReadToolTests {
             "list_attachments", "save_attachment", "get_message_source", "export_messages", "mail_statistics",
             "top_senders", "awaiting_reply", "needs_response", "body_index", "move_messages", "update_messages",
             "trash_messages", "create_mailbox", "check_new_mail", "compose_email", "reply_to_message", "forward_message",
-            "open_in_mail",
+            "open_in_mail", "export_search", "get_messages", "extract_invoice_fields",
         ]))
         #expect(tools.count == names.count)
         #expect(tools.first { $0.name == "search_messages" }?.annotations.readOnlyHint == true)
@@ -95,6 +95,23 @@ final class ReadToolTests {
         json = try await h.json("search_messages", ["body": "kubernetes"])
         #expect(json["body_search"] as? String == "index")
         #expect(subjects(json["messages"]) == ["Project kickoff"])
+    }
+
+    @Test func bodySearchScansWhenTheIndexKeyIsUnavailable() async throws {
+        _ = try await h.json("body_index", ["action": "update"])
+        let locked = MailToolbox(
+            store: try h.fixture.openStore(), automation: h.automation, activity: nil,
+            bodyIndexURL: h.support.appending(path: "body-index.sqlite"),
+            bodyIndexKey: { throw BodyIndexKeyError.keychain(-128) })
+        let result = await locked.call("search_messages", arguments: ["body": "kubernetes"])
+        let text = result.content.compactMap { content -> String? in
+            if case .text(let text, _, _) = content { return text }
+            return nil
+        }.joined()
+        #expect(result.isError != true)
+        #expect(text.contains("\"body_search\":\"scan\""))
+        #expect(text.contains("Keychain"))
+        #expect(text.contains("Project kickoff"))
     }
 
     @Test func getMessage() async throws {

@@ -29,7 +29,8 @@ public struct EmlxFile: Sendable {
             .trimmingCharacters(in: .whitespaces)
         let start = data.index(after: newline)
         guard let count = Int(countText), count >= 0 else { return data[start...] }
-        let end = min(data.endIndex, start + count)
+        // A corrupt length line must not overflow or run past the file.
+        let end = count >= data.endIndex - start ? data.endIndex : start + count
         return Data(data[start..<end])
     }
 }
@@ -41,10 +42,14 @@ public struct EmlxFile: Sendable {
 /// (rowid 142529 → `Data/2/4/1/Messages`; rowids below 1000 → `Data/Messages`).
 public final class MessageFileLocator: @unchecked Sendable {
     private let root: URL
+    private let rootPath: String
     private let lock = NSLock()
     private var storeDirectoryCache: [String: [URL]] = [:]
 
-    public init(root: URL) { self.root = root }
+    public init(root: URL) {
+        self.root = root
+        rootPath = root.standardizedFileURL.path
+    }
 
     public static func dataSubpath(forRowID rowID: Int64) -> String {
         let bucket = rowID / 1000
@@ -62,16 +67,25 @@ public final class MessageFileLocator: @unchecked Sendable {
         }
         lock.unlock()
         let mailboxDirectory = root.appending(path: key, directoryHint: .isDirectory)
+        // Mailbox names come from mail servers: a decoded "%2F.." must not lead outside Mail's folder.
+        guard Self.isInside(mailboxDirectory.standardizedFileURL.path, root: rootPath) else { return [] }
         let entries = (try? FileManager.default.contentsOfDirectory(
             at: mailboxDirectory, includingPropertiesForKeys: nil)) ?? []
         let stores = entries.filter {
             UUID(uuidString: $0.lastPathComponent) != nil
                 && FileManager.default.fileExists(atPath: $0.appending(path: "Data").path)
         }
-        lock.lock()
-        storeDirectoryCache[key] = stores
-        lock.unlock()
+        // Not cached when empty: a mailbox created after launch gets its folder later.
+        if !stores.isEmpty {
+            lock.lock()
+            storeDirectoryCache[key] = stores
+            lock.unlock()
+        }
         return stores
+    }
+
+    static func isInside(_ path: String, root: String) -> Bool {
+        path == root || path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
     }
 
     /// The `.emlx` (full preferred over partial) for `rowID` in `mailbox`, if downloaded.
@@ -89,6 +103,10 @@ public final class MessageFileLocator: @unchecked Sendable {
 
     /// Folder holding the attachment for `partID` of `rowID`, if Mail downloaded it separately.
     public func attachmentFile(rowID: Int64, mailbox: MailboxURL, partID: String) -> URL? {
+        // Part ids are dotted numbers ("1.2"); anything else is not a folder to look in.
+        guard !partID.isEmpty, partID.allSatisfy({ $0.isASCII && ($0.isNumber || $0 == ".") }),
+              !partID.contains("..")
+        else { return nil }
         let subpath = Self.dataSubpath(forRowID: rowID) + "/Attachments/\(rowID)/\(partID)"
         for store in storeDirectories(for: mailbox) {
             let folder = store.appending(path: subpath, directoryHint: .isDirectory)

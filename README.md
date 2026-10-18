@@ -102,8 +102,10 @@ Run `apple-mail-mcp doctor` for a full check.
 | Tool | What it does |
 |---|---|
 | `inbox_overview` | Unread counts, latest unread, what needs a reply, flagged mail, in one call |
-| `search_messages` | Any mix of text, subject, sender, recipient, **body**, mailbox, account, dates, unread, flags, attachments, Mail's categories; paginated |
-| `get_message`, `get_thread` | A message or a whole conversation, with quotes stripped on request |
+| `search_messages` | Any mix of text (several alternatives), subject, sender, recipient, **body**, mailbox, account, dates, unread, flags, attachments, Mail's categories; exclusions (subjects, senders, replies, yourself) and `direction` (received or sent); paginated, or counts per sender, domain or month with `group_by` |
+| `export_search` | Every match of a search to one **CSV, JSON or XLSX** file, optionally with invoice totals and numbers; returns only the path and row count |
+| `get_message`, `get_messages`, `get_thread` | One message, up to 200 at once, or a whole conversation, with quotes stripped on request |
+| `extract_invoice_fields` | Vendor, invoice number, total and currency from invoice and receipt bodies and attached PDFs |
 | `needs_response` | Mail from people, to you, still waiting on you (lists, promotions and no-reply excluded) |
 | `awaiting_reply` | What you sent that nobody answered |
 | `mail_statistics`, `top_senders` | Volume, busiest days and hours, categories, who writes most |
@@ -155,6 +157,11 @@ emails waiting you review them one by one; nothing goes out without a click on *
   keychains, browser profiles, Mail's own data) can't be attached. Optional allowlists in Settings.
 - **Read-only mode**: `apple-mail-mcp --read-only` offers only the reading tools.
 - **Activity**: every tool call is listed in the Mail tab (never with message content).
+- **Search index without text**: Mail's data is behind Full Disk Access; the body index in
+  `~/Library/Application Support/apple-mail-mcp` is not, so it stores no words, only keyed hashes (no order,
+  no positions). The key is in your login Keychain ("Apple Mail MCP search index key"), so another app has to
+  ask you before it can use the index, and even then it can only test guessed words. The file is owner-only
+  and kept out of Time Machine. If the key is missing or refused, body searches scan messages instead.
 
 ## Benchmarks
 
@@ -201,7 +208,7 @@ every server (changes apply immediately).
 
 ```text
 Claude ──MCP (stdio)──▶ apple-mail-mcp ─┬─ reads ──▶ ~/Library/Mail/V10/MailData/Envelope Index (SQLite, read-only)
-                                        │            .emlx files · local full-text index (FTS5)
+                                        │            .emlx files · local hashed full-text index (FTS5)
                                         └─ writes ─▶ Apple Events ─▶ Mail.app ─▶ your accounts
 Apple Mail MCP.app (menu bar) ── settings · approvals · activity · index updates · Claude setup · updates
 ```

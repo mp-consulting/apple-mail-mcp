@@ -546,3 +546,72 @@ final class ScheduleTests {
         #expect(item?["failed_attempts"] as? Int == 1 && (item?["error"] as? String)?.contains("turned off") == true)
     }
 }
+
+@Suite("Unsubscribe")
+final class UnsubscribeTests {
+    let h: Harness
+    init() throws { h = try Harness() }
+    deinit { h.remove() }
+
+    final class Posts: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _urls: [URL] = []
+        var urls: [URL] { lock.withLock { _urls } }
+        func add(_ url: URL) { lock.withLock { _urls.append(url) } }
+    }
+
+    func list(_ headers: [String], from address: String = "news@letters.test") throws -> Int64 {
+        var message = FixtureMessage(
+            subject: "This week", from: EmailAddress(address: address, name: "Letters"), to: [StandardFixture.me], date: Date(),
+            mailbox: h.fixture.inbox, body: "News")
+        message.isList = true
+        message.extraHeaders = headers
+        return try h.fixture.store.addMessage(message)
+    }
+
+    let signed = "Authentication-Results: mx.test; spf=pass smtp.mailfrom=letters.test; dkim=pass header.d=letters.test; dmarc=pass"
+
+    @Test func choosesTheMethodFromTheHeaders() {
+        #expect(UnsubscribeMethod.from(listUnsubscribe: "<https://l.test/u?x=1>, <mailto:u@l.test?subject=stop>", post: "List-Unsubscribe=One-Click")
+            == .oneClick(URL(string: "https://l.test/u?x=1")!))
+        #expect(UnsubscribeMethod.from(listUnsubscribe: "<https://l.test/u>, <mailto:u@l.test?subject=stop>", post: nil)
+            == .email(address: "u@l.test", subject: "stop", body: "unsubscribe"))
+        #expect(UnsubscribeMethod.from(listUnsubscribe: "<http://l.test/u>", post: "List-Unsubscribe=One-Click") == .link(URL(string: "http://l.test/u")!))
+        #expect(UnsubscribeMethod.from(listUnsubscribe: nil, post: nil) == .none)
+    }
+
+    @Test func oneClickNeedsTheSendersSignature() async throws {
+        let posts = Posts()
+        h.toolbox.unsubscribePoster = { url in
+            posts.add(url)
+            return 200
+        }
+        let good = try list([signed, "List-Unsubscribe: <https://letters.test/u/1>", "List-Unsubscribe-Post: List-Unsubscribe=One-Click"])
+        let forged = try list(["List-Unsubscribe: <https://evil.test/u/2>", "List-Unsubscribe-Post: List-Unsubscribe=One-Click"])
+        let dry = try await h.json("unsubscribe", ["ids": [.int(Int(good)), .int(Int(forged))], "dry_run": true])
+        #expect((dry["messages"] as? [[String: Any]])?.compactMap { $0["method"] as? String } == ["one_click", "link"])
+        #expect(posts.urls.isEmpty)
+
+        let json = try await h.json("unsubscribe", ["ids": [.int(Int(good)), .int(Int(forged))]])
+        #expect(json["unsubscribed"] as? Int == 1)
+        #expect(posts.urls == [URL(string: "https://letters.test/u/1")!])
+        let second = (json["messages"] as? [[String: Any]])?[1]
+        #expect(second?["url"] as? String == "https://evil.test/u/2" && second?["note"] != nil)
+    }
+
+    @Test func emailsTheListAndFollowsTheSendPolicy() async throws {
+        let id = try list(["List-Unsubscribe: <mailto:leave@letters.test?subject=unsubscribe%20me>"])
+        let json = try await h.json("unsubscribe", ["ids": [.int(Int(id))]])
+        #expect(json["unsubscribed"] as? Int == 1)
+        #expect(h.automation.calls == [.compose(OutgoingMessage(to: ["leave@letters.test"], subject: "unsubscribe me", body: "unsubscribe"), .send)])
+
+        var settings = Settings()
+        settings.sendPolicy = .never
+        try settings.save(to: h.support.appending(path: "settings.json"))
+        #expect(await h.call("unsubscribe", ["ids": [.int(Int(id))]]).text.contains("send policy"))
+        settings.sendPolicy = .confirm
+        try settings.save(to: h.support.appending(path: "settings.json"))
+        #expect(await h.call("unsubscribe", ["ids": [.int(Int(id))]]).text.contains("menu bar app"))
+        #expect(h.automation.calls.count == 1)
+    }
+}

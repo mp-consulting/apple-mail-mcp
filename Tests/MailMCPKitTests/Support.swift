@@ -123,6 +123,8 @@ struct Harness {
             bodyIndexURL: support.appending(path: "body-index.sqlite"), bodyIndexKey: { Self.indexKey }, readOnly: readOnly)
         // The fake changes the fixture synchronously, so a short wait shows everything.
         toolbox.verification = ChangeVerification(timeout: 0.3, interval: 0.02, settle: 0)
+        // Tests never reach the network.
+        toolbox.unsubscribePoster = { url in throw ToolError("network request to \(url) in a test") }
     }
 
     func id(_ name: String) -> Int64 { fixture.ids[name]! }

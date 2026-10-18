@@ -21,7 +21,9 @@ final class ReadToolTests {
             "list_attachments", "save_attachment", "get_message_source", "export_messages", "mail_statistics",
             "top_senders", "awaiting_reply", "needs_response", "body_index", "move_messages", "update_messages",
             "trash_messages", "create_mailbox", "check_new_mail", "compose_email", "reply_to_message", "forward_message",
-            "open_in_mail", "export_search", "get_messages", "extract_invoice_fields",
+            "open_in_mail", "export_search", "get_messages", "extract_invoice_fields", "undo_change", "check_authenticity",
+            "find_contact", "extract_fields", "mail_setup", "list_drafts", "send_draft", "wait_for_mail", "snooze_messages",
+            "list_scheduled", "cancel_scheduled", "unsubscribe",
         ]))
         #expect(tools.count == names.count)
         #expect(tools.first { $0.name == "search_messages" }?.annotations.readOnlyHint == true)
@@ -42,6 +44,8 @@ final class ReadToolTests {
         let names = Set(readOnly.toolbox.listedDefinitions.map(\.tool.name))
         #expect(names.contains("search_messages") && names.contains("save_attachment"))
         #expect(!names.contains("move_messages") && !names.contains("compose_email"))
+        #expect(names.isSuperset(of: ["check_authenticity", "wait_for_mail", "list_scheduled", "mail_setup"]))
+        #expect(names.isDisjoint(with: ["undo_change", "snooze_messages", "send_draft", "unsubscribe", "cancel_scheduled"]))
     }
 
     @Test func listAccounts() async throws {

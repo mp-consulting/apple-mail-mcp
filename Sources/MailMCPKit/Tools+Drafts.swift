@@ -4,7 +4,7 @@ import MailAutomation
 import MailStore
 
 extension MailToolbox {
-    var draftTools: [ToolDefinition] { [sendDraft] }
+    var draftTools: [ToolDefinition] { [sendDraft, unsubscribe] }
 
     func draftMailboxes() throws -> [Mailbox] { try store.mailboxes().filter { $0.role == .drafts } }
 

@@ -25,7 +25,11 @@ Apple Mail MCP server (`apple-mail`): reads are instant and never disturb Mail; 
 6. **Offer actions**, then wait for the user to choose:
    - draft replies (use the `mail-reply-writer` skill, or `reply_to_message` with `mode: "draft"`),
    - flag what needs follow-up (`update_messages` with `flag_color`),
-   - mark the rest read or archive it (`update_messages` `read: true`, or `move_messages` to `archive`).
+   - mark the rest read or archive it (`update_messages` `read: true`, or `move_messages` to `archive`),
+   - snooze what can wait until a given day (`snooze_messages` with `until`).
+7. **Anything suspicious?** For a message asking to pay, sign in, change bank details or open an unexpected
+   attachment, run `check_authenticity` on it before suggesting any action, and flag a `caution` or `fail`
+   verdict to the user with its findings.
 
 ## Rules
 

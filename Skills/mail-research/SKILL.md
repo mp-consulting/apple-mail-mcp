@@ -24,6 +24,11 @@ messages. Good results come from narrowing first, then reading.
    `direction: "received"` or `"sent"`; `compact: true` drops previews when many results are expected.
 7. **Too many results to read?** `group_by: "sender"`, `"domain"` or `"month"` returns counts instead of
    messages; `export_search` writes all matches to a file.
+8. **Looking for a code, a parcel or a booking?** `extract_fields` reads them out of the matching messages:
+   verification codes, tracking numbers with the carrier, booking and order references, flights with the
+   route, and calendar invitations (`kinds` narrows it). For a code that has not arrived yet,
+   `wait_for_mail` (with `sender` or `subject`) returns the message as soon as it lands.
+9. **Looking for a person's address?** `find_contact` searches Contacts and the people the user wrote with.
 
 ## Read and answer
 

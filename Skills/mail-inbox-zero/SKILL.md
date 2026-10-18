@@ -18,7 +18,9 @@ outcome of a mistake is a message in Archive or Trash that can be moved back.
    2. **Bulk mail**: `category: "promotions"` and `"updates"`, and the biggest senders from
       `top_senders` (`mailbox: "inbox"`, `days: 0`) → archive (or trash if the user says so).
    3. **Receipts and notifications**: `category: "transactions"` → archive.
-   4. **What is left**: real conversations. Use `needs_response`; reply, flag or archive one by one.
+   4. **What is left**: real conversations. Use `needs_response`; reply, flag or archive one by one. Mail
+      that can wait until a given day can be snoozed with `snooze_messages` (`until`), which brings it back
+      to the inbox, unread, on that day.
 
 ## For every batch
 
@@ -38,6 +40,8 @@ outcome of a mistake is a message in Archive or Trash that can be moved back.
 - Never touch flagged messages or anything from the last 3 days without asking.
 - Keep a running tally (archived, trashed, flagged, left) and show it at the end.
 - Ids change after a move; never reuse an old id. `move_messages` returns `new_ids`.
+- Every move and trash reply has a `change_id`. If the user wants a batch back, `undo_change` with
+  `action: "undo"` and that `change_id` restores it.
 - If a call reports `not_found`, search again rather than guessing.
 
 <!-- Installed by Apple Mail MCP (https://github.com/mp-consulting/apple-mail-mcp). -->

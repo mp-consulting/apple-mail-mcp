@@ -54,9 +54,12 @@ public enum Authenticity {
         let fromDomain = from.domain
         let fromOrg = organizationalDomain(fromDomain)
 
-        // The receiving server's verdicts: the topmost Authentication-Results header is the one it added.
-        let results = headers.first { $0.name.caseInsensitiveCompare("Authentication-Results") == .orderedSame }
-            .map { parseAuthenticationResults($0.value) } ?? []
+        // The receiving server's verdicts: the topmost Authentication-Results header is its own, and services such
+        // as iCloud write one header per method from several hosts (dkim…, dmarc…), so every header whose
+        // authserv-id is in the same organisation counts; an upstream relay's do not.
+        let authHeaders = headers.filter { $0.name.caseInsensitiveCompare("Authentication-Results") == .orderedSame }.map(\.value)
+        let server = authHeaders.first.map(authServID)
+        let results = authHeaders.filter { authServID($0) == server }.flatMap(parseAuthenticationResults)
         func result(_ method: String) -> [AuthResult] { results.filter { $0.method == method } }
         let dkimResults = result("dkim")
         let signedBy = dkimResults.filter { $0.result == "pass" }.compactMap { $0.properties["header.d"]?.lowercased() }
@@ -129,6 +132,13 @@ public enum Authenticity {
         var method: String
         var result: String
         var properties: [String: String]
+    }
+
+    /// The organisation that wrote an Authentication-Results header: its authserv-id (the first word, before
+    /// the first `;`), reduced to the organisational domain.
+    static func authServID(_ value: String) -> String {
+        let head = value.split(separator: ";", maxSplits: 1).first ?? ""
+        return head.split(whereSeparator: { $0.isWhitespace }).first.map { organizationalDomain(String($0)) } ?? ""
     }
 
     /// `mx.example; spf=pass smtp.mailfrom=a.test; dkim=pass header.d=a.test` (RFC 8601), comments removed.

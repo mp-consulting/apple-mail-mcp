@@ -25,11 +25,14 @@ Present one table: sender, messages in 90 days, unread %, category, suggested ac
 - **Check every reply**: the counts only include messages Mail really moved. If a reply lists `unverified`
   ids or has `collateral_suspected`, stop at once, tell the user what it says and ask them to check Trash
   (and the mailbox it names) before doing anything else. Do not retry the same ids.
-- **Unsubscribe**: read one recent message's headers with `get_message_source` and look for
-  `List-Unsubscribe` (a mailto: or https: link). Give the user the link to open; for a mailto: link,
-  offer to draft the email with `compose_email` (`mode: "draft"`). Do not open web links yourself.
-- **Prevent it next time**: suggest a Mail rule (Mail → Settings → Rules) for senders the user wants to keep
-  but not see in the inbox.
+- **Unsubscribe**: pass one recent message per sender to `unsubscribe` with `dry_run: true` to see how
+  each list unsubscribes (`one_click`, `email`, `link` or `none`), then, once the user agrees, call it without
+  `dry_run`. One-click is used only for senders whose signature verified; for a `link`, give the user the
+  `url` to open. Do not open web links yourself.
+- **Prevent it next time**: check the user's existing rules with `mail_setup` (`include: ["rules"]`), then
+  suggest a Mail rule (Mail → Settings → Rules) for senders the user wants to keep but not see in the inbox.
+- **Undo**: if the user regrets a batch, `undo_change` with `action: "list"` shows recent changes and
+  `action: "undo"` puts one back (the latest by default, or its `change_id`).
 
 ## Rules
 

@@ -77,6 +77,9 @@ description: Find emails the user sent that never got an answer and draft polite
      sentences, refer to the original ask, offer a concrete next step or a new date.
      Match the language of the original thread.
 5. Offer to flag the originals (`update_messages`, `flag_color: "orange"`) so they show up as pending.
+6. If the user would rather nudge later (say, if there is still no answer by Friday), offer to schedule the
+   nudge with `reply_to_message` and `send_at`; it can be cancelled with `cancel_scheduled` if a reply
+   arrives first.
 
 ## Rules
 
@@ -109,7 +112,9 @@ outcome of a mistake is a message in Archive or Trash that can be moved back.
    2. **Bulk mail**: `category: "promotions"` and `"updates"`, and the biggest senders from
       `top_senders` (`mailbox: "inbox"`, `days: 0`) → archive (or trash if the user says so).
    3. **Receipts and notifications**: `category: "transactions"` → archive.
-   4. **What is left**: real conversations. Use `needs_response`; reply, flag or archive one by one.
+   4. **What is left**: real conversations. Use `needs_response`; reply, flag or archive one by one. Mail
+      that can wait until a given day can be snoozed with `snooze_messages` (`until`), which brings it back
+      to the inbox, unread, on that day.
 
 ## For every batch
 
@@ -129,6 +134,8 @@ outcome of a mistake is a message in Archive or Trash that can be moved back.
 - Never touch flagged messages or anything from the last 3 days without asking.
 - Keep a running tally (archived, trashed, flagged, left) and show it at the end.
 - Ids change after a move; never reuse an old id. `move_messages` returns `new_ids`.
+- Every move and trash reply has a `change_id`. If the user wants a batch back, `undo_change` with
+  `action: "undo"` and that `change_id` restores it.
 - If a call reports `not_found`, search again rather than guessing.
 
 <!-- Installed by Apple Mail MCP (https://github.com/mp-consulting/apple-mail-mcp). -->
@@ -162,11 +169,14 @@ Present one table: sender, messages in 90 days, unread %, category, suggested ac
 - **Check every reply**: the counts only include messages Mail really moved. If a reply lists `unverified`
   ids or has `collateral_suspected`, stop at once, tell the user what it says and ask them to check Trash
   (and the mailbox it names) before doing anything else. Do not retry the same ids.
-- **Unsubscribe**: read one recent message's headers with `get_message_source` and look for
-  `List-Unsubscribe` (a mailto: or https: link). Give the user the link to open; for a mailto: link,
-  offer to draft the email with `compose_email` (`mode: "draft"`). Do not open web links yourself.
-- **Prevent it next time**: suggest a Mail rule (Mail → Settings → Rules) for senders the user wants to keep
-  but not see in the inbox.
+- **Unsubscribe**: pass one recent message per sender to `unsubscribe` with `dry_run: true` to see how
+  each list unsubscribes (`one_click`, `email`, `link` or `none`), then, once the user agrees, call it without
+  `dry_run`. One-click is used only for senders whose signature verified; for a `link`, give the user the
+  `url` to open. Do not open web links yourself.
+- **Prevent it next time**: check the user's existing rules with `mail_setup` (`include: ["rules"]`), then
+  suggest a Mail rule (Mail → Settings → Rules) for senders the user wants to keep but not see in the inbox.
+- **Undo**: if the user regrets a batch, `undo_change` with `action: "list"` shows recent changes and
+  `action: "undo"` puts one back (the latest by default, or its `change_id`).
 
 ## Rules
 
@@ -212,6 +222,9 @@ description: Draft email replies in the user's own voice with Apple Mail. Use wh
    (absolute paths) when the user provides them.
 3. Use `mode: "open"` if the user wants to edit it in Mail, and `mode: "send"` only when the user
    explicitly asks to send. Sending may require the user's approval in the Apple Mail MCP menu bar app.
+4. If the user wants it to go out later ("send it Monday morning"), pass `send_at` (an ISO 8601 time, or
+   `YYYY-MM-DD` for 8:00 that day) instead of a mode; `list_scheduled` and `cancel_scheduled` show and
+   cancel what is waiting.
 
 Replying to an unsent draft is not possible: for drafts, offer `open_in_mail` instead.
 
@@ -245,6 +258,11 @@ messages. Good results come from narrowing first, then reading.
    `direction: "received"` or `"sent"`; `compact: true` drops previews when many results are expected.
 7. **Too many results to read?** `group_by: "sender"`, `"domain"` or `"month"` returns counts instead of
    messages; `export_search` writes all matches to a file.
+8. **Looking for a code, a parcel or a booking?** `extract_fields` reads them out of the matching messages:
+   verification codes, tracking numbers with the carrier, booking and order references, flights with the
+   route, and calendar invitations (`kinds` narrows it). For a code that has not arrived yet,
+   `wait_for_mail` (with `sender` or `subject`) returns the message as soon as it lands.
+9. **Looking for a person's address?** `find_contact` searches Contacts and the people the user wrote with.
 
 ## Read and answer
 
@@ -292,7 +310,11 @@ Apple Mail MCP server (`apple-mail`): reads are instant and never disturb Mail; 
 6. **Offer actions**, then wait for the user to choose:
    - draft replies (use the `mail-reply-writer` skill, or `reply_to_message` with `mode: "draft"`),
    - flag what needs follow-up (`update_messages` with `flag_color`),
-   - mark the rest read or archive it (`update_messages` `read: true`, or `move_messages` to `archive`).
+   - mark the rest read or archive it (`update_messages` `read: true`, or `move_messages` to `archive`),
+   - snooze what can wait until a given day (`snooze_messages` with `until`).
+7. **Anything suspicious?** For a message asking to pay, sign in, change bank details or open an unexpected
+   attachment, run `check_authenticity` on it before suggesting any action, and flag a `caution` or `fail`
+   verdict to the user with its findings.
 
 ## Rules
 

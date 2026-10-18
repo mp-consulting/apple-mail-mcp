@@ -192,7 +192,6 @@ extension MailToolbox {
             kind: .mailChange
         ) { [automation] arguments in
             guard let schedule = self.schedule else { throw ToolError("Snoozing is not available in this server.") }
-            let store = try self.store
             try self.requireMailChanges()
             let ids = try arguments.ids("ids")
             try self.checkBatch(ids)

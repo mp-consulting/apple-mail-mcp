@@ -32,6 +32,21 @@ struct AuthenticityTests {
         #expect(report.findings.isEmpty)
     }
 
+    @Test func readsOneHeaderPerMethodFromTheSameServer() {
+        // iCloud writes a header per method; an upstream server's header must not count.
+        let headers = [
+            (name: "Authentication-Results", value: "bimi.icloud.test; bimi=none"),
+            (name: "Authentication-Results", value: "dmarc.icloud.test; dmarc=pass header.from=bank.test"),
+            (name: "Authentication-Results", value: "dkim-verifier.icloud.test; dkim=pass (2048-bit) header.d=bank.test header.i=@bank.test"),
+            (name: "Authentication-Results", value: "spf.icloud.test; spf=pass (domain) smtp.mailfrom=bounce.bank.test"),
+        ]
+        let report = Authenticity.check(headers: headers, from: bank, replyTo: [], html: nil, knownDomains: [], priorMessagesFromSender: 3)
+        #expect(report.verdict == .pass && report.aligned == true && report.dmarc == "pass" && report.spf == "pass")
+        let upstream = [(name: "Authentication-Results", value: "mx.icloud.test; dkim=pass header.d=bank.test"),
+                        (name: "Authentication-Results", value: "relay.other.test; dmarc=fail")]
+        #expect(Authenticity.check(headers: upstream, from: bank, replyTo: [], html: nil, knownDomains: [], priorMessagesFromSender: 3).dmarc == nil)
+    }
+
     @Test func dmarcFailureFails() {
         let report = check("mx.test; spf=fail smtp.mailfrom=evil.test; dkim=none; dmarc=fail header.from=bank.test")
         #expect(report.verdict == .fail)

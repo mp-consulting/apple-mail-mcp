@@ -19,6 +19,9 @@ description: Find emails the user sent that never got an answer and draft polite
      sentences, refer to the original ask, offer a concrete next step or a new date.
      Match the language of the original thread.
 5. Offer to flag the originals (`update_messages`, `flag_color: "orange"`) so they show up as pending.
+6. If the user would rather nudge later (say, if there is still no answer by Friday), offer to schedule the
+   nudge with `reply_to_message` and `send_at`; it can be cancelled with `cancel_scheduled` if a reply
+   arrives first.
 
 ## Rules
 

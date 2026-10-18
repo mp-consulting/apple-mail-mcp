@@ -106,6 +106,11 @@ Run `apple-mail-mcp doctor` for a full check.
 | `export_search` | Every match of a search to one **CSV, JSON or XLSX** file, optionally with invoice totals and numbers; returns only the path and row count |
 | `get_message`, `get_messages`, `get_thread` | One message, up to 200 at once, or a whole conversation, with quotes stripped on request |
 | `extract_invoice_fields` | Vendor, invoice number, total and currency from invoice and receipt bodies and attached PDFs |
+| `extract_fields` | Tracking numbers (with the carrier), verification codes, booking and order references, flights, calendar invitations |
+| `check_authenticity` | Whether a message is really from who it says: SPF, DKIM, DMARC, look-alike domains, spoofed names, links that lie |
+| `find_contact` | Addresses from Contacts and from the people you write with, most frequent first |
+| `wait_for_mail` | Waits for a matching message to arrive (a sign-in code, an expected reply) and returns it |
+| `mail_setup` | Your Mail rules, VIPs, smart mailboxes and signatures |
 | `needs_response` | Mail from people, to you, still waiting on you (lists, promotions and no-reply excluded) |
 | `awaiting_reply` | What you sent that nobody answered |
 | `mail_statistics`, `top_senders` | Volume, busiest days and hours, categories, who writes most |
@@ -113,10 +118,18 @@ Run `apple-mail-mcp doctor` for a full check.
 | `list_attachments`, `save_attachment`, `export_messages` | Attachments to disk, messages to `.eml` or Markdown |
 | `get_message_source` | Raw headers, e.g. to check authentication or unsubscribe links |
 | `move_messages`, `update_messages`, `trash_messages`, `create_mailbox` | Archive and file, read/unread and flags, Trash; previews with `dry_run` |
-| `compose_email`, `reply_to_message`, `forward_message` | Draft (default), open for review, or send; plain text or formatted HTML (replies and forwards quote the original with its formatting) |
+| `undo_change` | Lists recent moves, trashes and flag changes and puts one back |
+| `snooze_messages`, `list_scheduled`, `cancel_scheduled` | Hide messages until a day, then back to the inbox unread; see or cancel snoozes and scheduled sends |
+| `compose_email`, `reply_to_message`, `forward_message` | Draft (default), open for review, send, or send later (`send_at`); plain text or formatted HTML (replies and forwards quote the original with its formatting) |
+| `list_drafts`, `send_draft` | Unsent drafts with their recipients; send one as it is |
+| `unsubscribe` | Leaves mailing lists: one-click for signed senders, an unsubscribe email, or the link to open |
 | `open_in_mail`, `check_new_mail`, `body_index` | Show a message in Mail, fetch new mail, manage the search index |
 
 Message ids are Mail's own; a moved message gets a new id, which `move_messages` returns.
+
+The skills are also served as MCP prompts (in Claude Code: `/mcp__apple-mail__mail-triage` and so on), and two
+resources, `mail://inbox/unread` and `mail://needs-response`, notify subscribed clients when mail changes.
+Snoozes and scheduled sends are carried out by the menu bar app, so it has to be running for them.
 
 ## Skills
 
@@ -151,7 +164,12 @@ emails waiting you review them one by one; nothing goes out without a click on *
 - **Send policy** (Settings): *Ask me first* shows each outgoing email (recipients, subject, text,
   attachments) for **Send** or **Don't Send**; *Send right away*; or *Never send* (drafts only).
 - **Drafts by default**: compose, reply and forward save to Drafts unless Claude is asked to send.
-- **Batch limits**: at most 50 messages per change by default; `dry_run` previews moves and trash.
+- **Batch limits**: at most 50 messages per change by default; `dry_run` previews moves and trash. Optionally,
+  moves and trashes above a size you choose wait for your OK in the menu bar app.
+- **Undo**: every move, trash and flag change can be put back with `undo_change` (the journal keeps
+  Message-IDs and mailbox names only, owner-only).
+- **Unsubscribing** follows the send policy: with *Ask me first* you confirm each one. One-click requests go
+  only to senders whose DKIM signature verified for their own domain; for anyone else you get the link.
 - **No permanent deletion**: Trash only, never emptied.
 - **Files**: saved attachments can't go into startup, config or system folders; secrets (`~/.ssh`, `.env`,
   keychains, browser profiles, Mail's own data) can't be attached. Optional allowlists in Settings.

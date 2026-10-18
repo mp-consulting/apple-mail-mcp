@@ -32,6 +32,9 @@ description: Draft email replies in the user's own voice with Apple Mail. Use wh
    (absolute paths) when the user provides them.
 3. Use `mode: "open"` if the user wants to edit it in Mail, and `mode: "send"` only when the user
    explicitly asks to send. Sending may require the user's approval in the Apple Mail MCP menu bar app.
+4. If the user wants it to go out later ("send it Monday morning"), pass `send_at` (an ISO 8601 time, or
+   `YYYY-MM-DD` for 8:00 that day) instead of a mode; `list_scheduled` and `cancel_scheduled` show and
+   cancel what is waiting.
 
 Replying to an unsent draft is not possible: for drafts, offer `open_in_mail` instead.
 

@@ -6,6 +6,34 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`undo_change`**: moves, trashes and flag changes are journaled (Message-IDs and mailbox paths, no
+  content) and can be put back; every change reply carries its `change_id`.
+- **`check_authenticity`**: SPF, DKIM and DMARC results, alignment with the From domain, display names that
+  show another address, look-alike and punycode domains of people you write with, Reply-To elsewhere, first
+  contact, and links whose text shows another site than they open; verdict pass, caution or fail.
+- **`find_contact`**: Contacts cards (when the app may read them) and correspondents from Mail's own
+  address table, ranked by messages exchanged.
+- **`extract_fields`**: tracking numbers (UPS, USPS, UPU S10 with its check digit, labelled numbers in six
+  languages), verification codes, booking and order references, flights with the route, and calendar
+  invitations from `.ics` parts.
+- **`mail_setup`**: Mail's rules, VIPs, smart mailboxes and signatures (including those synced with iCloud).
+- **`list_drafts`** and **`send_draft`** (replies are refused, so threads stay intact).
+- **`wait_for_mail`**: waits for matching mail to arrive and returns it.
+- **`snooze_messages`**, **`list_scheduled`**, **`cancel_scheduled`**, and **`send_at`** on `compose_email` and
+  `reply_to_message`: snoozed mail comes back unread, scheduled mail is approved when scheduled and sent on
+  time; the menu bar app runs both.
+- **`unsubscribe`**: one-click (RFC 8058) for senders whose signature verified, unsubscribe emails, or the
+  link; follows the send policy and asks in the menu bar app.
+- **MCP prompts** for every skill, and **resources** `mail://inbox/unread` and `mail://needs-response` with
+  change notifications.
+- **Body search covers attachments**: the index adds the text of attached PDFs and text files (still as
+  keyed hashes only); existing indexes re-read their messages with attachments.
+- Menu bar app: what waits for a reply, snoozed and scheduled mail, an optional notification for new mail
+  waiting on you, and a setting to approve moves and trashes above a size. The approval window now also asks
+  about bulk changes and unsubscribes.
+
 ## [0.3.2] - 2026-10-18
 
 ### Fixed

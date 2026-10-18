@@ -86,6 +86,13 @@ public protocol MailAutomating: Sendable {
     /// Closes a compose object without saving again.
     func closeCompose(_ handle: ComposeHandle) async throws
     func open(_ id: Int64, in mailbox: MailboxTarget) async throws
+    /// Runs `body` with Mail automation reserved for this caller, across processes, so a bulk change
+    /// and the check of its outcome cannot interleave with another client's changes.
+    func exclusive<T>(_ body: () async throws -> T) async throws -> T
+}
+
+extension MailAutomating {
+    public func exclusive<T>(_ body: () async throws -> T) async throws -> T { try await body() }
 }
 
 /// Drives Mail.app with raw Apple Events (see ``MailSpec``). Calls run on a
@@ -116,6 +123,10 @@ public final class MailAutomation: MailAutomating {
                 }
             }
         }
+    }
+
+    public func exclusive<T>(_ body: () async throws -> T) async throws -> T {
+        try await AutomationLock.withLock(timeout: lockTimeout, body)
     }
 
     public func accounts() async throws -> [AutomationAccount] {
@@ -327,8 +338,11 @@ public final class MailAutomation: MailAutomating {
 
 /// Cross-process advisory lock (flock) so concurrent server instances queue
 /// their Apple Events instead of piling onto Mail's single scripting thread.
-/// The kernel releases it if a holder dies, so it can never go stale.
+/// The kernel releases it if a holder dies, so it can never go stale. Reentrant within a task, so the
+/// events sent inside ``MailAutomating/exclusive(_:)`` do not wait for their own caller.
 public enum AutomationLock {
+    @TaskLocal static var held: Set<String> = []
+
     public static var path: String {
         FileManager.default.homeDirectoryForCurrentUser
             .appending(path: "Library/Application Support/apple-mail-mcp/automation.lock").path
@@ -340,9 +354,10 @@ public enum AutomationLock {
         }
     }
 
-    public static func withLock<T: Sendable>(
+    public static func withLock<T>(
         timeout: TimeInterval, path: String = AutomationLock.path, _ body: () async throws -> T
     ) async throws -> T {
+        if held.contains(path) { return try await body() }
         try FileManager.default.createDirectory(
             atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
         let fd = open(path, O_CREAT | O_RDWR, 0o600)
@@ -354,7 +369,7 @@ public enum AutomationLock {
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         defer { flock(fd, LOCK_UN) }
-        return try await body()
+        return try await $held.withValue(held.union([path])) { try await body() }
     }
 }
 

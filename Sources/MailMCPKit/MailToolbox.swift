@@ -52,6 +52,8 @@ public final class MailToolbox: @unchecked Sendable {
     public let bodyIndexURL: URL
     /// Started with --read-only: mail-changing and compose tools are not even listed.
     public let readOnly: Bool
+    /// How long moves and trashes wait for Mail's database to show their outcome (tests shorten it).
+    public var verification = ChangeVerification()
     public var clientName: String? {
         get { lock.withLock { _clientName } }
         set { lock.withLock { _clientName = newValue } }

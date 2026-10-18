@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Verified moves and trashes**: `move_messages` and `trash_messages` no longer trust Mail's Apple Event
+  replies. They check Mail's database and count only messages that really left their mailbox (and, for a
+  move, reached the destination); the rest come back as `unverified`. If a mailbox loses or gains more
+  messages than requested, the call stops before the next mailbox and reports `collateral_suspected`.
+  The automation lock is now held across the change and its check, so two clients cannot interleave bulk
+  changes. The inbox-zero and newsletter-cleanup skills run batches one at a time and stop on either field.
+
 ## [0.2.0] - 2026-10-18
 
 ### Added

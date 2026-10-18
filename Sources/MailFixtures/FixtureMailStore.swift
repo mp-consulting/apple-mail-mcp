@@ -251,6 +251,20 @@ public final class FixtureMailStore: @unchecked Sendable {
         return rowID
     }
 
+    /// Moves a message the way Mail records it: a new row (new ROWID, same global data) in `mailbox`,
+    /// and the old row marked deleted. Recipients and files stay with the old row.
+    @discardableResult
+    public func moveMessage(_ rowID: Int64, to mailbox: Int64) throws -> Int64 {
+        let columns = """
+            message_id, global_message_id, sender, subject_prefix, subject, summary, date_sent, date_received, flags,
+            read, flagged, size, conversation_id, list_id_hash, unsubscribe_type, flag_color
+            """
+        try db.run("INSERT INTO messages (\(columns), mailbox) SELECT \(columns), ? FROM messages WHERE ROWID = ?", [.int(mailbox), .int(rowID)])
+        let newID = try db.scalarInt("SELECT last_insert_rowid()") ?? 0
+        try db.run("UPDATE messages SET deleted = 1 WHERE ROWID = ?", [.int(rowID)])
+        return newID
+    }
+
     /// Writes (or rewrites) the `.emlx` for an existing message, e.g. once it has "downloaded".
     public func writeEmlx(rowID: Int64, mailbox: Int64, message: FixtureMessage) throws {
         let (rfc822, partIDs) = Self.rfc822(message, messageID: message.messageID ?? "late-\(rowID)@fixture.test", stripAttachments: message.partial)

@@ -112,6 +112,16 @@ struct AppleEventTests {
         }
     }
 
+    @Test func automationLockIsReentrantForItsHolderOnly() async throws {
+        let path = FileManager.default.temporaryDirectory.appending(path: "lock-\(UUID().uuidString)").path
+        try await AutomationLock.withLock(timeout: 1, path: path) {
+            // The holder's own events go through; another task has to wait (and here gives up).
+            try await AutomationLock.withLock(timeout: 0.2, path: path) {}
+            let other = Task.detached { try await AutomationLock.withLock(timeout: 0.2, path: path) {} }
+            await #expect(throws: AutomationLock.Busy.self) { try await other.value }
+        }
+    }
+
     /// Talks to the real Mail.app (read-only). Opt in with APPLE_MAIL_MCP_LIVE=1.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["APPLE_MAIL_MCP_LIVE"] == "1"))
     func liveAccounts() async throws {

@@ -25,13 +25,32 @@ final class RecordingAutomation: MailAutomating, @unchecked Sendable {
     var lastReplyHTML: String?
     /// Runs inside `move`, e.g. to simulate Mail re-inserting the message under a new id.
     var onMove: (@Sendable ([Int64], MailboxTarget) -> Void)?
+    /// Runs inside `trash`, e.g. to simulate Mail moving the messages to Trash (or more than that).
+    var onTrash: (@Sendable ([Int64], MailboxTarget) -> Void)?
+    private var exclusiveDepth = 0
+    private var _unguardedChanges = 0
+    /// Moves and trashes requested outside `exclusive` (should stay 0).
+    var unguardedChanges: Int { lock.withLock { _unguardedChanges } }
 
     private func record(_ call: Call) { lock.withLock { _calls.append(call) } }
+    private func recordChange(_ call: Call) {
+        lock.withLock {
+            _calls.append(call)
+            if exclusiveDepth == 0 { _unguardedChanges += 1 }
+        }
+    }
+    private func adjustDepth(_ delta: Int) { lock.withLock { exclusiveDepth += delta } }
+
+    func exclusive<T>(_ body: () async throws -> T) async throws -> T {
+        adjustDepth(1)
+        defer { adjustDepth(-1) }
+        return try await body()
+    }
 
     func accounts() async throws -> [AutomationAccount] { [] }
 
     func move(ids: [Int64], from: MailboxTarget, to: MailboxTarget) async throws -> Int {
-        record(.move(ids, from, to))
+        recordChange(.move(ids, from, to))
         onMove?(ids, to)
         return ids.count
     }
@@ -42,7 +61,8 @@ final class RecordingAutomation: MailAutomating, @unchecked Sendable {
     }
 
     func trash(ids: [Int64], in mailbox: MailboxTarget) async throws -> Int {
-        record(.trash(ids, mailbox))
+        recordChange(.trash(ids, mailbox))
+        onTrash?(ids, mailbox)
         return ids.count
     }
 
@@ -87,6 +107,8 @@ struct Harness {
             settings: SettingsProvider(url: support.appending(path: "settings.json")), approvals: approvals,
             activity: ActivityLog(url: support.appending(path: "activity.jsonl")),
             bodyIndexURL: support.appending(path: "body-index.sqlite"), readOnly: readOnly)
+        // The fake changes the fixture synchronously, so a short wait shows everything.
+        toolbox.verification = ChangeVerification(timeout: 0.3, interval: 0.02, settle: 0)
     }
 
     func id(_ name: String) -> Int64 { fixture.ids[name]! }

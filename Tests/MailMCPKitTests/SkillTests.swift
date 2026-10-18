@@ -37,7 +37,7 @@ struct SkillTests {
         let parameters: Set<String> = [
             "dry_run", "new_ids", "strip_quotes", "max_chars", "has_more", "reply_all", "quote_original", "flag_color",
             "min_age_hours", "has_attachments", "date_from", "date_to", "include_trash", "by_domain", "body_search",
-            "include_read", "to_mailbox", "not_found",
+            "include_read", "to_mailbox", "not_found", "collateral_suspected",
         ]
         let regex = try NSRegularExpression(pattern: "`([a-z]+(?:_[a-z]+)+)`")
         for skill in SkillCatalog.all {

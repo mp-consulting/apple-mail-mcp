@@ -20,7 +20,11 @@ Present one table: sender, messages in 90 days, unread %, category, suggested ac
 
 - **Archive or trash a sender's mail**: page through `search_messages` (`sender`, `limit: 50`), preview
   with `dry_run: true`, then `move_messages` (`to_mailbox: "archive"`) or `trash_messages`. Repeat per page;
-  the server limits each call (default 50).
+  the server limits each call (default 50). Make the calls one after another, never in parallel, and never
+  run two cleanups (two agents or chats) at the same time.
+- **Check every reply**: the counts only include messages Mail really moved. If a reply lists `unverified`
+  ids or has `collateral_suspected`, stop at once, tell the user what it says and ask them to check Trash
+  (and the mailbox it names) before doing anything else. Do not retry the same ids.
 - **Unsubscribe**: read one recent message's headers with `get_message_source` and look for
   `List-Unsubscribe` (a mailto: or https: link). Give the user the link to open; for a mailto: link,
   offer to draft the email with `compose_email` (`mode: "draft"`). Do not open web links yourself.

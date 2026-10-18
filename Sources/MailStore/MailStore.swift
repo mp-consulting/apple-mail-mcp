@@ -338,6 +338,33 @@ public final class MailStore: @unchecked Sendable {
         }
     }
 
+    /// Messages in a mailbox now, counted from the rows (Mail updates `mailboxes.total_count` later).
+    public func liveCount(mailboxID: Int64) throws -> Int {
+        Int(
+            try withDB { db in
+                try db.scalarInt(
+                    """
+                    SELECT COUNT(*) FROM messages m WHERE m.deleted = 0
+                    AND (m.mailbox = ? OR m.ROWID IN (SELECT message_id FROM labels WHERE mailbox_id = ?))
+                    """, [.int(mailboxID), .int(mailboxID)]) ?? 0
+            })
+    }
+
+    /// The subset of `ids` still in the mailbox (not deleted, directly or through a label).
+    public func present(ids: [Int64], mailboxID: Int64) throws -> Set<Int64> {
+        guard !ids.isEmpty else { return [] }
+        let json = "[" + ids.map(String.init).joined(separator: ",") + "]"
+        return Set(
+            try withDB { db in
+                try db.all(
+                    """
+                    SELECT m.ROWID FROM messages m WHERE m.ROWID IN (SELECT value FROM json_each(?)) AND m.deleted = 0
+                    AND (m.mailbox = ? OR m.ROWID IN (SELECT message_id FROM labels WHERE mailbox_id = ?))
+                    """, [.text(json), .int(mailboxID), .int(mailboxID)]
+                ) { $0.int(0) }
+            })
+    }
+
     public func message(id: Int64) throws -> MessageSummary {
         guard let found = try messages(ids: [id]).first else { throw MailStoreError.messageNotFound(id) }
         return found

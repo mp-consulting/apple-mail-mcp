@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-10-18
+
+### Fixed
+
+- **"Can't read your mail" lingered after the fix**: the menu bar notice stayed for an hour after any Full Disk
+  Access failure, even once the app could read mail again. It now shows only while that client's latest call
+  failed, so it goes away with the next call that works.
+
 ## [0.3.1] - 2026-10-18
 
 ### Fixed
@@ -130,7 +138,8 @@ First release.
   and a reply or forward waiting for approval links to the original.
 - Skills in the Claude tab are listed by their Claude Code slash command (`/mail-triage`…); click to copy.
 
-[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.2.1...v0.2.2

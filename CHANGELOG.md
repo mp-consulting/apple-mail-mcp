@@ -6,12 +6,6 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-### Added
-
-- **Show in Mail**: activity rows about a message (read, replied, moved, flagged, drafted…) open it in Mail,
-  and a reply or forward waiting for approval links to the original.
-- Skills in the Claude tab are listed by their Claude Code slash command (`/mail-triage`…); click to copy.
-
 ## [0.1.0] - 2026-10-18
 
 First release.
@@ -30,8 +24,9 @@ First release.
   indexed yet.
 - **Writes through Apple Events**: raw events built from Mail's scripting dictionary, without
   AppleScript, with a cross-process lock so concurrent clients queue instead of overloading Mail.
-- **Menu bar app**: status, a send-approval queue ("Ask me first" policy), recent activity, the body
-  index, settings, one-click setup for Claude Code and the Claude app, and daily update checks.
+- **Menu bar app** with Mail, Claude and Settings tabs: a send-approval queue ("Ask me first" policy),
+  recent activity, the body index, one-click setup for Claude Code and the Claude app (with restart),
+  the skills, settings, and daily update checks of signed releases.
 - **Eight Claude skills** (triage, inbox zero, follow-up, reply writer, newsletter cleanup, research,
   attachments, weekly report), installable from the app or `apple-mail-mcp skills install`, and
   refreshed automatically when the app updates.
@@ -40,6 +35,9 @@ First release.
 - **Command line**: `doctor`, `index`, `call`, `install`/`uninstall` for Claude clients and `skills`.
 - **Benchmarks** (`mail-bench`): in-process timings, a synthetic mailbox of any size, and a
   side-by-side comparison with the Python apple-mail-mcp over MCP.
+- **Show in Mail**: activity rows about a message (read, replied, moved, flagged, drafted…) open it in Mail,
+  and a reply or forward waiting for approval links to the original.
+- Skills in the Claude tab are listed by their Claude Code slash command (`/mail-triage`…); click to copy.
 
 [Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/mp-consulting/apple-mail-mcp/releases/tag/v0.1.0

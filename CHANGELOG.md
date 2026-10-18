@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-18
+
 ### Added
 
 - The menu bar app notices when the Claude app runs Apple Mail twice (the extension and the config entry),
@@ -173,7 +175,8 @@ First release.
   and a reply or forward waiting for approval links to the original.
 - Skills in the Claude tab are listed by their Claude Code slash command (`/mail-triage`…); click to copy.
 
-[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.3.0...v0.3.1

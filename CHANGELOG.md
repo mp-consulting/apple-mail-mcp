@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-18
+
+### Fixed
+
+- **"Claude can't read your mail" after allowing Claude**: Claude starts MCP servers through a helper that
+  hands macOS's permission check to another program, so Full Disk Access for Claude.app never applied. For
+  Claude Code the check falls on Claude Code's own bundled `claude` app, and for the Claude Desktop extension
+  on the server binary itself. The error and the menu bar notice now name the program macOS actually checks,
+  with the exact path to add in System Settings › Privacy & Security › Full Disk Access.
+
 ## [0.3.0] - 2026-10-18
 
 ### Added
@@ -120,7 +130,8 @@ First release.
   and a reply or forward waiting for approval links to the original.
 - Skills in the Claude tab are listed by their Claude Code slash command (`/mail-triage`…); click to copy.
 
-[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.2.0...v0.2.1

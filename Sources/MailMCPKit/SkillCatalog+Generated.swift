@@ -28,6 +28,20 @@ description: Find, save and organize email attachments from Apple Mail (invoices
 - Some locations are refused on purpose (startup folders, `~/Library`, dotfiles, `.git/hooks`): pick a
   normal folder such as `~/Documents/Invoices`.
 
+## Invoices and receipts to a spreadsheet
+
+1. Build one precise search, then check it with `search_messages` and `group_by: "sender"` (counts only):
+   - `query: "invoice, facture, fatura, receipt, Rechnung"` (any term matches)
+   - `direction: "received"` and `exclude_replies: true` to drop sent mail and replies
+   - `exclude_subject` for ads and newsletters ("économisez, newsletter, webinar"), `exclude_sender` for
+     noisy domains, `category: "transactions"` when Mail has classified them
+   - `exclude_from_self: true` drops invoices the user issued (their own names are set in the app's settings)
+2. `export_search` with the same filters, a `path` such as `~/Desktop/invoices.xlsx` (`csv`, `json` or `xlsx`)
+   and `include: ["amount", "invoice_number"]`: one call writes every match with vendor, total, currency
+   and invoice number (read from bodies and attached PDFs) and returns only the path and row count.
+3. Report the row count and how many rows got an amount (`with_amount`). Rows with
+   `amount_confidence: "low"` are worth a glance; `extract_invoice_fields` on a few ids shows why.
+
 ## Export messages
 
 - `export_messages` with `ids` and a `directory`: `format: "eml"` keeps the original message (opens in
@@ -225,12 +239,18 @@ messages. Good results come from narrowing first, then reading.
    limited, narrow by account, mailbox or date, or build the index (`body_index` with `action: "update"`).
 4. **Page** with `offset` while `has_more` is true; the newest results come first (`sort: "oldest"` to flip).
 5. **Try variants** when nothing matches: other spellings, the other language, the company domain as
-   `sender` (e.g. `@acme.com`), or `include_trash: true`.
+   `sender` (e.g. `@acme.com`), or `include_trash: true`. Several words in `query`, comma-separated,
+   match any of them.
+6. **Cut the noise** with `exclude_subject`, `exclude_sender`, `exclude_replies: true` and
+   `direction: "received"` or `"sent"`; `compact: true` drops previews when many results are expected.
+7. **Too many results to read?** `group_by: "sender"`, `"domain"` or `"month"` returns counts instead of
+   messages; `export_search` writes all matches to a file.
 
 ## Read and answer
 
 - Open the best candidates with `get_message` (`max_chars` around 4000) or the whole conversation with
-  `get_thread`. Check attachments with `list_attachments`.
+  `get_thread`. To read many at once, `get_messages` takes up to 200 `ids` (it returns `remaining_ids`
+  when the reply would get too large). Check attachments with `list_attachments`.
 - Answer the question directly, then cite the source messages: sender, date, subject and the `link`
   (a `message://` URL that opens the message in Mail).
 - For "everything about X", group findings by conversation and give a dated timeline with open items.

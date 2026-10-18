@@ -5,7 +5,7 @@ import MailAutomation
 import MailStore
 
 extension MailToolbox {
-    var fileTools: [ToolDefinition] { [saveAttachment, exportMessages] }
+    var fileTools: [ToolDefinition] { [saveAttachment, exportMessages, exportSearch] }
     var changeTools: [ToolDefinition] { [moveMessages, updateMessages, trashMessages, createMailbox, checkNewMail] }
 
     // MARK: Files

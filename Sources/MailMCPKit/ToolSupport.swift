@@ -216,7 +216,7 @@ enum Render {
         return String(text.prefix(limit)) + "…"
     }
 
-    static func message(_ m: MessageSummary, preview: Bool = true) -> JSON {
+    static func message(_ m: MessageSummary, preview: Bool = true, link: Bool = false) -> JSON {
         .obj([
             ("id", .int(m.id)),
             ("date", date(m.dateReceived)),
@@ -228,8 +228,18 @@ enum Render {
             ("flag", m.flagColor.map { .string($0.name) }),
             ("attachments", m.hasAttachments ? .bool(true) : nil),
             ("category", m.category.flatMap { $0 == .primary ? nil : .string($0.name) }),
-            ("preview", preview ? m.preview.map { .string(truncate($0.replacingOccurrences(of: "\n", with: " "), 200)) } : nil),
+            ("preview", preview ? m.preview.map { .string(truncate(cleanPreview($0), 200)) } : nil),
+            ("link", link ? m.mailLink.map { .string($0) } : nil),
         ])
+    }
+
+    /// Mail's snippet on one line, without the invisible padding some senders add (Stripe, newsletters):
+    /// zero-width and other format characters, and runs of spaces.
+    static func cleanPreview(_ text: String) -> String {
+        let visible = String(String.UnicodeScalarView(text.unicodeScalars.filter {
+            $0.properties.generalCategory != .format && $0 != "\u{034F}" && $0 != "\u{00AD}"
+        }))
+        return visible.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
     }
 
     static func addresses(_ list: [EmailAddress]) -> JSON? {

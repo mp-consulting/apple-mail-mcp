@@ -6,6 +6,37 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`export_search`**: writes every message matching a search to one CSV, JSON or XLSX file and returns
+  only the path and row count, so thousands of results never come back inline. Choose the columns with
+  `fields`; `include: ["amount", "invoice_number"]` adds vendor, total, currency and invoice number;
+  `dedupe` (on by default) writes a message stored in several mailboxes once.
+- **Search filters** (also on `export_search`): several comma-separated `query` terms match any of them;
+  `exclude_subject`, `exclude_sender`, `exclude_replies`, `exclude_from_self`, `direction`
+  (`received`/`sent`), several `category` values. `group_by: "sender" | "domain" | "month"` returns counts.
+- **`get_messages`**: up to 200 messages in one call, quotes stripped, with a size budget and `remaining_ids`.
+- **`extract_invoice_fields`**: totals, currencies and invoice numbers from invoice and receipt bodies
+  (English, French, German, Spanish, Portuguese, Italian), falling back to the text of attached PDFs.
+- Search results carry the `message://` `link`; `compact: true` leaves out previews, and previews lose the
+  invisible padding some senders add.
+- Setting **"Names I send as"** (`ownNames`), e.g. your company as invoicing services show it, used by
+  `exclude_from_self`.
+
+### Changed
+
+- Search, conversations, awaiting-reply and needs-response queries use the right SQLite index for their
+  scope: 5 to 300 times faster on a 100,000-message mailbox.
+
+### Security
+
+- Exported cells never run as formulas: CSV text starting with `=`, `+`, `-` or `@` gets a leading `'`,
+  and XLSX cells are plain strings and numbers. Exports keep their format's extension.
+- Saved attachments are quarantined like Mail's own, so Gatekeeper checks emailed apps and scripts.
+- Attachment file names lose bidirectional-override and other invisible characters.
+- `.env.local`, `.env.production` and similar files cannot be attached.
+- Mailbox folders and attachment part ids from Mail's database cannot point outside Mail's folder.
+
 ## [0.2.2] - 2026-10-18
 
 ### Fixed

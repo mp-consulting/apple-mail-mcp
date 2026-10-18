@@ -100,7 +100,7 @@ final class ReadToolTests {
     @Test func bodySearchScansWhenTheIndexKeyIsUnavailable() async throws {
         _ = try await h.json("body_index", ["action": "update"])
         let locked = MailToolbox(
-            store: try h.fixture.openStore(), automation: h.automation, activity: nil, changes: nil,
+            store: try h.fixture.openStore(), automation: h.automation, activity: nil, changes: nil, contacts: FixedContacts(),
             bodyIndexURL: h.support.appending(path: "body-index.sqlite"),
             bodyIndexKey: { throw BodyIndexKeyError.keychain(-128) })
         let result = await locked.call("search_messages", arguments: ["body": "kubernetes"])

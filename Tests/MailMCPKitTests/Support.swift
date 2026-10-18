@@ -87,6 +87,15 @@ final class RecordingAutomation: MailAutomating, @unchecked Sendable {
     func open(_ id: Int64, in mailbox: MailboxTarget) async throws { record(.open(id)) }
 }
 
+/// Contacts without the Contacts framework.
+struct FixedContacts: ContactsProviding {
+    var cards = [ContactCard(name: "Alice Martin", organization: "Example", emails: [("work", "alice@example.test")])]
+
+    func search(_ text: String, limit: Int) async -> ContactsLookup {
+        .found(cards.filter { $0.name.localizedCaseInsensitiveContains(text) || $0.emails.contains { $0.address.contains(text) } })
+    }
+}
+
 /// A toolbox over the standard fixture, with its own settings, approvals and log in a temp folder.
 struct Harness {
     /// Tests never read the Keychain.
@@ -108,7 +117,7 @@ struct Harness {
             store: try fixture.openStore(), automation: automation,
             settings: SettingsProvider(url: support.appending(path: "settings.json")), approvals: approvals,
             activity: ActivityLog(url: support.appending(path: "activity.jsonl")),
-            changes: ChangeJournal(url: support.appending(path: "changes.json")),
+            changes: ChangeJournal(url: support.appending(path: "changes.json")), contacts: FixedContacts(),
             bodyIndexURL: support.appending(path: "body-index.sqlite"), bodyIndexKey: { Self.indexKey }, readOnly: readOnly)
         // The fake changes the fixture synchronously, so a short wait shows everything.
         toolbox.verification = ChangeVerification(timeout: 0.3, interval: 0.02, settle: 0)

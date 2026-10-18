@@ -51,6 +51,8 @@ public final class MailToolbox: @unchecked Sendable {
     public let activity: ActivityLog?
     /// Recent changes to mail, for `undo_change`; nil turns undo off.
     public let changes: ChangeJournal?
+    /// The user's address book, for `find_contact`.
+    public let contacts: any ContactsProviding
     public let bodyIndexURL: URL
     /// Where the body index key comes from: the Keychain, or a fixed key in tests.
     public let bodyIndexKey: @Sendable () throws -> BodyIndexKey
@@ -72,19 +74,20 @@ public final class MailToolbox: @unchecked Sendable {
     public convenience init(
         store: MailStore, automation: any MailAutomating, settings: SettingsProvider = SettingsProvider(),
         approvals: ApprovalCenter = ApprovalCenter(), activity: ActivityLog? = ActivityLog(),
-        changes: ChangeJournal? = ChangeJournal(), bodyIndexURL: URL = SharedPaths.bodyIndex,
+        changes: ChangeJournal? = ChangeJournal(), contacts: any ContactsProviding = SystemContacts(),
+        bodyIndexURL: URL = SharedPaths.bodyIndex,
         bodyIndexKey: @escaping @Sendable () throws -> BodyIndexKey = BodyIndexKey.fromKeychain, readOnly: Bool = false
     ) {
         self.init(
             storeProvider: { store }, automation: automation, settings: settings, approvals: approvals,
-            activity: activity, changes: changes, bodyIndexURL: bodyIndexURL, bodyIndexKey: bodyIndexKey, readOnly: readOnly)
+            activity: activity, changes: changes, contacts: contacts, bodyIndexURL: bodyIndexURL, bodyIndexKey: bodyIndexKey, readOnly: readOnly)
     }
 
     public init(
         storeProvider: @escaping @Sendable () throws -> MailStore, automation: any MailAutomating,
         settings: SettingsProvider = SettingsProvider(), approvals: ApprovalCenter = ApprovalCenter(),
         activity: ActivityLog? = ActivityLog(), changes: ChangeJournal? = ChangeJournal(),
-        bodyIndexURL: URL = SharedPaths.bodyIndex,
+        contacts: any ContactsProviding = SystemContacts(), bodyIndexURL: URL = SharedPaths.bodyIndex,
         bodyIndexKey: @escaping @Sendable () throws -> BodyIndexKey = BodyIndexKey.fromKeychain, readOnly: Bool = false
     ) {
         self.storeProvider = storeProvider
@@ -93,6 +96,7 @@ public final class MailToolbox: @unchecked Sendable {
         self.approvals = approvals
         self.activity = activity
         self.changes = changes
+        self.contacts = contacts
         self.bodyIndexURL = bodyIndexURL
         self.bodyIndexKey = bodyIndexKey
         self.readOnly = readOnly

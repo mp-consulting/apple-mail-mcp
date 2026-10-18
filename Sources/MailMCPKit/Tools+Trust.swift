@@ -3,7 +3,7 @@ import MCP
 import MailStore
 
 extension MailToolbox {
-    var trustTools: [ToolDefinition] { [checkAuthenticity] }
+    var trustTools: [ToolDefinition] { [checkAuthenticity, findContact] }
 
     /// Domains the user corresponds with over the last year, for spotting look-alikes.
     func knownDomains() throws -> Set<String> {
@@ -63,6 +63,63 @@ extension MailToolbox {
             return ToolReply(
                 json: .obj([("messages", .array(items))]),
                 summary: "\(items.count) checked, \(failed) failed", messageID: ids.count == 1 ? ids[0] : nil)
+        }
+    }
+
+    var findContact: ToolDefinition {
+        ToolDefinition(
+            tool: Self.tool(
+                "find_contact", "Find a contact",
+                """
+                Email addresses for a person or company: cards from Contacts (when this app may read them) and \
+                the people you exchanged mail with, most-written-with first, with message counts. Use it to turn \
+                "write to Anna" into an address before composing.
+                """,
+                Schema.object(
+                    [
+                        "query": Schema.string("Name, company or part of an address"),
+                        "limit": Schema.integer("Results per source (default 10)", minimum: 1, maximum: 50),
+                    ], required: ["query"]), kind: .read),
+            kind: .read
+        ) { arguments in
+            let store = try self.store
+            let query = try arguments.requiredString("query")
+            guard query.trimmingCharacters(in: .whitespaces).count >= 2 else { throw ToolError("query needs at least 2 characters") }
+            let limit = try arguments.int("limit") ?? 10
+            let history = try store.correspondents(matching: query, limit: limit)
+            let lookup = await self.contacts.search(query, limit: limit)
+            var cards: [JSON] = []
+            var note: String?
+            switch lookup {
+            case .found(let found):
+                cards = found.map { card in
+                    .obj([
+                        ("name", .string(card.name)),
+                        ("organization", card.organization.map(JSON.string)),
+                        ("emails", .array(card.emails.map { email in
+                            .obj([("address", .string(email.address)), ("label", email.label.map(JSON.string))])
+                        })),
+                    ])
+                }
+            case .unavailable(let reason):
+                note = reason
+            }
+            let people: [JSON] = history.map { person in
+                .obj([
+                    ("address", .string(person.address)),
+                    ("name", person.name.map(JSON.string)),
+                    ("received", person.received > 0 ? .int(Int64(person.received)) : nil),
+                    ("sent", person.sent > 0 ? .int(Int64(person.sent)) : nil),
+                    ("last_message", person.lastMessage.map(Render.date)),
+                ])
+            }
+            return ToolReply(
+                json: .obj([
+                    ("contacts", cards.isEmpty ? nil : .array(cards)),
+                    ("correspondents", .array(people)),
+                    ("note", note.map(JSON.string)),
+                ]),
+                summary: "\(cards.count) contacts, \(people.count) correspondents")
         }
     }
 }

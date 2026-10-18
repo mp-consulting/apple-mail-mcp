@@ -132,3 +132,39 @@ final class AuthenticityToolTests {
         #expect(await h.call("check_authenticity", ["ids": []]).isError)
     }
 }
+
+@Suite("Contacts")
+final class ContactToolTests {
+    let h: Harness
+    init() throws { h = try Harness() }
+    deinit { h.remove() }
+
+    @Test func findsContactsAndCorrespondents() async throws {
+        let json = try await h.json("find_contact", ["query": "alice"])
+        let cards = json["contacts"] as? [[String: Any]] ?? []
+        #expect(cards.first?["name"] as? String == "Alice Martin")
+        let people = json["correspondents"] as? [[String: Any]] ?? []
+        #expect(people.first?["address"] as? String == "alice@example.test")
+        #expect(people.first?["received"] as? Int == 2 && people.first?["sent"] as? Int == 1)
+        #expect(people.first?["name"] as? String == "Alice Martin")
+    }
+
+    @Test func searchesNamesAndSkipsOwnAddresses() async throws {
+        var json = try await h.json("find_contact", ["query": "Billing"])
+        #expect((json["correspondents"] as? [[String: Any]])?.compactMap { $0["address"] as? String } == ["carol@shop.test"])
+        json = try await h.json("find_contact", ["query": "icloud.test"])
+        #expect((json["correspondents"] as? [[String: Any]])?.isEmpty == true)
+        #expect(await h.call("find_contact", ["query": "a"]).isError)
+    }
+
+    @Test func explainsWhenContactsAreUnavailable() async throws {
+        struct Denied: ContactsProviding {
+            func search(_ text: String, limit: Int) async -> ContactsLookup { .unavailable("no access") }
+        }
+        let toolbox = MailToolbox(
+            store: try h.fixture.openStore(), automation: h.automation, activity: nil, changes: nil, contacts: Denied())
+        let result = await toolbox.call("find_contact", arguments: ["query": "dan"])
+        let text = result.content.compactMap { if case .text(let text, _, _) = $0 { text } else { nil } }.joined()
+        #expect(text.contains("no access") && text.contains("dan@example.test"))
+    }
+}

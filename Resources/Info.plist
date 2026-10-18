@@ -26,6 +26,8 @@
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Apple Mail MCP asks Mail to move, flag, draft and send messages when you ask your AI assistant to.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Apple Mail MCP looks up email addresses in Contacts when you ask your AI assistant to write to someone.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 Mickael Palma. MIT License.</string>
 </dict>

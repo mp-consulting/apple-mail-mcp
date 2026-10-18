@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-10-18
+
 ### Changed
 
 - **"Ask me first" is the default send policy.** New installs, and anyone who never saved a send policy,
@@ -232,7 +234,8 @@ First release.
   and a reply or forward waiting for approval links to the original.
 - Skills in the Claude tab are listed by their Claude Code slash command (`/mail-triage`…); click to copy.
 
-[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.3.2...v0.4.0

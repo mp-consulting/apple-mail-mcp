@@ -45,6 +45,23 @@ public final class MailStore: @unchecked Sendable {
     private var cachedAccounts: [MailAccount] = []
     private var extraAddresses: [String: Set<String>] = [:]
 
+    /// Serialises cache rebuilds; the fields below belong to it.
+    private let refreshLock = NSLock()
+    private var accountNames: [String: String] = [:]
+    private var namedAccountIDs: Set<String>?
+    private var detectedAddresses: [String: Set<String>] = [:]
+    private var detectedSentSignature: [SentMailboxState]?
+    private var detectedAt = Date.distantPast
+    static let ownAddressMaxAge: TimeInterval = 300
+    /// How many times own addresses were detected (tests check that unrelated writes skip it).
+    private(set) var ownAddressDetections = 0
+
+    private struct SentMailboxState: Equatable {
+        var id: Int64
+        var accountID: String
+        var totalCount: Int
+    }
+
     static let requiredColumns: [String: [String]] = [
         "messages": [
             "ROWID", "message_id", "global_message_id", "sender", "subject_prefix", "subject", "summary",
@@ -105,12 +122,17 @@ public final class MailStore: @unchecked Sendable {
 
     // MARK: Accounts and mailboxes
 
+    /// Reloads the mailboxes when Mail has committed since the last look. With Mail running that is nearly every
+    /// call, so the costly parts are kept apart: own addresses (a GROUP BY over all Sent mail) are recomputed only
+    /// when the Sent mailboxes or their counts change, or every few minutes; account names (Accounts4.sqlite) only
+    /// when the set of accounts changes.
     private func refreshCachesIfNeeded() throws {
         let version = try dataVersion()
-        lock.lock()
-        let fresh = version == cachedDataVersion && !cachedMailboxes.isEmpty
-        lock.unlock()
-        if fresh { return }
+        if isCacheFresh(version) { return }
+        // One rebuild at a time: a second caller waits, then finds the cache fresh.
+        refreshLock.lock()
+        defer { refreshLock.unlock() }
+        if isCacheFresh(version) { return }
 
         var mailboxes: [Int64: Mailbox] = [:]
         try withDB { db in
@@ -129,14 +151,26 @@ public final class MailStore: @unchecked Sendable {
         for mailbox in mailboxes.values {
             if let scheme = MailboxURL(mailbox.url)?.scheme { schemes[mailbox.accountID] = scheme }
         }
-        let names = AccountDirectory.names(for: Set(schemes.keys), accountsDatabase: location.accountsDatabase)
-        let detected = try detectOwnAddresses(mailboxes: mailboxes)
+        let accountIDs = Set(schemes.keys)
+        if accountIDs != namedAccountIDs {
+            accountNames = AccountDirectory.names(for: accountIDs, accountsDatabase: location.accountsDatabase)
+            namedAccountIDs = accountIDs
+        }
+        let sentSignature = mailboxes.values.filter { $0.role == .sent }
+            .map { SentMailboxState(id: $0.id, accountID: $0.accountID, totalCount: $0.totalCount) }
+            .sorted { $0.id < $1.id }
+        if sentSignature != detectedSentSignature || Date().timeIntervalSince(detectedAt) > Self.ownAddressMaxAge {
+            detectedAddresses = try detectOwnAddresses(mailboxes: mailboxes)
+            detectedSentSignature = sentSignature
+            detectedAt = Date()
+            ownAddressDetections += 1
+        }
         lock.lock()
         let extras = extraAddresses
         lock.unlock()
         let accounts = schemes.keys.sorted().map { id -> MailAccount in
-            let addresses = detected[id, default: []].union(extras[id, default: []])
-            return MailAccount(id: id, name: names[id] ?? id, kind: schemes[id] ?? "imap", emailAddresses: addresses.sorted())
+            let addresses = detectedAddresses[id, default: []].union(extras[id, default: []])
+            return MailAccount(id: id, name: accountNames[id] ?? id, kind: schemes[id] ?? "imap", emailAddresses: addresses.sorted())
         }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 
         lock.lock()
@@ -144,6 +178,12 @@ public final class MailStore: @unchecked Sendable {
         cachedAccounts = accounts
         cachedDataVersion = version
         lock.unlock()
+    }
+
+    private func isCacheFresh(_ version: Int64) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return version == cachedDataVersion && !cachedMailboxes.isEmpty
     }
 
     /// The sender addresses that dominate each account's Sent mailboxes.

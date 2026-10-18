@@ -54,6 +54,10 @@ final class AgentModel {
     let approvals = ApprovalCenter()
     let log = ActivityLog()
     private var store: MailStore?
+    /// Read by the status checks off the main thread; kept open between runs.
+    @ObservationIgnored private var statusIndex: BodyIndex?
+    @ObservationIgnored private var activityStamp: ActivityLog.Stamp?
+    @ObservationIgnored private var approvalsWatcher: DispatchSourceFileSystemObject?
     private var lastDataVersion: Int64 = -1
     private var lastIndexRun = Date.distantPast
     private var tasks: [Task<Void, Never>] = []
@@ -92,12 +96,14 @@ final class AgentModel {
         updater.automaticChecks = { [weak self] in self?.settings.checkForUpdates ?? true }
         updater.start()
         refreshInstalledSkills()
-        // Heartbeat + approvals: fast loop.
+        // New approval requests show up at once through the folder watcher; the loop keeps the heartbeat
+        // (servers treat it as stale after 20 s) and catches anything the watcher missed.
+        watchApprovals()
         tasks.append(Task { [weak self] in
             while !Task.isCancelled {
                 self?.approvals.beat()
                 self?.refreshApprovals()
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
             }
         })
         // Activity log, status checks and the index: slower loop.
@@ -129,6 +135,29 @@ final class AgentModel {
         panelTab = .mail
         NSApp.activate()
         openApprovalWindow?()
+    }
+
+    /// Calls `refreshApprovals` whenever a request file is added, replaced or removed.
+    private func watchApprovals() {
+        try? FileManager.default.createDirectory(at: approvals.directory, withIntermediateDirectories: true)
+        let fd = open(approvals.directory.path, O_EVTONLY)
+        guard fd >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .rename, .delete], queue: .main)
+        source.setEventHandler { [weak self, weak source] in
+            MainActor.assumeIsolated {
+                guard let self, let source else { return }
+                // The folder itself was moved or deleted: watch the new one.
+                if source.data.contains(.delete) || source.data.contains(.rename) {
+                    source.cancel()
+                    self.approvalsWatcher = nil
+                    self.watchApprovals()
+                }
+                self.refreshApprovals()
+            }
+        }
+        source.setCancelHandler { close(fd) }
+        source.resume()
+        approvalsWatcher = source
     }
 
     func decide(_ request: ApprovalRequest, approve: Bool) {
@@ -173,9 +202,8 @@ final class AgentModel {
 
     // MARK: Needs a reply
 
-    func refreshNeedsReply(_ store: MailStore) {
-        guard let current = try? store.needsResponse(days: 3, limit: 50) else { return }
-        needsReply = current
+    func applyNeedsReply(_ current: [MessageSummary]) {
+        if current != needsReply { needsReply = current }
         // The first look only learns what is already waiting; later ones notify about what is new.
         if let seen = seenNeedsReply, settings.notifyNeedsReply {
             for message in current.filter({ !seen.contains($0.id) }).prefix(3) { notifyNeedsReply(message) }
@@ -199,19 +227,44 @@ final class AgentModel {
 
     // MARK: Status
 
+    /// Reads the log only when its size or date changed, and publishes only a different list.
     func refreshActivity() {
-        activity = log.recent(limit: 40)
+        let stamp = log.stamp()
+        guard stamp != activityStamp else { return }
+        activityStamp = stamp
+        let entries = log.recent(limit: 40)
+        if entries != activity { activity = entries }
+    }
+
+    private struct StoreReadings: Sendable {
+        var messageCount = 0
+        var needsReply: [MessageSummary]?
+        var indexStatus: BodyIndex.Status?
+        var notIndexed = 0
     }
 
     func refreshChecks() async {
-        // Counts and the index first: they are local reads and never wait on Mail.
+        // Counts and the index first: they are local reads and never wait on Mail. They run off the main thread.
         if store == nil { store = try? MailStore.open() }
         if let store {
-            messageCount = (try? store.messageCount()) ?? 0
-            refreshNeedsReply(store)
-            if let index = BodyIndex.openIfPresent(url: SharedPaths.bodyIndex), let status = try? index.status() {
-                indexStatus = status
-                notIndexed = (try? store.countMessages(after: status.coveredThrough)) ?? 0
+            // Opening is cheap and happens once the index exists; the reads are what take time.
+            if statusIndex == nil { statusIndex = BodyIndex.openIfPresent(url: SharedPaths.bodyIndex) }
+            let index = statusIndex
+            let readings = await Task.detached(priority: .utility) {
+                var readings = StoreReadings()
+                readings.messageCount = (try? store.messageCount()) ?? 0
+                readings.needsReply = try? store.needsResponse(days: 3, limit: 50)
+                if let status = try? index?.status() {
+                    readings.indexStatus = status
+                    readings.notIndexed = (try? store.countMessages(after: status.coveredThrough)) ?? 0
+                }
+                return readings
+            }.value
+            if readings.messageCount != messageCount { messageCount = readings.messageCount }
+            if let current = readings.needsReply { applyNeedsReply(current) }
+            if let status = readings.indexStatus {
+                if status != indexStatus { indexStatus = status }
+                if readings.notIndexed != notIndexed { notIndexed = readings.notIndexed }
             }
         }
         launchAtLogin = SMAppService.mainApp.status == .enabled

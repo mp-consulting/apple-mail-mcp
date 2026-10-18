@@ -226,6 +226,34 @@ final class MailStoreTests {
         #expect(try store.ownAddresses() == ["me@icloud.test", "me@gmail.test"])
     }
 
+    @Test func ownAddressesFollowSentMailButNotOtherWrites() throws {
+        #expect(try store.ownAddresses() == ["me@icloud.test"])
+        #expect(store.ownAddressDetections == 1)
+        // A write that leaves the Sent mailboxes alone reloads mailboxes but keeps the detected addresses.
+        let other = FixtureMessage(
+            subject: "Hello", from: EmailAddress(address: "x@y.test"), to: [], date: Date(), mailbox: fixture.inbox, body: "")
+        try fixture.store.addMessage(other)
+        try fixture.store.refreshCounts()
+        #expect(try store.mailbox(id: fixture.inbox)?.totalCount == (try fixture.openStore().mailbox(id: fixture.inbox)?.totalCount))
+        #expect(store.ownAddressDetections == 1)
+        // New mail in Sent from a second address is picked up.
+        for n in 0..<6 {
+            try fixture.store.addMessage(FixtureMessage(
+                subject: "Sent \(n)", from: EmailAddress(address: "work@icloud.test"), to: [], date: Date(),
+                mailbox: fixture.sent, body: ""))
+        }
+        try fixture.store.refreshCounts()
+        #expect(try store.ownAddresses() == ["me@icloud.test", "work@icloud.test"])
+        #expect(store.ownAddressDetections == 2)
+    }
+
+    @Test func concurrentCallsRebuildTheCacheOnce() throws {
+        let store = try fixture.openStore()
+        DispatchQueue.concurrentPerform(iterations: 8) { _ in _ = try? store.accounts() }
+        #expect(store.ownAddressDetections == 1)
+        #expect(try store.accounts().count == 3)
+    }
+
     @Test func awaitingReplyFindsUnansweredSentMail() throws {
         let waiting = try store.awaitingReply(days: 14, minimumAgeHours: 24)
         // "Quote request" got no answer; "Contract question" was answered by Dan; "Second sent" is 20 days old.

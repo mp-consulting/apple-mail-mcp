@@ -118,10 +118,29 @@ struct ClientInstallerTests {
     @Test func claudeCodeJSONFallback() throws {
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
         try Data(#"{"numStartups":3,"mcpServers":{}}"#.utf8).write(to: home.appending(path: ".claude.json"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: home.appending(path: ".claude.json").path)
         try installer().install(.claudeCode)
         #expect(installer().status(.claudeCode) == .installed)
         let root = try JSONSerialization.jsonObject(with: Data(contentsOf: home.appending(path: ".claude.json"))) as? [String: Any]
         #expect(root?["numStartups"] as? Int == 3)
+        for name in [".claude.json", ".claude.json.bak"] {
+            let mode = try FileManager.default.attributesOfItem(atPath: home.appending(path: name).path)[.posixPermissions] as? Int
+            #expect(mode == 0o600, "\(name)")
+        }
+    }
+
+    @Test func claudeCodeFallsBackWhenTheCLIDoesNotLaunch() throws {
+        defer { try? FileManager.default.removeItem(at: home) }
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let cli = home.appending(path: "claude")
+        try Data([0, 1, 2, 3]).write(to: cli)  // "executable", but not a program
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: cli.path)
+        let installer = ClientInstaller(serverPath: "/Applications/Apple Mail MCP.app/Contents/MacOS/apple-mail-mcp", home: home, claudeCLI: cli.path)
+        #expect(installer.locateClaudeCLI() == cli.path)
+        try installer.install(.claudeCode)
+        #expect(installer.status(.claudeCode) == .installed)
+        try installer.uninstall(.claudeCode)
+        #expect(installer.status(.claudeCode) == .notInstalled)
     }
 
     @Test func refusesToRewriteBrokenJSON() throws {

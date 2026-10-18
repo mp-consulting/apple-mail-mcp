@@ -830,7 +830,7 @@ public final class MailStore: @unchecked Sendable {
         let attachments = root.leaves.filter(\.isAttachment).map { part in
             let onDisk = part.hasInlineData
                 || (mailboxURL.flatMap { files.attachmentFile(rowID: id, mailbox: $0, partID: part.partID) } != nil)
-            let size = part.appleContentLength ?? (part.hasInlineData ? part.decodedBody().count : nil)
+            let size = part.appleContentLength ?? (part.hasInlineData ? part.decodedSize : nil)
             return AttachmentInfo(
                 partID: part.partID, filename: part.filename ?? "part-\(part.partID)", mimeType: part.contentType,
                 size: size, isDownloaded: onDisk)

@@ -3,7 +3,7 @@ import Foundation
 /// Registers the server with Claude Code and Claude Desktop.
 ///
 /// Claude Code goes through its own CLI (`claude mcp add --scope user`), falling back to
-/// `~/.claude.json` when the CLI is missing. Claude Desktop's
+/// `~/.claude.json` when the CLI is missing or cannot be launched. Claude Desktop's
 /// `claude_desktop_config.json` is edited in place: other servers and settings are kept,
 /// and a `.bak` copy is written first.
 public struct ClientInstaller: Sendable {
@@ -122,25 +122,18 @@ public struct ClientInstaller: Sendable {
     public func install(_ client: Client) throws -> String {
         switch client {
         case .claudeCode:
-            if let cli = locateClaudeCLI() {
-                // Re-adding fails if the name exists, so remove first (ignore "not found").
-                _ = try? run(cli, ["mcp", "remove", "--scope", "user", Self.serverName])
+            // Re-adding fails if the name exists, so remove first (ignore "not found").
+            if let cli = locateClaudeCLI(), (try? run(cli, ["mcp", "remove", "--scope", "user", Self.serverName])) != nil {
                 let output = try run(cli, ["mcp", "add", "--scope", "user", Self.serverName, "--", serverPath])
                 guard output.status == 0 else { throw Failure(description: "claude mcp add failed: \(output.text)") }
             } else {
-                try editJSON(claudeCodeConfig, backup: true) { root in
-                    var servers = root["mcpServers"] as? [String: Any] ?? [:]
-                    servers[Self.serverName] = ["type": "stdio", "command": serverPath, "args": [String](), "env": [String: String]()]
-                    root["mcpServers"] = servers
-                }
+                // No CLI, or one that does not launch (a Homebrew install can lose its execute bit while an ACL
+                // still makes it look executable): Claude Code reads the same entry from ~/.claude.json.
+                try setServerEntry(["type": "stdio", "command": serverPath, "args": [String](), "env": [String: String]()], in: claudeCodeConfig)
             }
             return "Added to Claude Code for all projects. Start a new Claude Code session to use it."
         case .claudeDesktop:
-            try editJSON(desktopConfig, backup: true) { root in
-                var servers = root["mcpServers"] as? [String: Any] ?? [:]
-                servers[Self.serverName] = ["command": serverPath]
-                root["mcpServers"] = servers
-            }
+            try setServerEntry(["command": serverPath], in: desktopConfig)
             return "Added to Claude Desktop. Quit and reopen Claude to load it."
         }
     }
@@ -148,21 +141,12 @@ public struct ClientInstaller: Sendable {
     public func uninstall(_ client: Client) throws {
         switch client {
         case .claudeCode:
-            if let cli = locateClaudeCLI() {
-                _ = try run(cli, ["mcp", "remove", "--scope", "user", Self.serverName])
-            } else {
-                try editJSON(claudeCodeConfig, backup: true) { root in
-                    var servers = root["mcpServers"] as? [String: Any] ?? [:]
-                    servers.removeValue(forKey: Self.serverName)
-                    root["mcpServers"] = servers
-                }
+            let removedByCLI = locateClaudeCLI().flatMap { try? run($0, ["mcp", "remove", "--scope", "user", Self.serverName]) }?.status == 0
+            if !removedByCLI {
+                try setServerEntry(nil, in: claudeCodeConfig)
             }
         case .claudeDesktop:
-            try editJSON(desktopConfig, backup: true) { root in
-                var servers = root["mcpServers"] as? [String: Any] ?? [:]
-                servers.removeValue(forKey: Self.serverName)
-                root["mcpServers"] = servers
-            }
+            try setServerEntry(nil, in: desktopConfig)
         }
     }
 
@@ -182,6 +166,15 @@ public struct ClientInstaller: Sendable {
         return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     }
 
+    /// Sets (or with nil removes) our entry under `mcpServers`, keeping everything else in the file.
+    private func setServerEntry(_ entry: [String: Any]?, in url: URL) throws {
+        try editJSON(url, backup: true) { root in
+            var servers = root["mcpServers"] as? [String: Any] ?? [:]
+            servers[Self.serverName] = entry
+            root["mcpServers"] = servers
+        }
+    }
+
     private func editJSON(_ url: URL, backup: Bool, _ change: (inout [String: Any]) -> Void) throws {
         var root: [String: Any] = [:]
         if FileManager.default.fileExists(atPath: url.path) {
@@ -192,13 +185,22 @@ public struct ClientInstaller: Sendable {
                 }
                 root = parsed
             }
-            if backup { try? data.write(to: url.appendingPathExtension("bak"), options: .atomic) }
+            if backup {
+                // The config can hold MCP server secrets: the copy gets the original's owner-only permissions.
+                let copy = url.appendingPathExtension("bak")
+                try data.write(to: copy, options: .atomic)
+                let mode = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.posixPermissions] as? Int ?? 0o600
+                try FileManager.default.setAttributes([.posixPermissions: mode & 0o700], ofItemAtPath: copy.path)
+            }
         } else {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         }
         change(&root)
+        let mode = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.posixPermissions] as? Int ?? 0o600
         let output = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        // An atomic write makes a new file with default permissions; keep the original's (owner-only for ~/.claude.json).
         try output.write(to: url, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: url.path)
     }
 
     private func run(_ executable: String, _ arguments: [String]) throws -> (status: Int32, text: String) {
@@ -206,6 +208,7 @@ public struct ClientInstaller: Sendable {
         let pipe = Pipe()
         process.executableURL = URL(filePath: executable)
         process.arguments = arguments
+        process.standardInput = FileHandle.nullDevice
         process.standardOutput = pipe
         process.standardError = pipe
         try process.run()

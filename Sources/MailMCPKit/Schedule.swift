@@ -65,11 +65,11 @@ public final class ScheduleStore: @unchecked Sendable {
     public var snoozes: [Snooze] { file.value.snoozes.sorted { $0.until < $1.until } }
     public var sends: [ScheduledSend] { file.value.sends.sorted { $0.sendAt < $1.sendAt } }
 
-    func add(_ snooze: Snooze) { file.modify { $0.snoozes.append(snooze) } }
-    func add(_ send: ScheduledSend) { file.modify { $0.sends.append(send) } }
+    func add(_ snooze: Snooze) throws { try file.modify { $0.snoozes.append(snooze) } }
+    func add(_ send: ScheduledSend) throws { try file.modify { $0.sends.append(send) } }
 
     func updateSnooze(_ id: String, _ change: (inout Snooze?) -> Void) {
-        file.modify { state in
+        try? file.modify { state in
             guard let index = state.snoozes.firstIndex(where: { $0.id == id }) else { return }
             var item: Snooze? = state.snoozes[index]
             change(&item)
@@ -78,16 +78,17 @@ public final class ScheduleStore: @unchecked Sendable {
     }
 
     /// Removes and returns the sends due by `now`, so no other process sends them too.
+    /// None when the claim cannot be saved: another process would then send them too.
     func claimDueSends(now: Date, maxAttempts: Int) -> [ScheduledSend] {
-        file.modify { state in
+        (try? file.modify { state in
             let due = state.sends.filter { $0.sendAt <= now && $0.attempts < maxAttempts }
             state.sends.removeAll { item in due.contains { $0.id == item.id } }
             return due
-        }
+        }) ?? []
     }
 
-    func removeSend(_ id: String) -> ScheduledSend? {
-        file.modify { state in
+    func removeSend(_ id: String) throws -> ScheduledSend? {
+        try file.modify { state in
             guard let index = state.sends.firstIndex(where: { $0.id == id }) else { return nil }
             return state.sends.remove(at: index)
         }
@@ -161,7 +162,7 @@ extension MailToolbox {
             originalLink: originalLink, sendAt: sendAt)
         let id = Self.newScheduleID("s")
         let files = try schedule.keepFiles(attachments, for: id)
-        schedule.add(ScheduledSend(
+        try schedule.add(ScheduledSend(
             id: id, created: Date(), sendAt: sendAt, client: clientName, tool: tool, from: from, to: to, cc: cc, bcc: bcc,
             subject: subject, body: body, html: html, attachments: files, reply: reply))
         return ToolReply(
@@ -224,7 +225,7 @@ extension MailToolbox {
                 let headers = step.messages.filter { attempted.contains($0.id) }.compactMap(\.messageIDHeader)
                 guard !headers.isEmpty else { continue }
                 let id = Self.newScheduleID("z")
-                schedule.add(Snooze(
+                try schedule.add(Snooze(
                     id: id, created: Date(), until: until, client: self.clientName, accountID: step.source.accountID,
                     mailbox: step.destination!.path, returnTo: step.source.path, messageIDs: headers))
                 snoozeIDs.append(id)
@@ -308,7 +309,7 @@ extension MailToolbox {
         ) { arguments in
             guard let schedule = self.schedule else { throw ToolError("Nothing is scheduled in this server.") }
             let id = try arguments.requiredString("schedule_id")
-            if let send = schedule.removeSend(id) {
+            if let send = try schedule.removeSend(id) {
                 schedule.discardFiles(for: id)
                 return ToolReply(
                     json: .obj([("cancelled", .string(id)), ("subject", .string(send.subject))]),
@@ -342,7 +343,7 @@ extension MailToolbox {
                 var retry = send
                 retry.attempts += 1
                 retry.lastError = "\(error)"
-                schedule.add(retry)
+                try? schedule.add(retry)
                 report.failed.append(send.subject)
             }
         }

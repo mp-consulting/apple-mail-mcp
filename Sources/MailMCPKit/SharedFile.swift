@@ -35,7 +35,7 @@ final class SharedJSONFile<Value: Codable & Sendable>: @unchecked Sendable {
 
     /// Applies `change` to the current contents and saves them; returns what `change` returned.
     @discardableResult
-    func modify<T>(_ change: (inout Value) throws -> T) rethrows -> T {
+    func modify<T>(_ change: (inout Value) throws -> T) throws -> T {
         lock.lock()
         defer { lock.unlock() }
         SharedPaths.ensureDirectory(url.deletingLastPathComponent())
@@ -49,10 +49,9 @@ final class SharedJSONFile<Value: Codable & Sendable>: @unchecked Sendable {
         }
         var current = load()
         let result = try change(&current)
-        if let data = try? Self.encoder.encode(current) {
-            try? data.write(to: url, options: .atomic)
-            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-        }
+        // A change that was not saved did not happen: callers (claiming due sends, the undo journal) must know.
+        try Self.encoder.encode(current).write(to: url, options: .atomic)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         return result
     }
 }

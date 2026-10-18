@@ -198,7 +198,7 @@ extension MailToolbox {
             kind: .compose
         ) { [automation] arguments in
             let store = try self.store
-            guard let id = try arguments.ids("id").first else { throw ToolError("id is required") }
+            let id = try arguments.id("id")
             let replyHTML = try arguments.string("html")
             let body = try arguments.string("body") ?? replyHTML.map { HTMLText.plainText(fromHTML: $0) } ?? ""
             guard !body.isEmpty || replyHTML != nil else { throw ToolError("body or html is required") }
@@ -322,7 +322,7 @@ extension MailToolbox {
             kind: .compose
         ) { [automation] arguments in
             let store = try self.store
-            guard let id = try arguments.ids("id").first else { throw ToolError("id is required") }
+            let id = try arguments.id("id")
             let to = try arguments.strings("to")
             let cc = try arguments.strings("cc")
             let bcc = try arguments.strings("bcc")
@@ -371,7 +371,7 @@ extension MailToolbox {
             kind: .compose
         ) { [automation] arguments in
             let store = try self.store
-            guard let id = try arguments.ids("id").first else { throw ToolError("id is required") }
+            let id = try arguments.id("id")
             let message = try store.message(id: id)
             // A message:// link needs no Apple Events or automation permission.
             if let link = message.mailLink, let url = URL(string: link) {

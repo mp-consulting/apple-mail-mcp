@@ -65,30 +65,49 @@ public struct Settings: Codable, Sendable, Equatable {
 
     public init() {}
 
-    public init(from decoder: Decoder) throws {
-        // Every key is optional so older/newer files keep loading.
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let defaults = Settings()
-        sendPolicy = try container.decodeIfPresent(SendPolicy.self, forKey: .sendPolicy) ?? defaults.sendPolicy
-        allowMailChanges = try container.decodeIfPresent(Bool.self, forKey: .allowMailChanges) ?? defaults.allowMailChanges
-        maxBatchSize = try container.decodeIfPresent(Int.self, forKey: .maxBatchSize) ?? defaults.maxBatchSize
-        writeDirectories = try container.decodeIfPresent([String].self, forKey: .writeDirectories) ?? []
-        attachDirectories = try container.decodeIfPresent([String].self, forKey: .attachDirectories) ?? []
-        ownAddresses = try container.decodeIfPresent([String].self, forKey: .ownAddresses) ?? []
-        ownNames = try container.decodeIfPresent([String].self, forKey: .ownNames) ?? []
-        autoUpdateBodyIndex = try container.decodeIfPresent(Bool.self, forKey: .autoUpdateBodyIndex) ?? defaults.autoUpdateBodyIndex
-        approvalTimeout = try container.decodeIfPresent(Double.self, forKey: .approvalTimeout) ?? defaults.approvalTimeout
-        checkForUpdates = try container.decodeIfPresent(Bool.self, forKey: .checkForUpdates) ?? defaults.checkForUpdates
-        updateInstalledSkills = try container.decodeIfPresent(Bool.self, forKey: .updateInstalledSkills) ?? defaults.updateInstalledSkills
-        notifyNeedsReply = try container.decodeIfPresent(Bool.self, forKey: .notifyNeedsReply) ?? defaults.notifyNeedsReply
-        approveChangesAbove = try container.decodeIfPresent(Int.self, forKey: .approveChangesAbove) ?? defaults.approveChangesAbove
+    /// What applies when the settings file exists but cannot be read: nothing is sent or changed
+    /// until the user fixes it, rather than falling back to the permissive defaults.
+    public static var failClosed: Settings {
+        var settings = Settings()
+        settings.sendPolicy = .never
+        settings.allowMailChanges = false
+        return settings
     }
 
-    public static func load(from url: URL = SharedPaths.settings) -> Settings {
-        guard let data = try? Data(contentsOf: url), let settings = try? JSONDecoder().decode(Settings.self, from: data) else {
-            return Settings()
+    public init(from decoder: Decoder) throws {
+        // Every key is optional so older/newer files keep loading, and a key with the wrong type costs
+        // only that key. The two safety switches fail closed instead of falling back to their defaults.
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = Settings()
+        func field<T: Decodable>(_ key: CodingKeys, _ fallback: T, unreadable: T? = nil) -> T {
+            guard container.contains(key) else { return fallback }
+            do { return try container.decodeIfPresent(T.self, forKey: key) ?? fallback } catch { return unreadable ?? fallback }
         }
-        return settings
+        sendPolicy = field(.sendPolicy, defaults.sendPolicy, unreadable: .never)
+        allowMailChanges = field(.allowMailChanges, defaults.allowMailChanges, unreadable: false)
+        maxBatchSize = field(.maxBatchSize, defaults.maxBatchSize)
+        writeDirectories = field(.writeDirectories, [])
+        attachDirectories = field(.attachDirectories, [])
+        ownAddresses = field(.ownAddresses, [])
+        ownNames = field(.ownNames, [])
+        autoUpdateBodyIndex = field(.autoUpdateBodyIndex, defaults.autoUpdateBodyIndex)
+        approvalTimeout = field(.approvalTimeout, defaults.approvalTimeout)
+        checkForUpdates = field(.checkForUpdates, defaults.checkForUpdates)
+        updateInstalledSkills = field(.updateInstalledSkills, defaults.updateInstalledSkills)
+        notifyNeedsReply = field(.notifyNeedsReply, defaults.notifyNeedsReply)
+        approveChangesAbove = field(.approveChangesAbove, defaults.approveChangesAbove)
+    }
+
+    /// The defaults when there is no file; `failClosed` when the file exists but is not valid settings JSON.
+    public static func load(from url: URL = SharedPaths.settings) -> Settings {
+        read(from: url) ?? failClosed
+    }
+
+    /// nil when the file exists but cannot be read or decoded.
+    static func read(from url: URL) -> Settings? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return Settings() }
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(Settings.self, from: data)
     }
 
     public func save(to url: URL = SharedPaths.settings) throws {
@@ -104,8 +123,10 @@ public final class SettingsProvider: @unchecked Sendable {
     private let url: URL
     private let overrides: (inout Settings) -> Void
     private let lock = NSLock()
+    private var base = Settings()
     private var cached = Settings()
     private var cachedModification: Date?
+    private var loaded = false
 
     public init(url: URL = SharedPaths.settings, overrides: @escaping @Sendable (inout Settings) -> Void = { _ in }) {
         self.url = url
@@ -116,11 +137,14 @@ public final class SettingsProvider: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         let modified = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
-        if modified != cachedModification || cachedModification == nil {
-            var settings = Settings.load(from: url)
+        if !loaded || modified != cachedModification {
+            // A file caught mid-write or broken by hand keeps the last good settings; with none yet, fail closed.
+            var settings = Settings.read(from: url) ?? (loaded ? base : Settings.failClosed)
+            base = settings
             overrides(&settings)
             cached = settings
-            cachedModification = modified ?? Date.distantPast
+            cachedModification = modified
+            loaded = true
         }
         return cached
     }

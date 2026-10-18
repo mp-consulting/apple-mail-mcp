@@ -583,6 +583,23 @@ final class UnsubscribeTests {
         #expect(UnsubscribeMethod.from(listUnsubscribe: nil, post: nil) == .none)
     }
 
+    @Test func unsubscribeEmailsCannotCarryTheSendersText() async throws {
+        #expect(UnsubscribeMethod.from(listUnsubscribe: "<mailto:a@x.test%2Cb@y.test>", post: nil) == .none)
+        #expect(UnsubscribeMethod.from(listUnsubscribe: "<mailto:a@x.test?subject=\(String(repeating: "x", count: 200))&body=pay>", post: nil)
+            == .email(address: "a@x.test", subject: "unsubscribe", body: "unsubscribe"))
+        let forged = try list(["List-Unsubscribe: <mailto:cfo@victim.test?subject=Re:%20wire>"])
+        let json = try await h.json("unsubscribe", ["ids": [.int(Int(forged))]])
+        #expect((json["messages"] as? [[String: Any]])?.first?["method"] as? String == "none")
+        #expect(h.automation.calls.isEmpty)
+    }
+
+    @Test func oneClickStaysOnThePublicInternet() async {
+        for host in ["127.0.0.1", "localhost", "10.1.2.3", "192.168.1.1", "169.254.169.254", "[::1]", "router.local"] {
+            await #expect(throws: (any Error).self) { _ = try await MailToolbox.defaultUnsubscribePoster(URL(string: "https://\(host)/u")!) }
+        }
+        #expect(UnsubscribeMethod.isPublicHost("8.8.8.8"))
+    }
+
     @Test func oneClickNeedsTheSendersSignature() async throws {
         let posts = Posts()
         h.toolbox.unsubscribePoster = { url in
@@ -603,7 +620,7 @@ final class UnsubscribeTests {
     }
 
     @Test func emailsTheListAndFollowsTheSendPolicy() async throws {
-        let id = try list(["List-Unsubscribe: <mailto:leave@letters.test?subject=unsubscribe%20me>"])
+        let id = try list([signed, "List-Unsubscribe: <mailto:leave@letters.test?subject=unsubscribe%20me&body=wire%20the%20money>"])
         let json = try await h.json("unsubscribe", ["ids": [.int(Int(id))]])
         #expect(json["unsubscribed"] as? Int == 1)
         #expect(h.automation.calls == [.compose(OutgoingMessage(to: ["leave@letters.test"], subject: "unsubscribe me", body: "unsubscribe"), .send)])

@@ -313,15 +313,18 @@ public final class BodyIndex: BodySearchIndex, @unchecked Sendable {
         var covered = try coveredThrough()
         let totalNew = try store.countMessages(after: covered)
         if try metaInt("attachments_version") ?? 0 < Self.attachmentsVersion { try queueAttachmentBackfill(from: store) }
-        // Words already in `vocab` need no prefix rows; loaded once per update.
-        var knownWords = Set(try withDB { db in try db.all("SELECT DISTINCT word FROM vocab") { $0.int(0) } })
-
         // Retry bodies that were not downloaded last time (at most once per `retryAfter`).
         let retry = try withDB { db in
             try db.all(
                 "SELECT rowid FROM pending WHERE attempts < 30 AND last_attempt < ? LIMIT ?",
                 [.int(Int64(Date().timeIntervalSince1970 - retryAfter) + (retryAfter == 0 ? 1 : 0)), .int(Int64(batchSize))]
             ) { $0.int(0) }
+        }
+        // Words already in `vocab` need no prefix rows; loaded once per update, and only when there is
+        // something to index (the vocabulary of a large mailbox runs to millions of rows).
+        var knownWords: Set<Int64> = []
+        if !retry.isEmpty || covered < latest {
+            knownWords = Set(try withDB { db in try db.all("SELECT DISTINCT word FROM vocab") { $0.int(0) } })
         }
         if !retry.isEmpty {
             let candidates = try store.indexCandidates(ids: retry)

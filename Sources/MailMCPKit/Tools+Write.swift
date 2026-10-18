@@ -35,7 +35,7 @@ extension MailToolbox {
     }
 
     /// A path in `directory` for `name` that does not overwrite anything (unless asked).
-    static func destination(in directory: String, name: String, overwrite: Bool) -> String {
+    static func destination(in directory: String, name: String, overwrite: Bool) throws -> String {
         let base = (directory as NSString).appendingPathComponent(name)
         guard !overwrite, FileManager.default.fileExists(atPath: base) else { return base }
         let stem = (name as NSString).deletingPathExtension
@@ -44,7 +44,7 @@ extension MailToolbox {
             let candidate = (directory as NSString).appendingPathComponent(ext.isEmpty ? "\(stem) \(n)" : "\(stem) \(n).\(ext)")
             if !FileManager.default.fileExists(atPath: candidate) { return candidate }
         }
-        return base
+        throw ToolError("\(directory) already holds \(name) and 998 numbered copies; pass overwrite or choose another folder")
     }
 
     var saveAttachment: ToolDefinition {
@@ -62,7 +62,7 @@ extension MailToolbox {
             kind: .fileWrite
         ) { arguments in
             let store = try self.store
-            guard let id = try arguments.ids("id").first else { throw ToolError("id is required") }
+            let id = try arguments.id("id")
             let directory = try self.pathGuard.checkWrite(try arguments.string("directory") ?? "~/Downloads")
             let overwrite = try arguments.bool("overwrite") ?? false
             let detail = try store.detail(id: id)
@@ -74,7 +74,7 @@ extension MailToolbox {
             for target in targets {
                 let (info, data) = try store.attachmentData(messageID: id, attachment: target)
                 let name = Self.safeFilename(info.filename, fallback: "attachment-\(info.partID)")
-                let path = Self.destination(in: directory, name: name, overwrite: overwrite)
+                let path = try Self.destination(in: directory, name: name, overwrite: overwrite)
                 _ = try self.pathGuard.checkWrite(path)
                 try data.write(to: URL(filePath: path), options: .atomic)
                 Self.quarantine(path)
@@ -104,6 +104,7 @@ extension MailToolbox {
             let markdown = try arguments.string("format") == "markdown"
             try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
             let day = DateFormatter()
+            day.locale = Locale(identifier: "en_US_POSIX")
             day.dateFormat = "yyyy-MM-dd"
             var written: [JSON] = []
             var failed: [JSON] = []
@@ -111,7 +112,8 @@ extension MailToolbox {
                 do {
                     let summary = try store.message(id: id)
                     let stem = Self.safeFilename("\(day.string(from: summary.dateReceived)) \(summary.subject.prefix(80)) [\(id)]", fallback: "message-\(id)")
-                    let path = Self.destination(in: directory, name: stem + (markdown ? ".md" : ".eml"), overwrite: false)
+                    let path = try self.pathGuard.checkWrite(
+                        try Self.destination(in: directory, name: stem + (markdown ? ".md" : ".eml"), overwrite: false))
                     if markdown {
                         let detail = try store.detail(id: id)
                         var text = "# \(summary.subject)\n\n"

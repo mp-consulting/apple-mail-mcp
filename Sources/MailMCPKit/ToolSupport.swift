@@ -42,12 +42,19 @@ public struct Arguments: Sendable {
         switch values[key] {
         case nil, .null: return nil
         case .int(let i): return i
-        case .double(let d) where d.rounded() == d: return Int(d)
+        case .double(let d):
+            guard let i = Int(exactly: d) else { throw ToolError("\(key) must be an integer") }
+            return i
         case .string(let s):
             guard let i = Int(s.trimmingCharacters(in: .whitespaces)) else { throw ToolError("\(key) must be an integer") }
             return i
         default: throw ToolError("\(key) must be an integer")
         }
+    }
+
+    /// An integer clamped to `range` (models send 0, negatives and huge counts); `fallback` when absent.
+    public func int(_ key: String, default fallback: Int, in range: ClosedRange<Int>) throws -> Int {
+        min(range.upperBound, max(range.lowerBound, try int(key) ?? fallback))
     }
 
     public func bool(_ key: String) throws -> Bool? {
@@ -94,7 +101,9 @@ public struct Arguments: Sendable {
         for value in raw {
             switch value {
             case .int(let i): out.append(Int64(i))
-            case .double(let d) where d.rounded() == d: out.append(Int64(d))
+            case .double(let d):
+                guard let i = Int64(exactly: d) else { throw ToolError("invalid message id \(d)") }
+                out.append(i)
             case .string(let s):
                 guard let i = Int64(s.trimmingCharacters(in: .whitespaces)) else { throw ToolError("invalid message id \"\(s)\"") }
                 out.append(i)
@@ -103,6 +112,14 @@ public struct Arguments: Sendable {
         }
         var seen = Set<Int64>()
         return out.filter { seen.insert($0).inserted }
+    }
+
+    /// Exactly one message id: a list would otherwise act on its first id alone, silently.
+    public func id(_ key: String) throws -> Int64 {
+        let ids = try ids(key)
+        guard let id = ids.first else { throw ToolError("\(key) is required") }
+        guard ids.count == 1 else { throw ToolError("\(key) takes one message id, not \(ids.count)") }
+        return id
     }
 
     /// `YYYY-MM-DD` (start or end of that local day) or a full ISO 8601 timestamp.

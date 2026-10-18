@@ -152,12 +152,16 @@ public final class MailToolbox: @unchecked Sendable {
         guard let store = try? self.store else { return }
         let extra = settings.current.ownAddresses
         let accounts = (try? store.accounts()) ?? []
-        if extra != registeredSettingsAddresses, let first = accounts.first {
-            store.registerOwnAddresses(extra, accountID: first.id)
-            registeredSettingsAddresses = extra
+        let changed = lock.withLock {
+            defer { registeredSettingsAddresses = extra }
+            return extra != registeredSettingsAddresses
         }
-        guard !lock.withLock({ askedMailForAddresses }) else { return }
-        lock.withLock { askedMailForAddresses = true }
+        if changed, let first = accounts.first { store.registerOwnAddresses(extra, accountID: first.id) }
+        let firstAsk = lock.withLock {
+            defer { askedMailForAddresses = true }
+            return !askedMailForAddresses
+        }
+        guard firstAsk else { return }
         // Only ask Mail when automation is already allowed and Mail is running: never prompt for a read.
         if let live = automation as? MailAutomation, live.permissionStatus(askIfNeeded: false) == 0,
            let infos = try? await automation.accounts()

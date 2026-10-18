@@ -29,13 +29,18 @@ public struct PathGuard: Sendable {
         ["Library", "Application Support"], ["Library", "Application Scripts"], ["Library", "Scripts"],
         ["Library", "Preferences"], ["Library", "Keychains"], ["Library", "Mail"], ["Library", "Services"],
         ["Library", "Containers"], ["Library", "Group Containers"], ["Library", "Input Methods"],
-        ["Library", "PreferencePanes"], ["Library", "QuickLook"], ["Library", "Spotlight"],
+        ["Library", "PreferencePanes"], ["Library", "QuickLook"], ["Library", "Spotlight"], ["Library", "Workflows"],
+        ["Library", "Python"],
     ]
     static let deniedWriteAbsolute = [
         "/Library/LaunchAgents", "/Library/LaunchDaemons", "/Library/StartupItems", "/Library/Application Support",
         "/Library/Preferences", "/Library/Scripts", "/etc", "/private/etc", "/usr/local/bin", "/usr/local/sbin",
-        "/opt/homebrew/bin", "/opt/homebrew/sbin", "/System", "/usr/bin", "/bin", "/sbin",
+        "/opt/homebrew/bin", "/opt/homebrew/sbin", "/opt/homebrew/lib", "/usr/local/lib", "/System", "/usr/bin", "/bin", "/sbin",
     ]
+    /// Folder names anywhere on a path whose contents run when a tool starts (Python, git hooks via husky, editors).
+    static let deniedWriteComponents: Set<String> = ["site-packages", "dist-packages", ".husky", ".vscode", ".idea"]
+    /// File types that load as code wherever they land (Python path hooks, native libraries).
+    static let deniedWriteExtensions: Set<String> = ["pth", "dylib", "so"]
     static let deniedReadHome: [[String]] = [
         [".ssh"], [".gnupg"], [".aws"], [".azure"], [".kube"], [".docker"], [".netrc"], [".git-credentials"],
         [".npmrc"], [".pypirc"], [".password-store"], [".config", "gh"], [".config", "gcloud"],
@@ -48,6 +53,10 @@ public struct PathGuard: Sendable {
         // Whole-mailbox exfiltration: Mail's store, Messages, the accounts database, our own index.
         ["Library", "Mail"], ["Library", "Messages"], ["Library", "Accounts"],
         ["Library", "Application Support", "apple-mail-mcp"],
+        // MCP config with server secrets, and the personal data of other apps (Notes, Contacts, Calendar, Photos).
+        ["Library", "Application Support", "Claude"], ["Library", "Application Support", "AddressBook"],
+        ["Library", "Group Containers"], ["Library", "Containers"], ["Library", "Calendars"],
+        ["Library", "Preferences"], ["Pictures", "Photos Library.photoslibrary"],
     ]
 
     static func resolve(_ path: String) -> String {
@@ -92,6 +101,10 @@ public struct PathGuard: Sendable {
             if ["hooks", "config"].contains(parts[index + 1]) { return "git hooks and git config run code" }
         }
         if parts.last == ".envrc" { return ".envrc files run code" }
+        if let part = parts.first(where: Self.deniedWriteComponents.contains) { return "\(part) folders hold code that tools run" }
+        if let name = parts.last, Self.deniedWriteExtensions.contains((name as NSString).pathExtension) {
+            return ".\((name as NSString).pathExtension) files load as code"
+        }
         if let relative = Self.relative(path, to: home), let first = relative.first, first.hasPrefix(".") {
             return "shell startup, config and credential files in your home folder"
         }
@@ -128,6 +141,11 @@ public struct PathGuard: Sendable {
         let resolved = Self.resolve(path)
         if Self.isEnvSecrets((resolved as NSString).lastPathComponent) {
             throw Denied(description: "Cannot attach .env secrets files: \(resolved)")
+        }
+        // Every dotfile and dot-folder of the home folder: shell history, tool configs and tokens
+        // (~/.claude.json, ~/.config, ~/.vault-token…) that no one means to email.
+        if let relative = Self.relative(resolved, to: home), relative.first?.hasPrefix(".") == true {
+            throw Denied(description: "Cannot attach configuration, history or credential files from your home folder: \(resolved)")
         }
         if Self.isUnder(resolved, homeRoots(Self.deniedReadHome)) {
             throw Denied(description: "Cannot attach protected files (keys, credentials, keychains, browser profiles, Mail data): \(resolved)")

@@ -83,14 +83,14 @@ public final class ChangeJournal: @unchecked Sendable {
 
     public func record(_ record: ChangeRecord) {
         guard !record.items.isEmpty else { return }
-        file.modify { records in
+        try? file.modify { records in
             records.append(record)
             if records.count > limit { records.removeFirst(records.count - limit) }
         }
     }
 
     public func markUndone(_ id: String, at date: Date = Date()) {
-        file.modify { records in
+        try? file.modify { records in
             if let index = records.firstIndex(where: { $0.id == id }) { records[index].undone = date }
         }
     }
@@ -179,7 +179,7 @@ extension MailToolbox {
         ) { arguments in
             let records = self.changes?.records() ?? []
             if (try arguments.string("action") ?? "list") == "list" {
-                let limit = try arguments.int("limit") ?? 10
+                let limit = try arguments.int("limit", default: 10, in: 1...200)
                 return ToolReply(
                     json: .obj([("changes", .array(records.prefix(limit).map(Self.changeJSON)))]),
                     summary: "\(min(limit, records.count)) changes")

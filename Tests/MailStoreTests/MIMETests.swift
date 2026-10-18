@@ -7,6 +7,32 @@ import Testing
 struct MIMETests {
     func parse(_ text: String) -> MIMEPart { MIME.parse(Data(text.utf8)) }
 
+    @Test func hostileNestingIsBounded() {
+        // 5,000 nested multiparts would overflow a worker thread's stack without a depth limit.
+        let levels = 5_000
+        var text = ""
+        for n in 0..<levels { text += "Content-Type: multipart/mixed; boundary=b\(n)\r\n\r\n--b\(n)\r\n" }
+        text += "Content-Type: text/plain\r\n\r\nhi\r\n"
+        let part = parse(text)
+        func depth(_ p: MIMEPart) -> Int { p.children.map(depth).max().map { $0 + 1 } ?? 0 }
+        #expect(depth(part) <= MIME.maxDepth)
+    }
+
+    @Test func decodedSizeMatchesDecoding() {
+        for payload in ["", "a", "ab", "abc", "abcd", String(repeating: "attachment bytes ", count: 300)] {
+            let encoded = Data(payload.utf8).base64EncodedString(options: [.lineLength76Characters, .endLineWithCarriageReturn])
+            let part = parse("Content-Type: application/pdf\r\nContent-Transfer-Encoding: base64\r\n\r\n\(encoded)\r\n")
+            #expect(part.decodedSize == part.decodedBody().count, "\(payload.count) bytes")
+        }
+    }
+
+    @Test func unterminatedEncodedWordsStayLinear() {
+        let header = String(repeating: "=?a?B?xxxx ", count: 20_000)
+        let start = Date()
+        #expect(MIME.decodeEncodedWords(header) == header)
+        #expect(Date().timeIntervalSince(start) < 2)
+    }
+
     @Test func singlePartPlainText() {
         let part = parse("Subject: Hi\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there\r\n")
         #expect(part.contentType == "text/plain")

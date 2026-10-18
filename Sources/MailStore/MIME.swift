@@ -68,6 +68,26 @@ public struct MIMEPart: Sendable {
         }
     }
 
+    /// Decoded size without decoding: base64 is 3 bytes per 4 characters, less padding. Reading a message
+    /// lists attachment sizes, and decoding a 25 MB attachment for that alone is wasted work.
+    public var decodedSize: Int {
+        switch transferEncoding {
+        case "base64":
+            var characters = 0
+            var padding = 0
+            for byte in rawBody {
+                switch byte {
+                case 0x0D, 0x0A, 0x20, 0x09: continue
+                case UInt8(ascii: "="): padding += 1
+                default: characters += 1
+                }
+            }
+            return max(0, (characters + padding) / 4 * 3 - min(padding, 2))
+        case "quoted-printable": return decodedBody().count
+        default: return rawBody.count
+        }
+    }
+
     /// Body decoded to text using the part's charset.
     public func text() -> String {
         MIME.decodeText(decodedBody(), charset: parameters["charset"])
@@ -95,10 +115,15 @@ public enum MIME {
     /// Parses an RFC 822 message.
     public static func parse(_ data: Data) -> MIMEPart {
         let bytes = [UInt8](data)
-        return parseEntity(bytes[...], partID: "1", isTopLevel: true)
+        return parseEntity(bytes[...], partID: "1", isTopLevel: true, depth: 0)
     }
 
-    private static func parseEntity(_ bytes: ArraySlice<UInt8>, partID: String, isTopLevel: Bool) -> MIMEPart {
+    /// Real mail nests a few levels (mixed → alternative → related); a hostile message nests thousands to
+    /// exhaust the stack and rescan the body at every level. Deeper parts are kept as opaque data.
+    static let maxDepth = 16
+    static let maxPartsPerMultipart = 500
+
+    private static func parseEntity(_ bytes: ArraySlice<UInt8>, partID: String, isTopLevel: Bool, depth: Int) -> MIMEPart {
         let (headerBytes, body) = splitHeaders(bytes)
         let headers = parseHeaders(headerBytes)
         var contentType = "text/plain"
@@ -112,13 +137,13 @@ public enum MIME {
         var part = MIMEPart(
             headers: headers, partID: partID, contentType: contentType, parameters: parameters,
             children: [], rawBody: Data())
-        if contentType.hasPrefix("multipart/"), let boundary = parameters["boundary"], !boundary.isEmpty {
-            let pieces = splitMultipart(body, boundary: boundary)
+        if contentType.hasPrefix("multipart/"), let boundary = parameters["boundary"], !boundary.isEmpty, depth < maxDepth {
+            let pieces = splitMultipart(body, boundary: boundary).prefix(maxPartsPerMultipart)
             // IMAP numbering: children of the top-level multipart are 1, 2, …;
             // children of a nested multipart at section N are N.1, N.2, ….
             part.children = pieces.enumerated().map { index, piece in
                 let childID = isTopLevel ? "\(index + 1)" : "\(partID).\(index + 1)"
-                return parseEntity(piece, partID: childID, isTopLevel: false)
+                return parseEntity(piece, partID: childID, isTopLevel: false, depth: depth + 1)
             }
         } else {
             part.rawBody = Data(body)
@@ -411,7 +436,7 @@ public enum MIME {
         var remaining = Substring(text)
         var lastWasEncoded = false
         var pendingWhitespace = ""
-        while let start = remaining.range(of: "=?") {
+        while let start = firstRange(of: "=", "?", in: remaining) {
             let before = remaining[..<start.lowerBound]
             let afterStart = remaining[start.upperBound...]
             guard let word = parseEncodedWord(afterStart) else {
@@ -435,15 +460,30 @@ public enum MIME {
         return result
     }
 
+    /// The first `a` immediately followed by `b`. Linear and Foundation-free: `Substring.range(of:)` bridges
+    /// the whole remaining text on every call, which made long headers quadratic.
+    private static func firstRange(of a: Character, _ b: Character, in text: Substring) -> Range<Substring.Index>? {
+        var from = text.startIndex
+        while let found = text[from...].firstIndex(of: a) {
+            let next = text.index(after: found)
+            if next < text.endIndex, text[next] == b { return found..<text.index(after: next) }
+            from = next
+        }
+        return nil
+    }
+
     private static func parseEncodedWord(_ text: Substring) -> (decoded: String, rest: Substring)? {
-        // charset?encoding?payload?=
-        guard let q1 = text.firstIndex(of: "?") else { return nil }
+        // charset?encoding?payload?=. Each search is bounded: an unterminated "=?" must not scan the rest of a
+        // long header, once per "=?" (RFC 2047 caps an encoded word at 75 characters; mailers exceed it a little).
+        guard let q1 = text.prefix(80).firstIndex(of: "?") else { return nil }
         let charsetPart = text[..<q1]
         let afterCharset = text[text.index(after: q1)...]
-        guard let q2 = afterCharset.firstIndex(of: "?") else { return nil }
+        guard let q2 = afterCharset.prefix(3).firstIndex(of: "?") else { return nil }
         let encoding = afterCharset[..<q2].uppercased()
         let afterEncoding = afterCharset[afterCharset.index(after: q2)...]
-        guard let end = afterEncoding.range(of: "?=") else { return nil }
+        // An encoded word holds no whitespace, so the search for its end stops at the first space.
+        let word = afterEncoding.prefix(2000).prefix { !$0.isWhitespace }
+        guard let end = firstRange(of: "?", "=", in: word) else { return nil }
         let payload = afterEncoding[..<end.lowerBound]
         guard !charsetPart.isEmpty, !charsetPart.contains(where: \.isWhitespace), !payload.contains(" ") else { return nil }
         // RFC 2231 language suffix: charset*lang.

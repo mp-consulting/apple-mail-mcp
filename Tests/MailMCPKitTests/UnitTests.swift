@@ -29,6 +29,8 @@ struct PathGuardTests {
         for path in [
             "/.zshrc", "/.ssh/authorized_keys", "/Library/LaunchAgents/x.plist", "/code/.git/hooks/pre-commit",
             "/Downloads/../.zprofile", "/Library/Mail/V10/x", "/project/.envrc",
+            "/Library/Python/3.9/lib/python/site-packages/evil.pth", "/Downloads/hook.pth", "/code/.husky/pre-commit",
+            "/code/.vscode/tasks.json", "/Downloads/libx.dylib",
         ] {
             #expect(throws: PathGuard.Denied.self, "\(path)") { try guardian.checkWrite(home + path) }
         }
@@ -54,7 +56,14 @@ struct PathGuardTests {
 
     @Test func attachments() throws {
         #expect(try guardian.checkAttachment(home + "/Documents/report.pdf").hasSuffix("report.pdf"))
-        for path in ["/.ssh/id_ed25519", "/Documents/.env", "/Library/Mail/V10", "/Documents/missing.pdf", "/Documents"] {
+        for name in [".claude.json", ".zsh_history", ".config/tool/token"] {
+            try FileManager.default.createDirectory(atPath: home + "/" + (name as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+            FileManager.default.createFile(atPath: home + "/" + name, contents: Data("secret".utf8))
+        }
+        for path in [
+            "/.ssh/id_ed25519", "/Documents/.env", "/Library/Mail/V10", "/Documents/missing.pdf", "/Documents",
+            "/.claude.json", "/.zsh_history", "/.config/tool/token", "/Library/Application Support/Claude/claude_desktop_config.json",
+        ] {
             #expect(throws: PathGuard.Denied.self, "\(path)") { try guardian.checkAttachment(home + path) }
         }
         let restricted = PathGuard(attachAllowlist: [home + "/Downloads"], home: home)
@@ -135,6 +144,35 @@ struct SharedStateTests {
         #expect(settings.allowMailChanges)
         #expect(settings.maxBatchSize == 50)
         #expect(Settings.load(from: directory.appending(path: "missing.json")) == Settings())
+    }
+
+    @Test func badSettingsFailClosed() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appending(path: "settings.json")
+        // One mistyped key costs only that key.
+        try Data(#"{"sendPolicy":"confirm","maxBatchSize":"50"}"#.utf8).write(to: url)
+        #expect(Settings.load(from: url).sendPolicy == .confirm)
+        #expect(Settings.load(from: url).maxBatchSize == 50)
+        // An unreadable safety switch blocks instead of allowing.
+        try Data(#"{"sendPolicy":"sometimes","allowMailChanges":"yes"}"#.utf8).write(to: url)
+        #expect(Settings.load(from: url).sendPolicy == .never)
+        #expect(!Settings.load(from: url).allowMailChanges)
+        // A broken file: nothing is sent or changed.
+        try Data("{not json".utf8).write(to: url)
+        #expect(Settings.load(from: url) == .failClosed)
+    }
+
+    @Test func settingsProviderKeepsLastGoodSettings() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appending(path: "settings.json")
+        var settings = Settings()
+        settings.sendPolicy = .confirm
+        try settings.save(to: url)
+        let provider = SettingsProvider(url: url)
+        #expect(provider.current.sendPolicy == .confirm)
+        try Data("{trunc".utf8).write(to: url)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(5)], ofItemAtPath: url.path)
+        #expect(provider.current.sendPolicy == .confirm)
     }
 
     @Test func settingsProviderAppliesOverridesAndReloads() throws {

@@ -23,7 +23,7 @@ extension MailToolbox {
             let accountID = try self.resolveAccountID(arguments)
             var query = MessageQuery()
             query.mailboxIDs = try self.draftMailboxes().filter { accountID == nil || $0.accountID == accountID }.map(\.id)
-            query.limit = min(200, max(1, try arguments.int("limit") ?? 20))
+            query.limit = try arguments.int("limit", default: 20, in: 1...200)
             guard !query.mailboxIDs.isEmpty else {
                 return ToolReply(json: .obj([("drafts", .array([]))]), summary: "no Drafts mailbox")
             }
@@ -57,7 +57,7 @@ extension MailToolbox {
             kind: .compose
         ) { [automation] arguments in
             let store = try self.store
-            guard let id = try arguments.ids("id").first else { throw ToolError("id is required") }
+            let id = try arguments.id("id")
             let draft = try store.detail(id: id)
             guard let mailbox = try store.mailbox(id: draft.summary.mailboxID), mailbox.role == .drafts else {
                 throw ToolError("Message \(id) is not in a Drafts mailbox.")

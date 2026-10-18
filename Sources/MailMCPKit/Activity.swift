@@ -73,18 +73,49 @@ public final class ActivityLog: @unchecked Sendable {
         close(fd)
     }
 
-    /// Most recent entries first.
+    /// Most recent entries first. Reads only the end of the log, growing the window until it holds `limit` lines.
     public func recent(limit: Int = 50) -> [ActivityEntry] {
         var entries: [ActivityEntry] = []
         // The current file, then the rotated one if more entries are needed.
         for file in [url, url.appendingPathExtension("1")] {
-            guard entries.count < limit, let data = try? Data(contentsOf: file) else { continue }
-            for line in data.split(separator: 0x0A).reversed() {
+            guard entries.count < limit else { break }
+            for line in Self.lastLines(of: file, count: limit - entries.count) {
                 if let entry = try? Self.decoder.decode(ActivityEntry.self, from: line) { entries.append(entry) }
                 if entries.count >= limit { break }
             }
         }
         return entries
+    }
+
+    /// Size and modification date of the log and its rotated copy: when equal, `recent` returns the same entries.
+    public struct Stamp: Equatable, Sendable {
+        fileprivate var parts: [[Int64]]
+    }
+
+    public func stamp() -> Stamp {
+        Stamp(parts: [url, url.appendingPathExtension("1")].map { file in
+            var info = stat()
+            guard stat(file.path, &info) == 0 else { return [] }
+            return [Int64(info.st_size), Int64(info.st_mtimespec.tv_sec), Int64(info.st_mtimespec.tv_nsec), Int64(info.st_ino)]
+        })
+    }
+
+    /// Up to `count` complete lines from the end of `file`, newest first.
+    static func lastLines(of file: URL, count: Int) -> [Data] {
+        guard count > 0, let handle = try? FileHandle(forReadingFrom: file) else { return [] }
+        defer { try? handle.close() }
+        guard let size = try? handle.seekToEnd(), size > 0 else { return [] }
+        var window: UInt64 = 32 * 1024
+        while true {
+            let start = size > window ? size - window : 0
+            guard (try? handle.seek(toOffset: start)) != nil, let data = try? handle.read(upToCount: Int(size - start))
+            else { return [] }
+            var lines = data.split(separator: 0x0A, omittingEmptySubsequences: true)
+            // Mid-file, the first line is cut off.
+            if start > 0, !lines.isEmpty { lines.removeFirst() }
+            if lines.count >= count || start == 0 { return lines.suffix(count).reversed().map { Data($0) } }
+            window *= 4
+        }
     }
 }
 
@@ -180,8 +211,10 @@ public final class ApprovalCenter: @unchecked Sendable {
         return Date().timeIntervalSince(modified) < maxAge
     }
 
-    /// Called by the menu bar app every few seconds.
+    /// Called by the menu bar app every few seconds. Only the modification date counts, so once the file
+    /// exists a beat just touches it.
     public func beat() {
+        if utimes(heartbeat.path, nil) == 0 { return }
         SharedPaths.ensureDirectory(heartbeat.deletingLastPathComponent())
         try? Data(String(ProcessInfo.processInfo.processIdentifier).utf8).write(to: heartbeat, options: .atomic)
     }

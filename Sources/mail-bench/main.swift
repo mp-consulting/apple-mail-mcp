@@ -130,7 +130,9 @@ func storeScenarios(store: MailStore, index: BodyIndex?, inbox: [Int64], threadI
     return list
 }
 
-func runStoreBenchmarks(store: MailStore, index: BodyIndex?, runs: Int, title: String) throws -> String {
+func runStoreBenchmarks(
+    store: MailStore, index: BodyIndex?, runs: Int, title: String, extra: [StoreScenario] = []
+) throws -> String {
     let inbox = try store.mailboxes().filter { $0.role == .inbox }.map(\.id)
     var latest = MessageQuery()
     latest.limit = 200
@@ -140,13 +142,24 @@ func runStoreBenchmarks(store: MailStore, index: BodyIndex?, runs: Int, title: S
         break
     }
     var lines = ["### \(title)", "", "| Operation | Median | Min | Max |", "|---|---:|---:|---:|"]
-    for scenario in storeScenarios(store: store, index: index, inbox: inbox, threadID: threadID) {
+    for scenario in storeScenarios(store: store, index: index, inbox: inbox, threadID: threadID) + extra {
         _ = try? scenario.run()  // warm-up
         let samples = try measure(runs: runs, scenario.run)
         lines.append("| \(scenario.name) | \(format(median(samples))) | \(format(samples.min() ?? .nan)) | \(format(samples.max() ?? .nan)) |")
         FileHandle.standardError.write(Data("  \(scenario.name): \(format(median(samples)))\n".utf8))
     }
     return lines.joined(separator: "\n")
+}
+
+/// What a tool call costs right after Mail commits (synthetic stores only: it writes to the database).
+/// With Mail running, `PRAGMA data_version` moves on nearly every call.
+func mailWriteScenario(store: MailStore) throws -> StoreScenario {
+    let writer = try SQLiteConnection(path: store.location.envelopeIndex.path, readOnly: false)
+    return StoreScenario(name: "Mailboxes after a Mail write") {
+        try writer.execute("UPDATE messages SET read = 1 - read WHERE ROWID = (SELECT MAX(ROWID) FROM messages)")
+        _ = try store.mailboxes()
+        _ = try store.accounts()
+    }
 }
 
 // MARK: MCP comparison
@@ -394,7 +407,9 @@ case "synthetic":
         (\(String(format: "%.0f", size_mb)) MB, \(String(format: "%.0f", Double(built.indexed) / max(indexTime / 1000, 0.001))) messages/s).
 
 
-        """ + (try runStoreBenchmarks(store: store, index: index, runs: options.int("runs", 9), title: "MailStore"))
+        """ + (try runStoreBenchmarks(
+            store: store, index: index, runs: options.int("runs", 9), title: "MailStore",
+            extra: [mailWriteScenario(store: store)]))
 
 case "compare":
     report = try await runComparison(options: options)

@@ -262,7 +262,7 @@ public final class BodyIndex: BodySearchIndex, @unchecked Sendable {
 
     // MARK: Status
 
-    public struct Status: Codable, Sendable {
+    public struct Status: Codable, Sendable, Equatable {
         public var indexedMessages: Int
         public var pendingMessages: Int
         public var coveredThrough: Int64

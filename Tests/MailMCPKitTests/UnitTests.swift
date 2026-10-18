@@ -173,6 +173,36 @@ struct SharedStateTests {
         #expect(recent.map(\.tool) == ["tool9", "tool8", "tool7"])
         #expect(FileManager.default.fileExists(atPath: directory.appending(path: "activity.jsonl.1").path))
     }
+
+    @Test func activityLogReadsOnlyTheTailAndStampsChanges() throws {
+        let log = ActivityLog(url: directory.appending(path: "activity.jsonl"), maxBytes: 10_000_000)
+        let empty = log.stamp()
+        // Enough lines that the first 32 KB window is too small for the limit.
+        for n in 0..<600 {
+            log.append(ActivityEntry(
+                date: Date(), pid: 1, client: "c", tool: "tool\(n)", ok: true, milliseconds: n,
+                summary: String(repeating: "s", count: 200), isWrite: false))
+        }
+        let stamp = log.stamp()
+        #expect(stamp != empty)
+        #expect(log.stamp() == stamp)
+        #expect(log.recent(limit: 3).map(\.tool) == ["tool599", "tool598", "tool597"])
+        let many = log.recent(limit: 500)
+        #expect(many.count == 500)
+        #expect(many.last?.tool == "tool100")
+        #expect(log.recent(limit: 1000).count == 600)
+        log.append(ActivityEntry(date: Date(), pid: 1, client: "c", tool: "last", ok: true, milliseconds: 0, summary: "", isWrite: false))
+        #expect(log.stamp() != stamp)
+    }
+
+    @Test func heartbeatTouchesTheFile() throws {
+        let center = ApprovalCenter(directory: directory.appending(path: "approvals"), heartbeat: directory.appending(path: "hb"))
+        center.beat()
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-60)], ofItemAtPath: center.heartbeat.path)
+        #expect(!center.isAgentRunning())
+        center.beat()
+        #expect(center.isAgentRunning())
+    }
 }
 
 @Suite("MCP protocol")

@@ -168,3 +168,34 @@ final class ContactToolTests {
         #expect(text.contains("no access") && text.contains("dan@example.test"))
     }
 }
+
+@Suite("Extract fields tool")
+final class ExtractFieldsToolTests {
+    let h: Harness
+    init() throws { h = try Harness() }
+    deinit { h.remove() }
+
+    @Test func findsFieldsAndInvites() async throws {
+        var shipping = FixtureMessage(
+            subject: "Your order has shipped", from: EmailAddress(address: "ship@shop.test"), to: [StandardFixture.me],
+            date: Date(), mailbox: h.fixture.inbox, body: "Track your UPS parcel: 1Z999AA10123456784\nOrder number: A12345")
+        let shipped = try h.fixture.store.addMessage(shipping)
+        shipping.subject = "Invitation: Roadmap review"
+        shipping.body = "You are invited."
+        shipping.attachments = [("invite.ics", "text/calendar", Data("BEGIN:VCALENDAR\nMETHOD:REQUEST\nBEGIN:VEVENT\nSUMMARY:Roadmap review\nDTSTART:20261020T120000Z\nEND:VEVENT\nEND:VCALENDAR\n".utf8))]
+        let invite = try h.fixture.store.addMessage(shipping)
+        let json = try await h.json(
+            "extract_fields", ["ids": [.int(Int(shipped)), .int(Int(invite)), .int(Int(h.id("kickoff")))]])
+        #expect(json["searched"] as? Int == 3 && json["with_fields"] as? Int == 2)
+        let messages = json["messages"] as? [[String: Any]] ?? []
+        let first = messages.first { ($0["id"] as? NSNumber)?.int64Value == shipped }?["fields"] as? [[String: Any]] ?? []
+        #expect(first.contains { $0["kind"] as? String == "tracking" && $0["carrier"] as? String == "UPS" })
+        #expect(first.contains { $0["kind"] as? String == "booking" && $0["value"] as? String == "A12345" })
+        let event = (messages.first { ($0["id"] as? NSNumber)?.int64Value == invite }?["fields"] as? [[String: Any]])?
+            .first { $0["kind"] as? String == "event" }
+        #expect(event?["value"] as? String == "Roadmap review" && event?["method"] as? String == "REQUEST")
+        let onlyCodes = try await h.json("extract_fields", ["ids": [.int(Int(shipped))], "kinds": ["code"]])
+        #expect(onlyCodes["with_fields"] as? Int == 0)
+        #expect(await h.call("extract_fields", ["kinds": ["parcels"]]).isError)
+    }
+}

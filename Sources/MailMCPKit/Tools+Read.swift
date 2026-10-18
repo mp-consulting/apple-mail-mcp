@@ -6,7 +6,7 @@ extension MailToolbox {
     var readTools: [ToolDefinition] {
         [
             listAccounts, listMailboxes, inboxOverview, searchMessages, getMessage, getMessages, getThread, listAttachments,
-            getMessageSource, extractInvoiceFields, statistics, topSenders, awaitingReply, needsResponse, bodyIndexTool,
+            getMessageSource, extractInvoiceFields, extractFields, statistics, topSenders, awaitingReply, needsResponse, bodyIndexTool,
         ]
     }
 

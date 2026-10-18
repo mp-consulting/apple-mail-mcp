@@ -219,7 +219,7 @@ extension MailToolbox {
         ) { arguments in
             let store = try self.store
             var query = try self.messageQuery(arguments)
-            let bodyIndex = query.bodyText == nil ? nil : self.bodyIndex
+            let (bodyIndex, indexLocked) = self.searchIndex(for: query)
             if let group = try arguments.string("group_by") {
                 guard let key = GroupKey(rawValue: group.lowercased()) else { throw ToolError("group_by must be sender, domain or month") }
                 let groups = try store.groupCounts(query, by: key, bodyIndex: bodyIndex, limit: try arguments.int("limit") ?? 50)
@@ -239,6 +239,9 @@ extension MailToolbox {
             let compact = try arguments.bool("compact") ?? false
             let page = try store.search(query, bodyIndex: bodyIndex)
             var notes: [JSON] = []
+            if indexLocked {
+                notes.append(.string("The search index key was not available from the Keychain, so recent messages were scanned instead."))
+            }
             if page.scanLimited {
                 notes.append(
                     .string(

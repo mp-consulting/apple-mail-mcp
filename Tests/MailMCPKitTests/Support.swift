@@ -89,6 +89,8 @@ final class RecordingAutomation: MailAutomating, @unchecked Sendable {
 
 /// A toolbox over the standard fixture, with its own settings, approvals and log in a temp folder.
 struct Harness {
+    /// Tests never read the Keychain.
+    static let indexKey = BodyIndexKey(bytes: Array(0..<16))
     let fixture: StandardFixture
     let toolbox: MailToolbox
     let automation: RecordingAutomation
@@ -106,7 +108,7 @@ struct Harness {
             store: try fixture.openStore(), automation: automation,
             settings: SettingsProvider(url: support.appending(path: "settings.json")), approvals: approvals,
             activity: ActivityLog(url: support.appending(path: "activity.jsonl")),
-            bodyIndexURL: support.appending(path: "body-index.sqlite"), readOnly: readOnly)
+            bodyIndexURL: support.appending(path: "body-index.sqlite"), bodyIndexKey: { Self.indexKey }, readOnly: readOnly)
         // The fake changes the fixture synchronously, so a short wait shows everything.
         toolbox.verification = ChangeVerification(timeout: 0.3, interval: 0.02, settle: 0)
     }

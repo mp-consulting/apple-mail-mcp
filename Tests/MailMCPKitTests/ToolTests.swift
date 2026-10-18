@@ -97,6 +97,23 @@ final class ReadToolTests {
         #expect(subjects(json["messages"]) == ["Project kickoff"])
     }
 
+    @Test func bodySearchScansWhenTheIndexKeyIsUnavailable() async throws {
+        _ = try await h.json("body_index", ["action": "update"])
+        let locked = MailToolbox(
+            store: try h.fixture.openStore(), automation: h.automation, activity: nil,
+            bodyIndexURL: h.support.appending(path: "body-index.sqlite"),
+            bodyIndexKey: { throw BodyIndexKeyError.keychain(-128) })
+        let result = await locked.call("search_messages", arguments: ["body": "kubernetes"])
+        let text = result.content.compactMap { content -> String? in
+            if case .text(let text, _, _) = content { return text }
+            return nil
+        }.joined()
+        #expect(result.isError != true)
+        #expect(text.contains("\"body_search\":\"scan\""))
+        #expect(text.contains("Keychain"))
+        #expect(text.contains("Project kickoff"))
+    }
+
     @Test func getMessage() async throws {
         let json = try await h.json("get_message", ["id": .int(Int(h.id("kickoff")))])
         #expect(json["subject"] as? String == "Project kickoff")

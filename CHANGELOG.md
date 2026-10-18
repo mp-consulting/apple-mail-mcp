@@ -6,6 +6,20 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-18
+
+### Fixed
+
+- **Verified moves and trashes**: `move_messages` and `trash_messages` no longer trust Mail's Apple Event
+  replies. They check Mail's database and count only messages that really left their mailbox (and, for a
+  move, reached the destination); the rest come back as `unverified`. If a mailbox loses or gains more
+  messages than requested, the call stops before the next mailbox and reports `collateral_suspected`.
+  The automation lock is now held across the change and its check, so two clients cannot interleave bulk
+  changes. The inbox-zero and newsletter-cleanup skills run batches one at a time and stop on either field.
+- **Claude extension in releases**: the 0.2.0 release stopped after signing the extension, so it shipped
+  without `AppleMailMCP-0.2.0.mcpb` and was not listed in the MCP registry. `mcpb verify` reports every file
+  as unsigned (node-forge cannot verify PKCS#7); releases now check the signature with OpenSSL instead.
+
 ## [0.2.0] - 2026-10-18
 
 ### Added
@@ -18,15 +32,6 @@ All notable changes to this project are documented here. The format follows
 - **MCP registry**: each release is listed as `io.github.mp-consulting/apple-mail-mcp`.
 - **Intel Macs**: the app and the server are universal (Apple silicon and Intel).
 - README screenshots in light and dark, matching the reader's setting.
-
-### Fixed
-
-- **Verified moves and trashes**: `move_messages` and `trash_messages` no longer trust Mail's Apple Event
-  replies. They check Mail's database and count only messages that really left their mailbox (and, for a
-  move, reached the destination); the rest come back as `unverified`. If a mailbox loses or gains more
-  messages than requested, the call stops before the next mailbox and reports `collateral_suspected`.
-  The automation lock is now held across the change and its check, so two clients cannot interleave bulk
-  changes. The inbox-zero and newsletter-cleanup skills run batches one at a time and stop on either field.
 
 ## [0.1.0] - 2026-10-18
 

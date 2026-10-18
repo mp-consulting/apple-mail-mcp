@@ -6,7 +6,7 @@ import MailStore
 public enum MailMCPVersion {
     /// The app bundle's version when running from "Apple Mail MCP.app" (stamped at release), else the source version.
     public static let current = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String)
-        .flatMap { $0.hasPrefix("__") ? nil : $0 } ?? "0.2.0"
+        .flatMap { $0.hasPrefix("__") ? nil : $0 } ?? "0.2.1"
 }
 
 /// Binds a ``MailToolbox`` to an MCP `Server`.

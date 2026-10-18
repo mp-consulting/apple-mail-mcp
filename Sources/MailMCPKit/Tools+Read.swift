@@ -6,7 +6,7 @@ extension MailToolbox {
     var readTools: [ToolDefinition] {
         [
             listAccounts, listMailboxes, inboxOverview, searchMessages, getMessage, getMessages, getThread, listAttachments,
-            getMessageSource, extractInvoiceFields, extractFields, statistics, topSenders, awaitingReply, needsResponse, bodyIndexTool,
+            getMessageSource, extractInvoiceFields, extractFields, mailSetup, statistics, topSenders, awaitingReply, needsResponse, bodyIndexTool,
         ]
     }
 
@@ -203,8 +203,9 @@ extension MailToolbox {
                 "search_messages", "Search messages",
                 """
                 Search mail by any combination of filters; results are newest first with ids and message:// links. \
-                Fast on any mailbox size (reads Mail's index directly). `body` searches message text and attached PDFs and text files: instant when \
-                the body index is built (see body_index), otherwise a bounded scan of recent messages. \
+                Fast on any mailbox size (reads Mail's index directly). `body` searches message text: instant when \
+                the body index is built (see body_index), which also covers attached PDFs and text files; otherwise \
+                a bounded scan of recent message bodies. \
                 For hundreds of results use export_search (writes a file) or group_by (counts only).
                 """,
                 Schema.object(

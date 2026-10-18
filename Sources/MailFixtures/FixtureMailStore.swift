@@ -185,6 +185,19 @@ public final class FixtureMailStore: @unchecked Sendable {
             """)
     }
 
+    /// Writes a settings file into `MailData` (rules, VIPs, smart mailboxes, signatures), as Mail does.
+    public func writeMailData(_ name: String, plist: Any) throws {
+        let url = root.appending(path: "MailData").appending(path: name)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try PropertyListSerialization.data(fromPropertyList: plist, format: .binary, options: 0).write(to: url)
+    }
+
+    public func writeMailData(_ name: String, data: Data) throws {
+        let url = root.appending(path: "MailData").appending(path: name)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: url)
+    }
+
     // MARK: Messages
 
     @discardableResult

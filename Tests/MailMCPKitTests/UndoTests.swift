@@ -199,3 +199,54 @@ final class ExtractFieldsToolTests {
         #expect(await h.call("extract_fields", ["kinds": ["parcels"]]).isError)
     }
 }
+
+@Suite("Mail setup tool")
+final class MailSetupToolTests {
+    let h: Harness
+    init() throws { h = try Harness() }
+    deinit { h.remove() }
+
+    @Test func readsRulesVIPsSmartMailboxesAndSignatures() async throws {
+        let store = h.fixture.store
+        let icloud = h.fixture.icloud
+        try store.writeMailData("SyncedRules.plist", plist: [[
+            "RuleId": "R1", "RuleName": "Newsletters", "AllCriteriaMustBeSatisfied": false, "AutoResponseType": 0,
+            "Criteria": [["CriterionUniqueId": "c1", "Header": "From", "Expression": "news@letters.test"],
+                         ["CriterionUniqueId": "c2", "Header": "Subject", "Expression": "digest", "Qualifier": "BeginsWith"]],
+            "MailboxURL": "imap://\(icloud)/Archive", "CopyToMailboxURL": "imap://\(icloud)/Archive",
+            "ShouldTransferMessage": true, "ShouldCopyMessage": false, "MarkRead": true, "MarkFlagged": false,
+            "Deletes": false, "StopEvaluatingRules": true, "TimeStamp": 1,
+        ]])
+        try store.writeMailData("VIPs.plist", plist: ["ABCDEF01-0000-0000-0000-000000000001": ["Name": "Alice", "EmailAddresses": ["alice@example.test"]]])
+        try store.writeMailData("SyncedSmartMailboxes.plist", plist: [[
+            "MailboxID": "S1", "MailboxName": "Unread work", "MailboxAllCriteriaMustBeSatisfied": true, "MailboxChildren": [],
+            "MailboxCriteria": [["CriterionUniqueId": "x", "Header": "NotInTrashMailbox", "Name": "x"],
+                                ["CriterionUniqueId": "y", "Header": "From", "Expression": "example.test"]],
+        ]])
+        try store.writeMailData("Signatures/AllSignatures.plist", plist: [["SignatureUniqueId": "SIG1", "SignatureName": "Work", "SignatureIsRich": true]])
+        try store.writeMailData(
+            "Signatures/SIG1.mailsignature",
+            data: Data("Content-Type: text/html;\n\tcharset=utf-8\nMime-Version: 1.0\n\n<div>Me Myself<br>MP Consulting</div>".utf8))
+
+        let json = try await h.json("mail_setup")
+        let rule = (json["rules"] as? [[String: Any]])?.first
+        #expect(rule?["name"] as? String == "Newsletters" && rule?["match"] as? String == "any")
+        #expect(rule?["actions"] as? [String] == ["move to Archive (iCloud)", "mark as read", "stop evaluating rules"])
+        #expect(rule?["enabled"] == nil)
+        let criteria = rule?["criteria"] as? [[String: Any]]
+        #expect(criteria?[1]["qualifier"] as? String == "BeginsWith" && criteria?[0]["value"] as? String == "news@letters.test")
+        #expect((json["vips"] as? [[String: Any]])?.first?["addresses"] as? [String] == ["alice@example.test"])
+        #expect((json["smart_mailboxes"] as? [[String: Any]])?.first?["name"] as? String == "Unread work")
+        let signature = (json["signatures"] as? [[String: Any]])?.first
+        #expect(signature?["name"] as? String == "Work" && (signature?["text"] as? String)?.contains("MP Consulting") == true)
+
+        let onlyVIPs = try await h.json("mail_setup", ["include": ["vips"]])
+        #expect(onlyVIPs["rules"] == nil && onlyVIPs["vips"] != nil)
+        #expect(await h.call("mail_setup", ["include": ["filters"]]).isError)
+    }
+
+    @Test func emptyWhenMailHasNoSettingsFiles() async throws {
+        let json = try await h.json("mail_setup")
+        #expect((json["rules"] as? [Any])?.isEmpty == true && (json["vips"] as? [Any])?.isEmpty == true)
+    }
+}

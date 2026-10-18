@@ -113,6 +113,9 @@ extension MailStore {
     /// Messages the user sent in the last `days` that have no later reply from
     /// someone else in the same conversation. Only the latest sent message of
     /// each conversation is returned.
+    ///
+    /// The conversation subqueries use `+` so SQLite looks them up by `conversation_id`
+    /// rather than scanning every newer message through the (deleted, date_received) index.
     public func awaitingReply(days: Int = 14, minimumAgeHours: Int = 24, accountID: String? = nil, limit: Int = 25) throws -> [MessageSummary] {
         let own = try ownAddresses()
         guard !own.isEmpty else { return [] }
@@ -127,12 +130,7 @@ extension MailStore {
                 WHERE \(whereSQL) AND lower(a.address) IN (SELECT value FROM json_each(:own))
                 AND NOT EXISTS (
                     SELECT 1 FROM messages r JOIN addresses ra ON ra.ROWID = r.sender
-                    WHERE r.conversation_id = m.conversation_id AND r.deleted = 0 AND r.date_received > m.date_received
-                    AND lower(ra.address) NOT IN (SELECT value FROM json_each(:own)))
-                AND NOT EXISTS (
-                    SELECT 1 FROM messages later JOIN addresses la ON la.ROWID = later.sender
-                    WHERE later.conversation_id = m.conversation_id AND later.deleted = 0
-                    AND later.date_received > m.date_received AND lower(la.address) IN (SELECT value FROM json_each(:own)))
+                    WHERE r.conversation_id = m.conversation_id AND +r.deleted = 0 AND +r.date_received > m.date_received)
                 AND EXISTS (
                     SELECT 1 FROM recipients rc JOIN addresses rca ON rca.ROWID = rc.address
                     WHERE rc.message = m.ROWID AND lower(rca.address) NOT IN (SELECT value FROM json_each(:own)))
@@ -171,8 +169,8 @@ extension MailStore {
                 AND lower(a.address) NOT GLOB '*do-not-reply*' AND lower(a.address) NOT GLOB '*notifications@*'
                 \(directClause)
                 AND NOT EXISTS (
-                    SELECT 1 FROM messages r WHERE r.conversation_id = m.conversation_id AND r.deleted = 0
-                    AND r.date_received > m.date_received)
+                    SELECT 1 FROM messages r WHERE r.conversation_id = m.conversation_id AND +r.deleted = 0
+                    AND +r.date_received > m.date_received)
                 ORDER BY m.date_received DESC
                 """, bindings + [.text(ownJSON)]
             ) { $0.int(0) }

@@ -195,6 +195,43 @@ struct FileLayoutTests {
         #expect(try role("ews://A/Courrier%20ind%C3%A9sirable") == .junk)
     }
 
+    @Test func emlxSurvivesCorruptLengthLine() {
+        let huge = Data("\(Int.max)\nHello".utf8)
+        #expect(EmlxFile(url: URL(filePath: "/tmp/1.emlx"), data: huge).message == Data("Hello".utf8))
+        let short = Data("99\nHi".utf8)
+        #expect(EmlxFile(url: URL(filePath: "/tmp/1.emlx"), data: short).message == Data("Hi".utf8))
+    }
+
+    @Test func mailboxNamesCannotLeaveMailsFolder() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "locator-\(UUID().uuidString)")
+        let outside = root.deletingLastPathComponent().appending(path: "x.mbox/" + UUID().uuidString + "/Data")
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside.deletingLastPathComponent().deletingLastPathComponent())
+        }
+        let locator = MessageFileLocator(root: root)
+        let escaping = try #require(MailboxURL("imap://A/%2E%2E%2F%2E%2E%2Fx"))
+        #expect(locator.storeDirectories(for: escaping).isEmpty)
+        let inbox = try #require(MailboxURL("imap://A/INBOX"))
+        #expect(locator.attachmentFile(rowID: 1, mailbox: inbox, partID: "../../x") == nil)
+        #expect(MessageFileLocator.isInside(root.path + "/A/INBOX.mbox", root: root.path))
+        #expect(!MessageFileLocator.isInside(root.path + "-other/A", root: root.path))
+    }
+
+    @Test func statementCacheEvictionKeepsRunningStatements() throws {
+        let db = try SQLiteConnection(path: ":memory:", readOnly: false, create: true)
+        try db.execute("CREATE TABLE t (v INTEGER); INSERT INTO t VALUES (1), (2), (3);")
+        var seen: [Int64] = []
+        // Each row runs 150 distinct statements, overflowing the cache while the outer one steps.
+        try db.query("SELECT v FROM t ORDER BY v") { row in
+            seen.append(row.int(0))
+            for n in 0..<150 { _ = try db.scalarInt("SELECT \(n) + \(row.int(0) * 1000)") }
+        }
+        #expect(seen == [1, 2, 3])
+    }
+
     @Test func likePatternEscapes() {
         #expect(SQLiteConnection.likePattern(containing: "50%_off\\") == "%50\\%\\_off\\\\%")
     }

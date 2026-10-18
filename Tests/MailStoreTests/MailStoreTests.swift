@@ -120,6 +120,14 @@ final class MailStoreTests {
         query.sortAscending = true
         query.offset = 0
         #expect(try store.search(query).messages.first?.id == all.messages.last?.id)
+        // Short last page and past-the-end pages still report the full total.
+        let total = try #require(all.total)
+        query.limit = 500
+        query.offset = total - 1
+        let last = try store.search(query)
+        #expect(last.messages.count == 1 && last.total == all.total && !last.hasMore)
+        query.offset = total + 5
+        #expect(try store.search(query).total == all.total)
     }
 
     @Test func summaryFields() throws {

@@ -17,12 +17,16 @@ public enum MailMCPServer {
             version: MailMCPVersion.current,
             title: "Apple Mail",
             instructions: MailToolbox.instructions,
-            capabilities: .init(tools: .init(listChanged: false)))
+            capabilities: .init(prompts: .init(listChanged: false), tools: .init(listChanged: false)))
         await server.withMethodHandler(ListTools.self) { _ in
             ListTools.Result(tools: toolbox.listedDefinitions.map(\.tool))
         }
         await server.withMethodHandler(CallTool.self) { params in
             await toolbox.call(params.name, arguments: params.arguments)
+        }
+        await server.withMethodHandler(ListPrompts.self) { _ in ListPrompts.Result(prompts: toolbox.prompts) }
+        await server.withMethodHandler(GetPrompt.self) { params in
+            try toolbox.prompt(named: params.name, arguments: params.arguments)
         }
         return server
     }

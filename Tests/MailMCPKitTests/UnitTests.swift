@@ -201,6 +201,16 @@ struct ProtocolTests {
         #expect(errorFlag == true)
         if case .text(let message, _, _) = errorContent.first { #expect(message.contains("No message with id 123456")) }
         #expect(h.toolbox.clientName == "test-client")
+        let (prompts, _) = try await client.listPrompts()
+        #expect(prompts.map(\.name) == SkillCatalog.all.map(\.name))
+        let triage = try await client.getPrompt(name: "mail-triage", arguments: ["request": "only work mail"])
+        guard case .text(let instructions) = triage.messages.first?.content else {
+            Issue.record("no prompt text")
+            return
+        }
+        #expect(instructions.hasPrefix("# Mail triage") && instructions.hasSuffix("only work mail"))
+        #expect(!instructions.contains("name: mail-triage") && !instructions.contains(SkillCatalog.marker))
+        await #expect(throws: (any Error).self) { _ = try await client.getPrompt(name: "nope") }
         await client.disconnect()
         await server.stop()
     }

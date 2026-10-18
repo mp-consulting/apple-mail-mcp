@@ -66,6 +66,7 @@ First release.
   and a reply or forward waiting for approval links to the original.
 - Skills in the Claude tab are listed by their Claude Code slash command (`/mail-triage`…); click to copy.
 
-[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/mp-consulting/apple-mail-mcp/releases/tag/v0.1.0

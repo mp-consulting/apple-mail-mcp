@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-18
+
 ### Added
 
 - **`undo_change`**: moves, trashes and flag changes are journaled (Message-IDs and mailbox paths, no
@@ -166,7 +168,8 @@ First release.
   and a reply or forward waiting for approval links to the original.
 - Skills in the Claude tab are listed by their Claude Code slash command (`/mail-triage`…); click to copy.
 
-[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.2.2...v0.3.0

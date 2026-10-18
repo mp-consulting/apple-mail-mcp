@@ -250,3 +250,65 @@ final class MailSetupToolTests {
         #expect((json["rules"] as? [Any])?.isEmpty == true && (json["vips"] as? [Any])?.isEmpty == true)
     }
 }
+
+@Suite("Draft tools")
+final class DraftToolTests {
+    let h: Harness
+    init() throws { h = try Harness() }
+    deinit { h.remove() }
+
+    func addDraft(_ subject: String, reply: Bool = false) throws -> Int64 {
+        var draft = FixtureMessage(
+            subject: subject, from: StandardFixture.me, to: [StandardFixture.bob], date: Date(), mailbox: h.fixture.drafts,
+            body: "Draft text for Bob")
+        draft.cc = [StandardFixture.dan]
+        draft.isRead = true
+        if reply { draft.inReplyTo = "kickoff@example.test" }
+        draft.attachments = [("plan.txt", "text/plain", Data("plan".utf8))]
+        return try h.fixture.store.addMessage(draft)
+    }
+
+    @Test func listsDraftsWithRecipients() async throws {
+        let id = try addDraft("Proposal")
+        let json = try await h.json("list_drafts")
+        let first = (json["drafts"] as? [[String: Any]])?.first
+        #expect((first?["id"] as? NSNumber)?.int64Value == id)
+        #expect(first?["to"] as? [String] == ["Bob <bob@example.test>"] && first?["cc"] as? [String] == ["Dan <dan@example.test>"])
+    }
+
+    @Test func sendsADraftAndTrashesIt() async throws {
+        let id = try addDraft("Proposal")
+        let fixture = h.fixture
+        h.automation.onTrash = { ids, _ in for id in ids { _ = try? fixture.store.moveMessage(id, to: fixture.trash) } }
+        let json = try await h.json("send_draft", ["id": .int(Int(id))])
+        #expect(json["result"] as? String == "sent" && json["draft_removed"] as? Bool == true)
+        guard case .compose(let message, let mode) = h.automation.calls.first else {
+            Issue.record("expected a compose")
+            return
+        }
+        #expect(mode == .send && message.to == ["bob@example.test"] && message.cc == ["dan@example.test"])
+        #expect(message.subject == "Proposal" && message.body.contains("Draft text for Bob") && message.attachments.count == 1)
+        #expect(h.automation.calls.last == .trash([id], MailboxTarget(accountID: h.fixture.icloud, path: "Drafts")))
+    }
+
+    @Test func refusesRepliesAndNonDrafts() async throws {
+        let reply = try addDraft("Re: Project kickoff", reply: true)
+        let refused = await h.call("send_draft", ["id": .int(Int(reply))])
+        #expect(refused.isError && refused.text.contains("open_in_mail"))
+        #expect(await h.call("send_draft", ["id": .int(Int(h.id("kickoff")))]).text.contains("not in a Drafts mailbox"))
+        #expect(h.automation.calls.isEmpty)
+    }
+
+    @Test func neverPolicyBlocksSendingDrafts() async throws {
+        var settings = Settings()
+        settings.sendPolicy = .never
+        let locked = try Harness(settings: settings)
+        defer { locked.remove() }
+        var draft = FixtureMessage(
+            subject: "Hold", from: StandardFixture.me, to: [StandardFixture.bob], date: Date(), mailbox: locked.fixture.drafts, body: "x")
+        draft.isRead = true
+        let id = try locked.fixture.store.addMessage(draft)
+        #expect(await locked.call("send_draft", ["id": .int(Int(id))]).text.contains("Sending is turned off"))
+        #expect(locked.automation.calls.isEmpty)
+    }
+}

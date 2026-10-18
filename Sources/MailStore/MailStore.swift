@@ -376,11 +376,18 @@ public final class MailStore: @unchecked Sendable {
     }
 
     /// Builds the WHERE clause shared by search and counting.
-    func whereClause(for query: MessageQuery, mailboxes: [Int64: Mailbox]) -> (String, [SQLValue]) {
+    ///
+    /// `forCount`: the clause is for COUNT(*), which reads every match. Walking the (deleted, date_received)
+    /// index only pays off for a short page in date order; a count is cheaper through the text filter's
+    /// own index (sender, recipients) or a plain table scan, so `+` takes that index and the default
+    /// mailbox list out of the planner's choice. Bindings are the same either way.
+    func whereClause(for query: MessageQuery, mailboxes: [Int64: Mailbox], forCount: Bool = false) -> (String, [SQLValue]) {
         // With a mailbox, conversation or id scope, `+` keeps SQLite off the (deleted, date_received)
         // index, which otherwise wins and walks every message instead of the scope's own index.
         let scoped = !query.mailboxIDs.isEmpty || query.conversationID != nil || !query.ids.isEmpty
-        var clauses = [scoped ? "+m.deleted = 0" : "m.deleted = 0"]
+        // A date range is what (deleted, date_received) is for: keep it available then.
+        let countHint = forCount && query.dateFrom == nil && query.dateTo == nil
+        var clauses = [scoped || countHint ? "+m.deleted = 0" : "m.deleted = 0"]
         var bindings: [SQLValue] = []
 
         if !query.ids.isEmpty {
@@ -405,7 +412,7 @@ public final class MailStore: @unchecked Sendable {
             if !query.accountIDs.isEmpty { allowed = allowed.filter { query.accountIDs.contains($0.accountID) } }
             if !query.includeTrashAndJunk { allowed = allowed.filter { $0.role != .trash && $0.role != .junk } }
             if !query.accountIDs.isEmpty || !query.includeTrashAndJunk {
-                clauses.append("m.mailbox IN (\(allowed.map { String($0.id) }.joined(separator: ",")))")
+                clauses.append("\(countHint ? "+" : "")m.mailbox IN (\(allowed.map { String($0.id) }.joined(separator: ",")))")
                 if allowed.isEmpty { clauses.append("0") }
             }
         }
@@ -592,9 +599,7 @@ public final class MailStore: @unchecked Sendable {
             // A short page that started inside the results already gives the total.
             let total = !pageIDs.isEmpty && pageIDs.count < limit || offset == 0 && pageIDs.isEmpty
                 ? Int64(offset + pageIDs.count)
-                : try withDB { db in
-                    try db.scalarInt("SELECT COUNT(*) \(Self.minimalJoins(for: whereSQL)) WHERE \(whereSQL)", bindings) ?? 0
-                }
+                : try count(query, mailboxes: mailboxes, bindings: bindings)
             return SearchPage(
                 messages: rows, total: Int(total), offset: offset, limit: limit,
                 hasMore: offset + pageIDs.count < Int(total), bodySearchMode: nil, scanLimited: false, scannedMessages: 0)
@@ -612,6 +617,14 @@ public final class MailStore: @unchecked Sendable {
             total: found.complete ? matchedIDs.count : nil, offset: offset, limit: limit,
             hasMore: matchedIDs.count > offset + pageIDs.count || !found.complete, bodySearchMode: found.mode,
             scanLimited: found.scanLimited, scannedMessages: found.scanned)
+    }
+
+    /// Matches of `query`. Built outside `withDB`: `whereClause` may read the account cache under `lock`.
+    private func count(_ query: MessageQuery, mailboxes: [Int64: Mailbox], bindings: [SQLValue]) throws -> Int64 {
+        let countSQL = whereClause(for: query, mailboxes: mailboxes, forCount: true).0
+        return try withDB { db in
+            try db.scalarInt("SELECT COUNT(*) \(Self.minimalJoins(for: countSQL)) WHERE \(countSQL)", bindings) ?? 0
+        }
     }
 
     /// Every message matching `query`, in its sort order, up to `cap` (exports, grouping). Body text is

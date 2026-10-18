@@ -26,7 +26,8 @@ All notable changes to this project are documented here. The format follows
 ### Changed
 
 - Search, conversations, awaiting-reply and needs-response queries use the right SQLite index for their
-  scope: 5 to 300 times faster on a 100,000-message mailbox.
+  scope: 5 to 300 times faster on a 100,000-message mailbox. Result totals for sender, subject and other
+  unscoped searches count through the filter's own index or a table scan (sender search 41 → 9 ms).
 
 ### Security
 

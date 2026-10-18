@@ -53,6 +53,18 @@ final class ExportToolTests {
         #expect(bad.isError)
     }
 
+    @Test func fullPagesCountTheSameWithEveryFilter() async throws {
+        // A full first page takes the COUNT path, which builds its own WHERE clause (with direction: own addresses).
+        for arguments: [String: Value] in [
+            ["direction": "received"], ["direction": "sent"], ["sender": "example.test"], ["query": "kickoff, receipt"],
+            ["unread": true], ["days": 3],
+        ] {
+            let all = try await h.json("search_messages", arguments.merging(["limit": 200]) { a, _ in a })
+            let page = try await h.json("search_messages", arguments.merging(["limit": 1]) { a, _ in a })
+            #expect(page["total"] as? Int == (all["messages"] as? [Any])?.count, "\(arguments)")
+        }
+    }
+
     @Test func excludeFromSelfUsesOwnNames() async throws {
         let found = try await search(["mailbox": "inbox", "exclude_from_self": true])
         #expect(!found.contains(h.id("invoice")))  // "Carol, Billing" matches the own name "Carol"

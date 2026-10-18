@@ -33,11 +33,11 @@ public enum InvoiceExtractor {
     /// Total keywords with a priority: the strongest match in the text wins, the later one on a tie
     /// (subtotals come before totals).
     static let totalKeywords: [(keyword: String, priority: Int)] = [
-        ("net à payer", 9), ("net a payer", 9), ("montant ttc", 9), ("total ttc", 9), ("amount paid", 9),
+        ("net à payer", 9), ("net a payer", 9), ("montant ttc", 9), ("total ttc", 9), ("prix ttc", 9), ("amount paid", 9),
         ("valor a pagar", 9), ("total a pagar", 9), ("gesamtbetrag", 9), ("rechnungsbetrag", 9), ("totale da pagare", 9),
         ("amount due", 8), ("total due", 8), ("balance due", 8), ("grand total", 8), ("total amount", 8),
         ("montant total", 8), ("montant payé", 8), ("amount charged", 8), ("total charged", 8), ("importe total", 8),
-        ("zu zahlen", 8), ("valor total", 7), ("totale", 6), ("total", 5), ("summe", 4), ("montant", 4),
+        ("zu zahlen", 8), ("prix total", 8), ("valor total", 7), ("totale", 6), ("total", 5), ("summe", 4), ("montant", 4),
         ("betrag", 4), ("amount", 3), ("valor", 3), ("importe", 3),
     ]
 
@@ -53,6 +53,13 @@ public enum InvoiceExtractor {
         pattern: "(?:(?<c1>\(currency))\\s?(?<n1>\(number)))|(?:(?<n2>\(number))\\s?(?<c2>\(currency)))")
     static let bareAmountRegex = try! NSRegularExpression(
         pattern: #"(?<![\d.,])\d{1,3}(?:[ .,'’]\d{3})*[.,]\d{2}(?![\d])"#)
+
+    /// The card line of a receipt ("Visa •••• 1234", "Apple Pay", "Mastercard ****1234"): Apple and others show
+    /// the amount charged there instead of under a "Total" label.
+    static let paymentLineRegex = try! NSRegularExpression(
+        pattern: #"(?:•{2,}|\*{4}|x{4}\s?\d{4})|\b(?:visa|mastercard|master card|amex|american express|apple pay|google pay|paypal|carte bancaire)\b"#,
+        options: [.caseInsensitive])
+    static let paymentLinePriority = 7
 
     static let token = #"([A-Za-z0-9][A-Za-z0-9\-/._]*)"#
     static let numberRegexes: [NSRegularExpression] = [
@@ -113,13 +120,41 @@ public enum InvoiceExtractor {
                 }
             }
         }
-        if let best { return best.money }
-        // No keyword: the first amount that names a currency.
-        let range = NSRange(text.startIndex..., in: text)
-        if let match = moneyRegex.firstMatch(in: text.lowercased(), range: range), let money = money(from: match, in: text.lowercased()) {
-            return Money(amount: money.amount, currency: money.currency, confidence: .low)
+        // The card line, when nothing stronger than it was found.
+        if (best?.priority ?? 0) < paymentLinePriority {
+            for (index, line) in lines.enumerated()
+            where paymentLineRegex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)) != nil {
+                var found = money(in: line)
+                if found == nil {
+                    for next in lines[(index + 1)...].lazy.filter({ !$0.trimmingCharacters(in: .whitespaces).isEmpty }).prefix(2) {
+                        if let hit = money(in: next) { found = hit; break }
+                    }
+                }
+                if let found, found.currency != nil { best = (paymentLinePriority, index, found) }
+            }
+        }
+        if var money = best?.money {
+            // "Total 149,00" with the currency only elsewhere: take the one the document uses most.
+            if money.currency == nil { money.currency = dominantCurrency(in: text) }
+            return money
+        }
+        // No keyword: the largest amount that names a currency (a receipt's total is its biggest figure).
+        let lower = text.lowercased()
+        let amounts = moneyRegex.matches(in: lower, range: NSRange(lower.startIndex..., in: lower)).compactMap { money(from: $0, in: lower) }
+        if let largest = amounts.max(by: { (Decimal(string: $0.amount) ?? 0) < (Decimal(string: $1.amount) ?? 0) }) {
+            return Money(amount: largest.amount, currency: largest.currency, confidence: .low)
         }
         return nil
+    }
+
+    /// The currency named most often in the text, if any.
+    static func dominantCurrency(in text: String) -> String? {
+        let lower = text.lowercased()
+        let pattern = try! NSRegularExpression(pattern: currency)
+        let codes = pattern.matches(in: lower, range: NSRange(lower.startIndex..., in: lower)).compactMap {
+            Range($0.range, in: lower).flatMap { currencyCode(String(lower[$0])) }
+        }
+        return Dictionary(grouping: codes, by: { $0 }).max { $0.value.count < $1.value.count }?.key
     }
 
     /// The first amount in `text`: with a currency (high), else a bare `12,34` (medium).

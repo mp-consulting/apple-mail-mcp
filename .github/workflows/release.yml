@@ -118,8 +118,29 @@ jobs:
             /usr/bin/openssl pkcs12 -in "$WORK/id.p12" -passin env:CERTIFICATE_PASSWORD "$@" 2>/dev/null \
               || openssl pkcs12 -legacy -in "$WORK/id.p12" -passin env:CERTIFICATE_PASSWORD "$@"
           }
-          (umask 077 && pem -nocerts -nodes -out "$WORK/key.pem")
-          pem -clcerts -nokeys -out "$WORK/cert.pem"
+          # The .p12 can hold several identities (Application and Installer): keep the Developer ID
+          # Application certificate and the key with the same localKeyID.
+          (umask 077 && pem -nodes -out "$WORK/all.pem")
+          python3 - "$WORK" <<'PY'
+          import re, sys
+          work = sys.argv[1]
+          text = open(f"{work}/all.pem").read()
+          blocks = re.findall(r"(Bag Attributes.*?-----END [A-Z ]+-----)", text, re.S)
+          def key_id(block):
+              m = re.search(r"localKeyID:\s*([0-9A-F ]+)", block)
+              return m.group(1).strip() if m else None
+          certs = [b for b in blocks if "BEGIN CERTIFICATE" in b and "Developer ID Application" in b]
+          if not certs:
+              sys.exit("no Developer ID Application certificate in the .p12")
+          cert = certs[0]
+          keys = [b for b in blocks if "PRIVATE KEY" in b and key_id(b) == key_id(cert)]
+          if not keys:
+              sys.exit("no private key matching the Developer ID Application certificate")
+          strip = lambda b: b[b.index("-----BEGIN"):] + "\n"
+          open(f"{work}/cert.pem", "w").write(strip(cert))
+          open(f"{work}/key.pem", "w").write(strip(keys[0]))
+          PY
+          rm -f "$WORK/all.pem"
           for ca in DeveloperIDG2CA DeveloperIDCA; do
             curl -fsSL "https://www.apple.com/certificateauthority/$ca.cer" -o "$WORK/$ca.cer"
             /usr/bin/openssl x509 -inform DER -in "$WORK/$ca.cer" -out "$WORK/$ca.pem"

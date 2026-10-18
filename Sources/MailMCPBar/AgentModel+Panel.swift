@@ -95,23 +95,14 @@ extension AgentModel {
                 id: "automation", icon: "hand.raised", title: "Mail automation is off",
                 detail: "Allow it so Claude can move, flag, draft and send.", action: "Open Settings…", fix: .automation))
         }
-        // A client that cannot read Mail reports it in the activity log (see LaunchContext.explain).
-        let recent = activity.filter { !$0.ok && Date().timeIntervalSince($0.date) < 3600 }
-        if let failure = recent.first(where: { $0.summary.contains("Full Disk Access to ") }),
-           let app = Self.appName(inFullDiskAccessMessage: failure.summary)
-        {
+        // A client that cannot read Mail reports it in the activity log (see LaunchContext.explain);
+        // its next successful call clears the notice.
+        for app in ActivityEntry.appsLackingFullDiskAccess(in: activity) {
             items.append(AttentionItem(
                 id: "client-fda-\(app)", icon: "exclamationmark.lock", title: "\(app) can't read your mail",
                 detail: "Turn on Full Disk Access for \(app), then restart it.", action: "Open Settings…", fix: .fullDiskAccess))
         }
         return items
-    }
-
-    static func appName(inFullDiskAccessMessage text: String) -> String? {
-        guard let start = text.range(of: "Full Disk Access to ") else { return nil }
-        let rest = text[start.upperBound...]
-        let name = rest.prefix { $0 != "," && $0 != "." }
-        return name.isEmpty ? nil : String(name)
     }
 
     func perform(_ item: AttentionItem) {

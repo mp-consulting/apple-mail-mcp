@@ -231,3 +231,37 @@ struct LaunchContextTests {
         #expect(LaunchContext.responsible() != nil)
     }
 }
+
+@Suite("Full Disk Access notice")
+struct FullDiskAccessNoticeTests {
+    let now = Date()
+    func entry(_ client: String?, minutesAgo: Double, ok: Bool, app: String = "claude") -> ActivityEntry {
+        ActivityEntry(
+            date: now.addingTimeInterval(-minutesAgo * 60), pid: 1, client: client, tool: "list_accounts", ok: ok,
+            milliseconds: 3,
+            summary: ok ? "2 accounts" : "Can't read Apple Mail's data: macOS hasn't given Full Disk Access to \(app), the app that started this server.",
+            isWrite: false)
+    }
+
+    @Test func aLaterSuccessClearsTheNotice() {
+        // The sequence seen on a real machine: failures, the grant, then a working call.
+        let entries = [entry("Claude Code", minutesAgo: 15, ok: false), entry("Claude Code", minutesAgo: 7, ok: true)]
+        #expect(ActivityEntry.appsLackingFullDiskAccess(in: entries, now: now).isEmpty)
+    }
+
+    @Test func aLatestFailureKeepsItPerClient() {
+        let entries = [
+            entry("Claude Code", minutesAgo: 20, ok: true), entry("Claude Code", minutesAgo: 2, ok: false),
+            entry("local-agent-mode-Apple Mail", minutesAgo: 5, ok: false, app: "Claude"),
+            entry("local-agent-mode-Apple Mail", minutesAgo: 1, ok: true, app: "Claude"),
+        ]
+        #expect(ActivityEntry.appsLackingFullDiskAccess(in: entries, now: now) == ["claude"])
+    }
+
+    @Test func oldFailuresAndOtherErrorsDoNotCount() {
+        var other = entry("Claude Code", minutesAgo: 1, ok: false)
+        other.summary = "No message with id 4."
+        #expect(ActivityEntry.appsLackingFullDiskAccess(in: [entry(nil, minutesAgo: 90, ok: false), other], now: now).isEmpty)
+        #expect(ActivityEntry.appName(inFullDiskAccessMessage: "macOS hasn't given Full Disk Access to apple-mail-mcp, this server") == "apple-mail-mcp")
+    }
+}

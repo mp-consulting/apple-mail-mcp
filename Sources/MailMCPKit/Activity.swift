@@ -209,3 +209,29 @@ public final class ApprovalCenter: @unchecked Sendable {
         return .pending
     }
 }
+
+extension ActivityEntry {
+    /// Apps that cannot read Mail right now: a client whose latest call in the last `window` failed for lack of
+    /// Full Disk Access (see `LaunchContext.message`). A later successful call from the same client clears it,
+    /// so the notice goes away as soon as the grant works, not an hour later.
+    public static func appsLackingFullDiskAccess(
+        in entries: [ActivityEntry], now: Date = Date(), window: TimeInterval = 3600
+    ) -> [String] {
+        let recent = entries.filter { now.timeIntervalSince($0.date) < window }
+        let latestPerClient = Dictionary(grouping: recent, by: { $0.client ?? "" })
+            .compactMap { $0.value.max { $0.date < $1.date } }
+            .sorted { $0.date > $1.date }
+        var apps: [String] = []
+        for entry in latestPerClient where !entry.ok {
+            if let app = appName(inFullDiskAccessMessage: entry.summary), !apps.contains(app) { apps.append(app) }
+        }
+        return apps
+    }
+
+    /// "…Full Disk Access to claude, the app…" → "claude".
+    public static func appName(inFullDiskAccessMessage text: String) -> String? {
+        guard let start = text.range(of: "Full Disk Access to ") else { return nil }
+        let name = text[start.upperBound...].prefix { $0 != "," && $0 != "." }
+        return name.isEmpty ? nil : String(name)
+    }
+}

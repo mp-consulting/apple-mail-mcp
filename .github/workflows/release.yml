@@ -26,6 +26,14 @@ jobs:
       # Pinned to a commit: a moved tag must not run in a job that holds the signing certificate.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
+      - name: Use the newest Xcode on the runner
+        # The image's default can lag behind; local builds use the current Xcode, so CI should too.
+        run: |
+          XCODE="$(ls -d /Applications/Xcode_*.app | grep -vi beta | sort -V | tail -n 1)"
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+          swift --version
+
       - name: Test
         run: swift test
 

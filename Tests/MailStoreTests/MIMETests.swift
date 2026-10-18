@@ -127,6 +127,42 @@ struct MIMETests {
     }
 }
 
+@Suite("Body selection")
+struct BodySelectionTests {
+    func message(text: String, html: String) -> MIMEPart {
+        let raw = """
+            Content-Type: multipart/alternative; boundary="b"\r
+            \r
+            --b\r
+            Content-Type: text/plain; charset=utf-8\r
+            \r
+            \(text)\r
+            --b\r
+            Content-Type: text/html; charset=utf-8\r
+            \r
+            \(html)\r
+            --b--\r
+            """
+        return MIME.parse(Data(raw.utf8))
+    }
+
+    @Test func htmlWinsOverAStubTextPart() {
+        let html = "<html><body><p>Bonjour,</p><p>Le montant de votre facture est de 38,26&euro; TTC.</p><p>Il sera prélevé le 25/02.</p></body></html>"
+        let bodies = MessageContent.bodies(message(text: "This is an HTML message.", html: html))
+        #expect(bodies.text?.contains("38,26€ TTC") == true)
+        #expect(InvoiceExtractor.extract(text: bodies.text ?? "").total == "38.26")
+    }
+
+    @Test func realTextPartsAreKept() {
+        let text = "Hi Alice,\nThe plain version of this note is the one I wrote, and it is long enough to be the real body of the message, so it stays.\nBob"
+        let bodies = MessageContent.bodies(message(text: text, html: "<p>Formatted copy with <b>more</b> markup and a footer and more words than the text part has in it, honestly</p>"))
+        #expect(bodies.text?.hasPrefix("Hi Alice") == true)
+        // A short real reply stays when the HTML says no more than it does.
+        let short = MessageContent.bodies(message(text: "Yes, Thursday works.", html: "<p>Yes, Thursday works.</p>"))
+        #expect(short.text == "Yes, Thursday works.")
+    }
+}
+
 @Suite("HTML to text and folding")
 struct HTMLTextTests {
     @Test func blocksEntitiesAndSkippedContent() {

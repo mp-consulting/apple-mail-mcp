@@ -8,3 +8,6 @@ DerivedData/
 .DS_Store
 Benchmarks/raw/
 Benchmarks/*.log
+
+# Claude Code agent worktrees
+.claude/worktrees/

@@ -147,7 +147,11 @@ jobs:
           done
           npx --yes @anthropic-ai/mcpb@2.1.2 sign "$MCPB" --cert "$WORK/cert.pem" --key "$WORK/key.pem" \
             --intermediate "$WORK/DeveloperIDG2CA.pem" "$WORK/DeveloperIDCA.pem"
-          npx --yes @anthropic-ai/mcpb@2.1.2 verify "$MCPB"
+          # `mcpb verify` reports every file as unsigned (node-forge cannot verify PKCS#7), so check
+          # the signature with OpenSSL against Apple's root instead.
+          curl -fsSL "https://www.apple.com/appleca/AppleIncRootCertificate.cer" -o "$WORK/AppleRootCA.cer"
+          /usr/bin/openssl x509 -inform DER -in "$WORK/AppleRootCA.cer" -out "$WORK/AppleRootCA.pem"
+          Scripts/verify-mcpb.sh "$MCPB" "$WORK/AppleRootCA.pem" "$SIGN_IDENTITY"
 
       - name: Attach Claude extension
         env:

@@ -6,6 +6,42 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-18
+
+### Security
+
+- **Unsubscribing by email** now needs the sender's DKIM signature for its own domain, writes to exactly one
+  address, and never sends the sender's body text (the subject is kept only when short). A forged newsletter
+  can no longer make you email someone else in your name.
+- **One-click unsubscribe** refuses this Mac, the local network and `.local` hosts, and never follows
+  redirects. The approval request shows the full address, link and subject.
+- **Attachments** can no longer come from your home folder's dotfiles (`~/.claude.json`, shell history,
+  `~/.config`, tokens), the Claude app's config, or other apps' data (Notes, Contacts, Calendar, Photos).
+- **Saving files** refuses Python `site-packages`, `.husky`, `.vscode`, `~/Library/Python` and Workflows,
+  and `.pth`, `.dylib` and `.so` files. `export_messages` checks every file it writes.
+- **Settings fail closed**: a mistyped key costs only that key, an unreadable send policy means "never",
+  and a broken settings file keeps the last good settings instead of falling back to "send freely".
+- Connecting Claude Code keeps `~/.claude.json` and its backup readable by you only.
+- A message built to nest thousands of MIME parts, or full of unfinished encoded words, can no longer crash
+  or stall the body index and message reads.
+
+### Fixed
+
+- **Connect** in the menu bar app works when the `claude` command cannot start (a Homebrew install can lose
+  its execute permission): the server is then added to `~/.claude.json` directly.
+- Negative or huge numbers in tool arguments no longer crash the server; they are clamped.
+- Tools that take one message id refuse a list instead of acting on its first id.
+- A scheduled send whose claim cannot be saved is no longer sent twice; scheduling reports a failed save.
+- Saving into a folder that already holds 999 copies of a name now fails instead of overwriting.
+
+### Performance
+
+- The menu bar app does its mail and index checks off the main thread and polls less often.
+- Tool calls no longer rescan all sent mail each time Mail changes something.
+- The body index skips loading its vocabulary when there is nothing new to index.
+- Reading a message no longer decodes every attachment to report its size; `get_message_source` cuts the
+  headers before decoding.
+
 ## [0.4.1] - 2026-10-18
 
 ### Added
@@ -175,7 +211,8 @@ First release.
   and a reply or forward waiting for approval links to the original.
 - Skills in the Claude tab are listed by their Claude Code slash command (`/mail-triage`…); click to copy.
 
-[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.3.1...v0.3.2

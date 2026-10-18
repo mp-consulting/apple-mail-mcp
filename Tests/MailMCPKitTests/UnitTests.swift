@@ -205,3 +205,29 @@ struct ProtocolTests {
         await server.stop()
     }
 }
+
+@Suite("Full Disk Access guidance")
+struct LaunchContextTests {
+    @Test func namesTheBundleThatNeedsTheGrant() {
+        let code = LaunchContext.describe(
+            executable: "/Users/me/Library/Application Support/Claude/claude-code/2.1.299/4fa9/claude.app/Contents/MacOS/claude")
+        #expect(code.name == "claude" && code.path.hasSuffix("/4fa9/claude.app") && !code.isThisServer)
+        let helper = LaunchContext.describe(executable: "/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper")
+        #expect(helper.name == "Visual Studio Code" && helper.path == "/Applications/Visual Studio Code.app")
+        #expect(LaunchContext.describe(executable: "/usr/local/bin/node").name == "node")
+    }
+
+    @Test func messagesPointAtTheRightThing() {
+        let code = LaunchContext.message(for: .init(name: "claude", path: "/x/claude-code/2.1/claude.app", isThisServer: false))
+        #expect(code.hasPrefix("Can't read Apple Mail's data: macOS hasn't given Full Disk Access to claude,"))
+        #expect(code.contains("not Claude.app") && code.contains("paste /x/claude-code/2.1/claude.app"))
+        let server = LaunchContext.message(for: .init(name: "apple-mail-mcp", path: "/x/server/apple-mail-mcp", isThisServer: true))
+        #expect(server.contains("Full Disk Access to apple-mail-mcp, this server") && server.contains("restart Claude"))
+        let vscode = LaunchContext.message(for: .init(name: "Visual Studio Code", path: "/Applications/Visual Studio Code.app", isThisServer: false))
+        #expect(!vscode.contains("Claude Code"))
+    }
+
+    @Test func findsTheResponsibleProcessForThisOne() {
+        #expect(LaunchContext.responsible() != nil)
+    }
+}

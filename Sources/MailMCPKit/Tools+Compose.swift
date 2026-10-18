@@ -7,6 +7,9 @@ import MailStore
 extension MailToolbox {
     var composeTools: [ToolDefinition] { [composeEmail, replyToMessage, forwardMessage, openInMail] }
 
+    static let sendAtSchema = Schema.string(
+        "Send later instead: an ISO 8601 time (or YYYY-MM-DD for 8:00 that day); the menu bar app sends it then")
+
     static let modeSchema = Schema.string(
         "draft (default): save to Drafts · open: leave a compose window for the user · send: deliver now",
         enum: DeliveryMode.allCases.map(\.rawValue))
@@ -87,6 +90,7 @@ extension MailToolbox {
                         "from": Schema.string("Send from this address (one of yours; default: Mail's default)"),
                         "attachments": Schema.strings("Absolute paths of files to attach"),
                         "mode": Self.modeSchema,
+                        "send_at": Self.sendAtSchema,
                     ], required: ["to", "subject"]), kind: .compose, openWorld: true),
             kind: .compose
         ) { [automation] arguments in
@@ -104,6 +108,11 @@ extension MailToolbox {
             let mode = try Self.mode(arguments)
             let from = try self.validatedSender(arguments)
             let attachments = try self.validatedAttachments(arguments)
+            if let sendAt = try self.scheduleDate(arguments, key: "send_at") {
+                return try await self.scheduleSend(
+                    tool: "compose_email", sendAt: sendAt, from: from, to: to, cc: cc, bcc: bcc, subject: subject, body: body, html: html,
+                    attachments: attachments)
+            }
             if mode == .send {
                 try await self.authorizeSend(
                     tool: "compose_email", from: from, to: to, cc: cc, bcc: bcc, subject: subject, body: body,
@@ -118,6 +127,17 @@ extension MailToolbox {
                 json: .obj(self.draftResult(mode, draftID: draftID) + [("to", .array(to.map { .string($0) })), ("subject", .string(subject))]),
                 summary: "\(mode.rawValue): \(Render.truncate(subject, 60))", messageID: draftID)
         }
+    }
+
+    /// Who a reply goes to: the Reply-To (or sender), and with reply all the other recipients except the user.
+    func replyRecipients(_ original: MessageDetail, replyAll: Bool) throws -> [String] {
+        let own = try store.ownAddresses()
+        var recipients = [(original.replyTo.first ?? original.summary.sender).address]
+        if replyAll {
+            recipients += (original.to + original.cc).map(\.address).filter { !own.contains($0.lowercased()) }
+        }
+        var seen = Set<String>()
+        return recipients.filter { seen.insert($0.lowercased()).inserted }
     }
 
     /// The reply body with a plain-text quote of the original below it.
@@ -173,6 +193,7 @@ extension MailToolbox {
                         "attachments": Schema.strings("Absolute paths of files to attach"),
                         "quote_original": Schema.boolean("Quote the original message below the reply (default true)"),
                         "mode": Self.modeSchema,
+                        "send_at": Self.sendAtSchema,
                     ], required: ["id"]), kind: .compose, openWorld: true),
             kind: .compose
         ) { [automation] arguments in
@@ -195,14 +216,18 @@ extension MailToolbox {
             let fullBody = quote ? Self.quotedReply(body: body, original: original) : body
             let fullHTML = replyHTML.map { quote ? Self.quotedReplyHTML(html: $0, original: original) : $0 }
             let subject = original.summary.subject.lowercased().hasPrefix("re:") ? original.summary.subject : "Re: " + original.summary.subject
-            if mode == .send {
-                let own = try store.ownAddresses()
-                var recipients = [(original.replyTo.first ?? original.summary.sender).address]
-                if replyAll {
-                    recipients += (original.to + original.cc).map(\.address).filter { !own.contains($0.lowercased()) }
+            if let sendAt = try self.scheduleDate(arguments, key: "send_at") {
+                guard let header = original.summary.messageIDHeader else {
+                    throw ToolError("Message \(id) has no Message-ID, so it cannot be found again later; reply now instead.")
                 }
-                var seen = Set<String>()
-                recipients = recipients.filter { seen.insert($0.lowercased()).inserted }
+                let recipients = try self.replyRecipients(original, replyAll: replyAll)
+                return try await self.scheduleSend(
+                    tool: "reply_to_message", sendAt: sendAt, from: nil, to: recipients, cc: cc, bcc: bcc, subject: subject, body: fullBody,
+                    html: fullHTML, attachments: attachments, reply: .init(messageID: header, replyAll: replyAll),
+                    originalLink: original.summary.mailLink)
+            }
+            if mode == .send {
+                let recipients = try self.replyRecipients(original, replyAll: replyAll)
                 try await self.authorizeSend(
                     tool: "reply_to_message", from: nil, to: recipients,
                     cc: cc, bcc: bcc, subject: subject, body: body, attachments: attachments,

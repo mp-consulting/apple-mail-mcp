@@ -55,7 +55,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "MailMCPBar",
-            dependencies: ["MailStore", "MailMCPKit"]
+            dependencies: ["MailStore", "MailAutomation", "MailMCPKit"]
         ),
         .testTarget(
             name: "MailStoreTests",

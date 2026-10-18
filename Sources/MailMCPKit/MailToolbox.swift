@@ -51,6 +51,8 @@ public final class MailToolbox: @unchecked Sendable {
     public let activity: ActivityLog?
     /// Recent changes to mail, for `undo_change`; nil turns undo off.
     public let changes: ChangeJournal?
+    /// Snoozes and scheduled sends; nil turns both off.
+    public let schedule: ScheduleStore?
     /// The user's address book, for `find_contact`.
     public let contacts: any ContactsProviding
     public let bodyIndexURL: URL
@@ -74,20 +76,21 @@ public final class MailToolbox: @unchecked Sendable {
     public convenience init(
         store: MailStore, automation: any MailAutomating, settings: SettingsProvider = SettingsProvider(),
         approvals: ApprovalCenter = ApprovalCenter(), activity: ActivityLog? = ActivityLog(),
-        changes: ChangeJournal? = ChangeJournal(), contacts: any ContactsProviding = SystemContacts(),
-        bodyIndexURL: URL = SharedPaths.bodyIndex,
+        changes: ChangeJournal? = ChangeJournal(), schedule: ScheduleStore? = ScheduleStore(),
+        contacts: any ContactsProviding = SystemContacts(), bodyIndexURL: URL = SharedPaths.bodyIndex,
         bodyIndexKey: @escaping @Sendable () throws -> BodyIndexKey = BodyIndexKey.fromKeychain, readOnly: Bool = false
     ) {
         self.init(
             storeProvider: { store }, automation: automation, settings: settings, approvals: approvals,
-            activity: activity, changes: changes, contacts: contacts, bodyIndexURL: bodyIndexURL, bodyIndexKey: bodyIndexKey, readOnly: readOnly)
+            activity: activity, changes: changes, schedule: schedule, contacts: contacts, bodyIndexURL: bodyIndexURL, bodyIndexKey: bodyIndexKey, readOnly: readOnly)
     }
 
     public init(
         storeProvider: @escaping @Sendable () throws -> MailStore, automation: any MailAutomating,
         settings: SettingsProvider = SettingsProvider(), approvals: ApprovalCenter = ApprovalCenter(),
         activity: ActivityLog? = ActivityLog(), changes: ChangeJournal? = ChangeJournal(),
-        contacts: any ContactsProviding = SystemContacts(), bodyIndexURL: URL = SharedPaths.bodyIndex,
+        schedule: ScheduleStore? = ScheduleStore(), contacts: any ContactsProviding = SystemContacts(),
+        bodyIndexURL: URL = SharedPaths.bodyIndex,
         bodyIndexKey: @escaping @Sendable () throws -> BodyIndexKey = BodyIndexKey.fromKeychain, readOnly: Bool = false
     ) {
         self.storeProvider = storeProvider
@@ -96,6 +99,7 @@ public final class MailToolbox: @unchecked Sendable {
         self.approvals = approvals
         self.activity = activity
         self.changes = changes
+        self.schedule = schedule
         self.contacts = contacts
         self.bodyIndexURL = bodyIndexURL
         self.bodyIndexKey = bodyIndexKey
@@ -266,7 +270,7 @@ public final class MailToolbox: @unchecked Sendable {
 
     // MARK: Tool list
 
-    public var definitions: [ToolDefinition] { readTools + trustTools + watchTools + fileTools + changeTools + undoTools + composeTools + draftTools }
+    public var definitions: [ToolDefinition] { readTools + trustTools + watchTools + fileTools + changeTools + undoTools + scheduleTools + composeTools + draftTools }
 
     /// Tools offered to clients (hides write tools in read-only launches).
     public var listedDefinitions: [ToolDefinition] {

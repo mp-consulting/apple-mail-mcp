@@ -210,6 +210,19 @@ struct MailTab: View {
                 }
             }
         }
+        if model.snoozedCount > 0 || !model.scheduledSends.isEmpty {
+            let parts = [
+                model.snoozedCount > 0 ? "\(model.snoozedCount) snoozed" : nil,
+                model.scheduledSends.isEmpty ? nil : "\(model.scheduledSends.count) to send later",
+            ].compactMap { $0 }
+            Row(
+                systemImage: "clock", iconColor: .secondary, title: parts.joined(separator: " · "),
+                detail: model.scheduledSends.first.map { "Next: \($0.subject) · \($0.sendAt.formatted(date: .abbreviated, time: .shortened))" }
+                    ?? "They come back on time while this app runs.")
+            {
+                EmptyView()
+            }
+        }
         if !model.needsReply.isEmpty {
             let count = model.needsReply.count
             Row(

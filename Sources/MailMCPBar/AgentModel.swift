@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import MailAutomation
 import MailMCPKit
 import MailStore
 import Observation
@@ -20,6 +21,20 @@ final class AgentModel {
     /// Mail from people in the last 3 days still waiting for a reply.
     var needsReply: [MessageSummary] = []
     private var seenNeedsReply: Set<Int64>?
+    /// Snoozes and scheduled sends waiting, shown in the Mail tab.
+    var snoozedCount = 0
+    var scheduledSends: [ScheduledSend] = []
+    let schedule = ScheduleStore()
+    /// Carries out snoozes and scheduled sends; made on first use, Mail's store opens when needed.
+    @ObservationIgnored private var _scheduler: MailToolbox?
+    private var scheduler: MailToolbox {
+        if let existing = _scheduler { return existing }
+        let toolbox = MailToolbox(storeProvider: { try MailStore.open() }, automation: MailAutomation(), schedule: schedule)
+        toolbox.clientName = "Apple Mail MCP"
+        _scheduler = toolbox
+        return toolbox
+    }
+    private var isRunningSchedule = false
     var isIndexing = false
     var indexProgress: (done: Int, total: Int)?
     var lastError: String?
@@ -93,6 +108,7 @@ final class AgentModel {
                 self.refreshActivity()
                 if tick % 15 == 0 { await self.refreshChecks() }
                 if tick % 5 == 0 { await self.maybeUpdateIndex() }
+                if tick % 15 == 0 { await self.runSchedule() }
                 tick += 1
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
             }
@@ -141,6 +157,18 @@ final class AgentModel {
         content.sound = .default
         UNUserNotificationCenter.current().add(
             UNNotificationRequest(identifier: request.id.uuidString, content: content, trigger: nil))
+    }
+
+    // MARK: Snoozes and scheduled sends
+
+    func runSchedule() async {
+        guard !isRunningSchedule else { return }
+        isRunningSchedule = true
+        defer { isRunningSchedule = false }
+        let report = await scheduler.runDueSchedules()
+        if !report.failed.isEmpty { lastError = "Could not send \(report.failed.joined(separator: ", ")) yet; retrying." }
+        snoozedCount = schedule.snoozes.reduce(0) { $0 + $1.messageIDs.count }
+        scheduledSends = schedule.sends
     }
 
     // MARK: Needs a reply

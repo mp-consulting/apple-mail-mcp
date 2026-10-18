@@ -15,6 +15,8 @@ public enum SharedPaths {
     public static var agentHeartbeat: URL { supportDirectory.appending(path: "agent.heartbeat") }
     public static var bodyIndex: URL { supportDirectory.appending(path: "body-index.sqlite") }
     public static var changeJournal: URL { supportDirectory.appending(path: "changes.json") }
+    public static var schedule: URL { supportDirectory.appending(path: "scheduled.json") }
+    public static var scheduledFiles: URL { supportDirectory.appending(path: "scheduled-files", directoryHint: .isDirectory) }
 
     static func ensureDirectory(_ url: URL) {
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

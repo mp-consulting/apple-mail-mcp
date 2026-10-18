@@ -69,67 +69,30 @@ public struct ChangeRecord: Codable, Sendable, Hashable, Identifiable {
 
 /// The last changes to mail, shared by all server processes. Owner-only, capped at `limit` records.
 public final class ChangeJournal: @unchecked Sendable {
-    public let url: URL
+    public var url: URL { file.url }
+    private let file: SharedJSONFile<[ChangeRecord]>
     private let limit: Int
-    private let lock = NSLock()
 
     public init(url: URL = SharedPaths.changeJournal, limit: Int = 100) {
-        self.url = url
+        file = SharedJSONFile(url: url, empty: [])
         self.limit = limit
     }
 
-    private static let encoder: JSONEncoder = {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        return encoder
-    }()
-
-    private static let decoder: JSONDecoder = {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return decoder
-    }()
-
     /// Newest first.
-    public func records() -> [ChangeRecord] {
-        lock.withLock { load() }.reversed()
-    }
+    public func records() -> [ChangeRecord] { file.value.reversed() }
 
     public func record(_ record: ChangeRecord) {
         guard !record.items.isEmpty else { return }
-        modify { $0.append(record) }
+        file.modify { records in
+            records.append(record)
+            if records.count > limit { records.removeFirst(records.count - limit) }
+        }
     }
 
     public func markUndone(_ id: String, at date: Date = Date()) {
-        modify { records in
+        file.modify { records in
             if let index = records.firstIndex(where: { $0.id == id }) { records[index].undone = date }
         }
-    }
-
-    private func load() -> [ChangeRecord] {
-        guard let data = try? Data(contentsOf: url) else { return [] }
-        return (try? Self.decoder.decode([ChangeRecord].self, from: data)) ?? []
-    }
-
-    /// Read-modify-write under a lock file, so two servers recording at once do not lose a change.
-    private func modify(_ change: (inout [ChangeRecord]) -> Void) {
-        lock.lock()
-        defer { lock.unlock() }
-        SharedPaths.ensureDirectory(url.deletingLastPathComponent())
-        let lockFD = open(url.path + ".lock", O_WRONLY | O_CREAT, 0o600)
-        if lockFD >= 0 { flock(lockFD, LOCK_EX) }
-        defer {
-            if lockFD >= 0 {
-                flock(lockFD, LOCK_UN)
-                close(lockFD)
-            }
-        }
-        var records = load()
-        change(&records)
-        if records.count > limit { records.removeFirst(records.count - limit) }
-        guard let data = try? Self.encoder.encode(records) else { return }
-        try? data.write(to: url, options: .atomic)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 }
 

@@ -162,7 +162,7 @@ final class ContactToolTests {
             func search(_ text: String, limit: Int) async -> ContactsLookup { .unavailable("no access") }
         }
         let toolbox = MailToolbox(
-            store: try h.fixture.openStore(), automation: h.automation, activity: nil, changes: nil, contacts: Denied())
+            store: try h.fixture.openStore(), automation: h.automation, activity: nil, changes: nil, schedule: nil, contacts: Denied())
         let result = await toolbox.call("find_contact", arguments: ["query": "dan"])
         let text = result.content.compactMap { if case .text(let text, _, _) = $0 { text } else { nil } }.joined()
         #expect(text.contains("no access") && text.contains("dan@example.test"))
@@ -435,5 +435,114 @@ struct ChangeApprovalTests {
         decoder.dateDecodingStrategy = .iso8601
         let request = try decoder.decode(ApprovalRequest.self, from: Data(json.utf8))
         #expect(request.action == .send && request.sendAt == nil)
+    }
+}
+
+@Suite("Snooze and send later")
+final class ScheduleTests {
+    let h: Harness
+    let snoozed: Int64
+    init() throws {
+        h = try Harness()
+        snoozed = try h.fixture.store.addMailbox(accountID: h.fixture.icloud, path: "Snoozed")
+        let fixture = h.fixture, snoozedBox = snoozed
+        let boxes = ["INBOX": fixture.inbox, "Archive": fixture.archive, "Snoozed": snoozedBox]
+        h.automation.onMove = { ids, target in
+            for id in ids { _ = try? fixture.store.moveMessage(id, to: boxes[target.path]!) }
+        }
+    }
+    deinit { h.remove() }
+
+    var inbox: MailboxTarget { MailboxTarget(accountID: h.fixture.icloud, path: "INBOX") }
+    var snoozedTarget: MailboxTarget { MailboxTarget(accountID: h.fixture.icloud, path: "Snoozed") }
+    let tomorrow = ISO8601DateFormatter().string(from: Date().addingTimeInterval(86_400))
+
+    @Test func schedulingNeedsTheMenuBarApp() async throws {
+        let snooze = await h.call("snooze_messages", ["ids": [.int(Int(h.id("kickoff")))], "until": .string(tomorrow)])
+        #expect(snooze.isError && snooze.text.contains("menu bar app"))
+        let later = await h.call("compose_email", ["to": "a@x.test", "subject": "Later", "body": "y", "send_at": .string(tomorrow)])
+        #expect(later.isError && h.automation.calls.isEmpty)
+        #expect(await h.call("snooze_messages", ["ids": [1], "until": "2020-01-01"]).text.contains("future"))
+    }
+
+    @Test func snoozesAndReturnsMessages() async throws {
+        h.approvals.beat()
+        let kickoff = h.id("kickoff")
+        let json = try await h.json("snooze_messages", ["ids": [.int(Int(kickoff))], "until": .string(tomorrow)])
+        #expect(json["snoozed"] as? Int == 1)
+        #expect(h.automation.calls.first == .move([kickoff], inbox, snoozedTarget))
+        let list = try await h.json("list_scheduled")
+        let item = (list["snoozed"] as? [[String: Any]])?.first
+        #expect(item?["returns_to"] as? String == "INBOX" && item?["messages"] as? Int == 1)
+
+        // Not due yet: nothing happens.
+        #expect(await h.toolbox.runDueSchedules().returned == 0)
+        let report = await h.toolbox.runDueSchedules(now: Date().addingTimeInterval(2 * 86_400))
+        #expect(report.returned == 1)
+        guard case .move(let ids, let from, let to) = h.automation.calls[1], case .setState(_, _, let read, _, _) = h.automation.calls[2] else {
+            Issue.record("expected a move back and mark unread: \(h.automation.calls)")
+            return
+        }
+        #expect(ids.count == 1 && from == snoozedTarget && to == inbox && read == false)
+        #expect(h.toolbox.schedule?.snoozes.isEmpty == true)
+    }
+
+    @Test func cancellingASnoozeBringsMessagesBackNow() async throws {
+        h.approvals.beat()
+        _ = try await h.json("snooze_messages", ["ids": [.int(Int(h.id("invoice")))], "until": .string(tomorrow)])
+        let id = try #require(h.toolbox.schedule?.snoozes.first?.id)
+        let json = try await h.json("cancel_scheduled", ["schedule_id": .string(id)])
+        #expect(json["returned"] as? Int == 1 && h.toolbox.schedule?.snoozes.isEmpty == true)
+    }
+
+    @Test func sendsLaterWithItsAttachments() async throws {
+        h.approvals.beat()
+        let file = h.support.appending(path: "brief.txt")
+        try Data("brief".utf8).write(to: file)
+        let json = try await h.json(
+            "compose_email", ["to": "a@x.test", "subject": "Later", "body": "y", "attachments": [.string(file.path)], "send_at": .string(tomorrow)])
+        #expect(json["result"] as? String == "scheduled")
+        #expect(h.automation.calls.isEmpty)
+        let scheduled = try #require(h.toolbox.schedule?.sends.first)
+        #expect(scheduled.attachments.first?.hasPrefix(h.support.appending(path: "scheduled-files").path) == true)
+        try FileManager.default.removeItem(at: file)  // the original can go: a copy waits for the send
+
+        let report = await h.toolbox.runDueSchedules(now: Date().addingTimeInterval(2 * 86_400))
+        #expect(report.sent == ["Later"])
+        guard case .compose(let message, .send) = h.automation.calls.first else {
+            Issue.record("expected a send")
+            return
+        }
+        #expect(message.to == ["a@x.test"] && message.attachments == scheduled.attachments)
+        #expect(h.toolbox.schedule?.sends.isEmpty == true)
+        #expect(!FileManager.default.fileExists(atPath: scheduled.attachments[0]))
+    }
+
+    @Test func repliesLaterAndCancels() async throws {
+        h.approvals.beat()
+        _ = try await h.json("reply_to_message", ["id": .int(Int(h.id("kickoff"))), "body": "Sounds good", "send_at": .string(tomorrow)])
+        _ = await h.toolbox.runDueSchedules(now: Date().addingTimeInterval(2 * 86_400))
+        guard case .reply(let id, _, let body, false, .send) = h.automation.calls.first else {
+            Issue.record("expected a reply: \(h.automation.calls)")
+            return
+        }
+        #expect(id == h.id("kickoff") && body.hasPrefix("Sounds good"))
+
+        _ = try await h.json("compose_email", ["to": "a@x.test", "subject": "Never", "body": "y", "send_at": .string(tomorrow)])
+        let cancelID = try #require(h.toolbox.schedule?.sends.first?.id)
+        _ = try await h.json("cancel_scheduled", ["schedule_id": .string(cancelID)])
+        #expect(h.toolbox.schedule?.sends.isEmpty == true)
+    }
+
+    @Test func failedSendsStayListedWithTheError() async throws {
+        h.approvals.beat()
+        _ = try await h.json("compose_email", ["to": "a@x.test", "subject": "Blocked", "body": "y", "send_at": .string(tomorrow)])
+        var settings = Settings()
+        settings.sendPolicy = .never
+        try settings.save(to: h.support.appending(path: "settings.json"))
+        let report = await h.toolbox.runDueSchedules(now: Date().addingTimeInterval(2 * 86_400))
+        #expect(report.failed == ["Blocked"] && h.automation.calls.isEmpty)
+        let item = (try await h.json("list_scheduled")["scheduled_sends"] as? [[String: Any]])?.first
+        #expect(item?["failed_attempts"] as? Int == 1 && (item?["error"] as? String)?.contains("turned off") == true)
     }
 }

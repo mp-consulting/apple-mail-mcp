@@ -134,7 +134,7 @@ public final class MailStore: @unchecked Sendable {
         lock.lock()
         let extras = extraAddresses
         lock.unlock()
-        let accounts = schemes.keys.sorted().map { id in
+        let accounts = schemes.keys.sorted().map { id -> MailAccount in
             let addresses = detected[id, default: []].union(extras[id, default: []])
             return MailAccount(id: id, name: names[id] ?? id, kind: schemes[id] ?? "imap", emailAddresses: addresses.sorted())
         }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }

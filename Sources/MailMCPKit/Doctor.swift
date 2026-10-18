@@ -67,7 +67,7 @@ public enum Doctor {
     }
 
     public static func report(settings: Settings) async throws -> String {
-        await checks(settings: settings).map { check in
+        await checks(settings: settings).map { check -> String in
             let mark = switch check.state {
             case .ok: "✓"
             case .warning: "!"

@@ -69,7 +69,7 @@ public struct Arguments: Sendable {
     public func strings(_ key: String) throws -> [String] {
         switch values[key] {
         case nil, .null: return []
-        case .array(let items): return try items.map { item in
+        case .array(let items): return try items.map { item -> String in
             guard let s = item.stringValue ?? item.intValue.map(String.init) else { throw ToolError("\(key) must contain strings") }
             return s.trimmingCharacters(in: .whitespaces)
         }.filter { !$0.isEmpty }

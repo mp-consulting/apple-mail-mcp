@@ -62,6 +62,8 @@ public final class MailToolbox: @unchecked Sendable {
     public let readOnly: Bool
     /// Sends one-click unsubscribe requests (tests never reach the network).
     public var unsubscribePoster: UnsubscribePoster = MailToolbox.defaultUnsubscribePoster
+    /// How long a mailbox Mail just created must stay before snoozed messages go into it (tests shorten it).
+    public var mailboxSettle: TimeInterval = 3
     /// How long moves and trashes wait for Mail's database to show their outcome (tests shorten it).
     public var verification = ChangeVerification()
     public var clientName: String? {

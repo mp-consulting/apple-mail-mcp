@@ -25,6 +25,8 @@ final class RecordingAutomation: MailAutomating, @unchecked Sendable {
     var lastReplyHTML: String?
     /// Runs inside `move`, e.g. to simulate Mail re-inserting the message under a new id.
     var onMove: (@Sendable ([Int64], MailboxTarget) -> Void)?
+    /// Runs inside `createMailbox`, e.g. to make the mailbox appear in the fixture.
+    var onCreateMailbox: (@Sendable (MailboxTarget) -> Void)?
     /// Runs inside `trash`, e.g. to simulate Mail moving the messages to Trash (or more than that).
     var onTrash: (@Sendable ([Int64], MailboxTarget) -> Void)?
     private var exclusiveDepth = 0
@@ -66,7 +68,10 @@ final class RecordingAutomation: MailAutomating, @unchecked Sendable {
         return ids.count
     }
 
-    func createMailbox(_ target: MailboxTarget) async throws { record(.createMailbox(target)) }
+    func createMailbox(_ target: MailboxTarget) async throws {
+        record(.createMailbox(target))
+        onCreateMailbox?(target)
+    }
     func checkForNewMail(accountID: String?) async throws { record(.check(accountID)) }
     func compose(_ message: OutgoingMessage, mode: DeliveryMode) async throws -> ComposeHandle? {
         record(.compose(message, mode))
@@ -123,6 +128,7 @@ struct Harness {
             bodyIndexURL: support.appending(path: "body-index.sqlite"), bodyIndexKey: { Self.indexKey }, readOnly: readOnly)
         // The fake changes the fixture synchronously, so a short wait shows everything.
         toolbox.verification = ChangeVerification(timeout: 0.3, interval: 0.02, settle: 0)
+        toolbox.mailboxSettle = 0.05
         // Tests never reach the network.
         toolbox.unsubscribePoster = { url in throw ToolError("network request to \(url) in a test") }
     }

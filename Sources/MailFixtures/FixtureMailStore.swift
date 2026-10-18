@@ -150,6 +150,11 @@ public final class FixtureMailStore: @unchecked Sendable {
         return id
     }
 
+    /// Removes a mailbox row, as Mail does when the server refuses a mailbox it just created.
+    public func removeMailbox(_ id: Int64) throws {
+        try db.run("DELETE FROM mailboxes WHERE ROWID = ?", [.int(id)])
+    }
+
     private func mailboxInfo(_ id: Int64) throws -> (url: MailboxURL, isLabel: Bool) {
         guard let (url, source) = try db.first("SELECT url, source FROM mailboxes WHERE ROWID = ?", [.int(id)], { ($0.string(0), $0.optionalInt(1)) }),
               let parsed = MailboxURL(url)

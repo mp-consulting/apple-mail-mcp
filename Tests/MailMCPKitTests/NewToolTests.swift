@@ -615,3 +615,44 @@ final class UnsubscribeTests {
         #expect(h.automation.calls.count == 1)
     }
 }
+
+@Suite("Snooze mailbox creation")
+final class SnoozeMailboxTests {
+    let h: Harness
+    init() throws {
+        h = try Harness()
+        h.approvals.beat()
+    }
+    deinit { h.remove() }
+
+    let tomorrow = ISO8601DateFormatter().string(from: Date().addingTimeInterval(86_400))
+
+    @Test func refusesAMailboxMailDropsAgain() async throws {
+        let store = h.fixture.store, account = h.fixture.icloud
+        // As seen with iCloud: the new mailbox shows up, then Mail removes it.
+        h.automation.onCreateMailbox = { target in
+            guard let id = try? store.addMailbox(accountID: account, path: target.path) else { return }
+            Task {
+                try? await Task.sleep(nanoseconds: 20_000_000)
+                try? store.removeMailbox(id)
+            }
+        }
+        let result = await h.call("snooze_messages", ["ids": [.int(Int(h.id("kickoff")))], "until": .string(tomorrow)])
+        #expect(result.isError && result.text.contains("did not keep"))
+        #expect(!h.automation.calls.contains { if case .move = $0 { true } else { false } })
+        #expect(h.toolbox.schedule?.snoozes.isEmpty == true)
+    }
+
+    @Test func createsTheMailboxAndRecordsUnconfirmedMoves() async throws {
+        let store = h.fixture.store, account = h.fixture.icloud
+        h.automation.onCreateMailbox = { target in _ = try? store.addMailbox(accountID: account, path: target.path) }
+        // Mail accepts the move but the database does not show it before the wait ends.
+        let json = try await h.json("snooze_messages", ["ids": [.int(Int(h.id("kickoff")))], "until": .string(tomorrow)])
+        #expect(h.automation.calls.first == .createMailbox(MailboxTarget(accountID: account, path: "Snoozed")))
+        #expect(json["snoozed"] as? Int == 0 && (json["unverified"] as? [Int])?.count == 1)
+        #expect(h.toolbox.schedule?.snoozes.first?.messageIDs == ["kickoff@example.test"])
+        // When the snooze ends and the message never left, it is let go without a move.
+        let report = await h.toolbox.runDueSchedules(now: Date().addingTimeInterval(2 * 86_400))
+        #expect(report.returned == 0 && h.toolbox.schedule?.snoozes.isEmpty == true)
+    }
+}

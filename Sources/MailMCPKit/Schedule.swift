@@ -216,10 +216,12 @@ extension MailToolbox {
             let report = try await self.applyVerified(steps) { step in
                 _ = try await automation.move(ids: step.messages.map(\.id), from: MailboxTarget(step.source), to: MailboxTarget(step.destination!))
             }
-            let done = Set(report.done)
+            // Unverified moves may still land: they are recorded too, so nothing stays snoozed with nothing to
+            // bring it back (a message that never left is simply let go when the snooze ends).
+            let attempted = Set(report.done + report.unverified)
             var snoozeIDs: [String] = []
             for step in steps {
-                let headers = step.messages.filter { done.contains($0.id) }.compactMap(\.messageIDHeader)
+                let headers = step.messages.filter { attempted.contains($0.id) }.compactMap(\.messageIDHeader)
                 guard !headers.isEmpty else { continue }
                 let id = Self.newScheduleID("z")
                 schedule.add(Snooze(
@@ -250,9 +252,15 @@ extension MailToolbox {
         try await automation.createMailbox(MailboxTarget(accountID: accountID, path: path))
         for _ in 0..<40 {
             try await Task.sleep(nanoseconds: 250_000_000)
-            if let created = try find() { return created }
+            guard try find() != nil else { continue }
+            // Mail can show a new mailbox and drop it again when the server does not accept it (seen with
+            // iCloud): only use it once it is still there a moment later.
+            try await Task.sleep(nanoseconds: UInt64(mailboxSettle * 1_000_000_000))
+            if let kept = try find() { return kept }
+            break
         }
-        throw ToolError("Mail did not create the mailbox \(path) in time; try again in a moment.")
+        throw ToolError(
+            "Mail did not keep a new mailbox \(path). Create it in Mail (or with create_mailbox), check that it stays, then snooze again.")
     }
 
     var listScheduled: ToolDefinition {

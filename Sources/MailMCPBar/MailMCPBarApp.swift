@@ -94,32 +94,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @MainActor
 enum Snapshots {
     static func render(model: AgentModel, to folder: URL) {
-        NSApp.appearance = NSAppearance(named: .darkAqua)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         var windows: [NSWindow] = []
-        func save(_ view: some View, _ name: String) {
-            // AppKit draws the hosted view into a bitmap: real controls and scroll views, no screen needed.
-            let host = NSHostingView(rootView: view.background(Color(nsColor: .windowBackgroundColor)))
-            host.appearance = NSAppearance(named: .darkAqua)
-            let size = host.fittingSize
-            host.frame = NSRect(origin: .zero, size: size)
-            let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-            window.appearance = NSAppearance(named: .darkAqua)
-            window.contentView = host
-            window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
-            window.orderFrontRegardless()
-            windows.append(window)
-            host.layoutSubtreeIfNeeded()
-            host.display()
-            guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return }
-            host.cacheDisplay(in: host.bounds, to: bitmap)
-            if let png = bitmap.representation(using: .png, properties: [:]) {
-                try? png.write(to: folder.appending(path: "\(name).png"))
+        // Dark images keep the plain names; light ones get a "-light" suffix (the README picks per reader).
+        for (appearanceName, suffix) in [(NSAppearance.Name.darkAqua, ""), (.aqua, "-light")] {
+            NSApp.appearance = NSAppearance(named: appearanceName)
+            func save(_ view: some View, _ name: String) {
+                // AppKit draws the hosted view into a bitmap: real controls and scroll views, no screen needed.
+                let host = NSHostingView(rootView: view.background(Color(nsColor: .windowBackgroundColor)))
+                host.appearance = NSAppearance(named: appearanceName)
+                host.frame = NSRect(origin: .zero, size: host.fittingSize)
+                let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+                window.appearance = NSAppearance(named: appearanceName)
+                window.contentView = host
+                window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
+                window.orderFrontRegardless()
+                windows.append(window)
+                host.layoutSubtreeIfNeeded()
+                host.display()
+                guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return }
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                if let png = bitmap.representation(using: .png, properties: [:]) {
+                    try? png.write(to: folder.appending(path: "\(name)\(suffix).png"))
+                }
             }
+            save(MenuContent(model: model, fixedTab: .mail), "tab-mail")
+            save(MenuContent(model: model, fixedTab: .claude), "tab-claude")
+            save(MenuContent(model: model, fixedTab: .settings), "tab-settings")
+            save(ApprovalWindow(model: model), "approval")
         }
-        save(MenuContent(model: model, fixedTab: .mail), "tab-mail")
-        save(MenuContent(model: model, fixedTab: .claude), "tab-claude")
-        save(MenuContent(model: model, fixedTab: .settings), "tab-settings")
-        save(ApprovalWindow(model: model), "approval")
     }
 }

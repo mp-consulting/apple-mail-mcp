@@ -22,6 +22,7 @@ final class RecordingAutomation: MailAutomating, @unchecked Sendable {
     private let lock = NSLock()
     private var _calls: [Call] = []
     var calls: [Call] { lock.withLock { _calls } }
+    var lastReplyHTML: String?
     /// Runs inside `move`, e.g. to simulate Mail re-inserting the message under a new id.
     var onMove: (@Sendable ([Int64], MailboxTarget) -> Void)?
 
@@ -55,9 +56,10 @@ final class RecordingAutomation: MailAutomating, @unchecked Sendable {
     func closeCompose(_ handle: ComposeHandle) async throws {}
 
     func reply(
-        to id: Int64, in mailbox: MailboxTarget, body: String, replyAll: Bool, cc: [String], bcc: [String],
+        to id: Int64, in mailbox: MailboxTarget, body: String, html: String?, replyAll: Bool, cc: [String], bcc: [String],
         attachments: [String], mode: DeliveryMode
     ) async throws -> ComposeHandle? {
+        lastReplyHTML = html
         record(.reply(id, mailbox, body, replyAll, mode))
         return nil
     }

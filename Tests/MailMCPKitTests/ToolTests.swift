@@ -404,3 +404,52 @@ final class ComposeToolTests {
         #expect(h.automation.calls.isEmpty)
     }
 }
+
+@Suite("HTML email")
+struct HTMLEmailTests {
+    @Test @MainActor func htmlBecomesRichText() throws {
+        let rtf = try RichText.rtf(fromHTML: "<p>Hello <b>bold</b> <a href=\"https://example.com\">link</a></p>")
+        let text = String(decoding: rtf, as: UTF8.self)
+        #expect(text.hasPrefix("{\\rtf"))
+        #expect(text.contains("\\b"))  // bold run
+        #expect(text.contains("HYPERLINK") && text.contains("https://example.com"))
+    }
+
+    @Test func composeWithHTML() async throws {
+        let h = try Harness()
+        defer { h.remove() }
+        _ = try await h.json("compose_email", ["to": "a@x.test", "subject": "Hi", "html": "<p>Hello <b>you</b></p>"])
+        guard case .compose(let message, _) = h.automation.calls.first else {
+            Issue.record("no compose recorded")
+            return
+        }
+        #expect(message.html == "<p>Hello <b>you</b></p>")
+        #expect(message.body == "Hello you")  // plain-text fallback derived from the HTML
+        #expect(await h.call("compose_email", ["to": "a@x.test", "subject": "Hi"]).isError)  // needs body or html
+    }
+
+    @Test func replyQuotesTheOriginalAsHTML() async throws {
+        let h = try Harness()
+        defer { h.remove() }
+        _ = try await h.json("reply_to_message", ["id": .int(Int(h.id("invoice"))), "html": "<p>Paid, <b>thanks</b>.</p>"])
+        let html = try #require(h.automation.lastReplyHTML)
+        #expect(html.hasPrefix("<p>Paid, <b>thanks</b>.</p>"))
+        #expect(html.contains("<blockquote type=\"cite\">"))
+        #expect(html.contains("Invoice <b>#42</b>"))  // the original's own HTML, not flattened
+        #expect(!html.contains("<head>"))
+        #expect(html.contains("Carol, Billing &lt;carol@shop.test&gt; wrote:"))
+    }
+
+    @Test func forwardKeepsTheOriginalHTML() async throws {
+        let h = try Harness()
+        defer { h.remove() }
+        _ = try await h.json("forward_message", ["id": .int(Int(h.id("invoice"))), "to": "acct@x.test", "html": "<p>FYI</p>"])
+        guard case .compose(let message, _) = h.automation.calls.first else {
+            Issue.record("no compose recorded")
+            return
+        }
+        #expect(message.html?.hasPrefix("<p>FYI</p>") == true)
+        #expect(message.html?.contains("Forwarded message") == true)
+        #expect(message.html?.contains("<li>Item one</li>") == true)
+    }
+}

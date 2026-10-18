@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-18
+
+### Added
+
+- **Formatted email**: `compose_email`, `reply_to_message` and `forward_message` take an `html` body. Mail sends a
+  real HTML email (bold, links, lists, tables); replies and forwards quote the original with its formatting.
+- **Claude app extension**: `AppleMailMCP-<version>.mcpb`, notarized and signed, installs the server in the Claude
+  app with a double-click; it has a "Read-only" setting.
+- **Homebrew**: `brew install --cask mp-consulting/tap/apple-mail-mcp`; the cask follows each release.
+- **MCP registry**: each release is listed as `io.github.mp-consulting/apple-mail-mcp`.
+- **Intel Macs**: the app and the server are universal (Apple silicon and Intel).
+- README screenshots in light and dark, matching the reader's setting.
+
 ## [0.1.0] - 2026-10-18
 
 First release.
@@ -39,5 +52,6 @@ First release.
   and a reply or forward waiting for approval links to the original.
 - Skills in the Claude tab are listed by their Claude Code slash command (`/mail-triage`…); click to copy.
 
-[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/mp-consulting/apple-mail-mcp/releases/tag/v0.1.0

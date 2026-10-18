@@ -1,0 +1,47 @@
+{
+  "$schema": "https://raw.githubusercontent.com/anthropics/mcpb/main/dist/mcpb-manifest-v0.3.schema.json",
+  "manifest_version": "0.3",
+  "name": "apple-mail-mcp",
+  "display_name": "Apple Mail",
+  "version": "__VERSION__",
+  "description": "Search, read, sort and answer your Apple Mail: fast local reads, drafts by default, and you approve what gets sent.",
+  "long_description": "Apple Mail MCP reads Mail's own database and message files on your Mac, so searches over tens of thousands of messages take milliseconds and never disturb Mail. Changes (move, flag, draft, send) go through Mail itself. Replies and new mail are saved as drafts unless you ask to send; with the Apple Mail MCP menu bar app and its \"Ask me first\" policy, nothing is sent without your click.\n\n**Permissions:** give **Claude** Full Disk Access (System Settings › Privacy & Security › Full Disk Access) so the server can read Mail's data, then restart Claude. macOS asks once for permission to control Mail the first time something is moved or sent.\n\nFor the menu bar app (approvals, activity, search index, skills), download the DMG from the GitHub releases.",
+  "author": {
+    "name": "Mickael Palma",
+    "url": "https://github.com/mp-consulting"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mp-consulting/apple-mail-mcp"
+  },
+  "homepage": "https://github.com/mp-consulting/apple-mail-mcp",
+  "documentation": "https://github.com/mp-consulting/apple-mail-mcp#readme",
+  "support": "https://github.com/mp-consulting/apple-mail-mcp/issues",
+  "icon": "icon.png",
+  "server": {
+    "type": "binary",
+    "entry_point": "server/apple-mail-mcp",
+    "mcp_config": {
+      "command": "${__dirname}/server/apple-mail-mcp",
+      "args": [],
+      "env": {
+        "APPLE_MAIL_MCP_READ_ONLY": "${user_config.read_only}"
+      }
+    }
+  },
+  "tools": __TOOLS__,
+  "keywords": ["email", "apple mail", "mail", "macos", "inbox", "productivity"],
+  "license": "MIT",
+  "compatibility": {
+    "platforms": ["darwin"]
+  },
+  "user_config": {
+    "read_only": {
+      "type": "boolean",
+      "title": "Read-only",
+      "description": "Only reading tools: no moving, flagging, trashing, drafting or sending.",
+      "default": false,
+      "required": false
+    }
+  }
+}

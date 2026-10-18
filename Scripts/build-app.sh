@@ -11,6 +11,7 @@
 # signatures change every build and macOS asks again. Developer ID also gets a secure timestamp,
 # which notarization requires.
 # VERSION and BUILD_NUMBER, when set, stamp the bundle's version (the release workflow sets them).
+# ARCHS picks the architectures (default: universal, "arm64 x86_64"; set ARCHS=arm64 for faster local builds).
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -18,9 +19,11 @@ CACHE="$HOME/Library/Caches/AppleMailMCP"
 BUILD="$CACHE/build"
 APP="$CACHE/dist/Apple Mail MCP.app"
 
-swift build -c release --arch arm64 --scratch-path "$BUILD" --product MailMCPBar
-swift build -c release --arch arm64 --scratch-path "$BUILD" --product apple-mail-mcp
-BIN="$(swift build -c release --arch arm64 --scratch-path "$BUILD" --show-bin-path)"
+ARCH_FLAGS=""
+for arch in ${ARCHS:-arm64 x86_64}; do ARCH_FLAGS="$ARCH_FLAGS --arch $arch"; done
+swift build -c release $ARCH_FLAGS --scratch-path "$BUILD" --product MailMCPBar
+swift build -c release $ARCH_FLAGS --scratch-path "$BUILD" --product apple-mail-mcp
+BIN="$(swift build -c release $ARCH_FLAGS --scratch-path "$BUILD" --show-bin-path)"
 
 [ -f Resources/AppIcon.icns ] || swift Scripts/make-icon.swift Resources
 

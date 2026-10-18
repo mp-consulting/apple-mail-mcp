@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/mp-consulting/apple-mail-mcp/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/mp-consulting/apple-mail-mcp"></a>
   <a href="https://github.com/mp-consulting/apple-mail-mcp/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/mp-consulting/apple-mail-mcp/actions/workflows/ci.yml/badge.svg"></a>
-  <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-blue">
+  <img alt="macOS 14+, Apple silicon and Intel" src="https://img.shields.io/badge/macOS-14%2B%20%C2%B7%20universal-blue">
   <img alt="Swift 6" src="https://img.shields.io/badge/Swift-6-orange">
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-green"></a>
 </p>
@@ -22,9 +22,9 @@ milliseconds, read threads, find what needs a reply, draft answers in your voice
 file attachments, and it can only send an email after you click **Send**.
 
 <p align="center">
-  <img src="docs/images/tab-mail.png" width="300" alt="Mail tab: three emails waiting for approval, one shown in full, recent activity">
-  <img src="docs/images/tab-claude.png" width="300" alt="Claude tab: Claude Code and the Claude app connected, the eight skills with descriptions">
-  <img src="docs/images/tab-settings.png" width="300" alt="Settings tab: send policy, changes, search index and updates">
+  <picture><source media="(prefers-color-scheme: light)" srcset="docs/images/tab-mail-light.png"><img src="docs/images/tab-mail.png" width="300" alt="Mail tab: three emails waiting for approval, one shown in full, recent activity"></picture>
+  <picture><source media="(prefers-color-scheme: light)" srcset="docs/images/tab-claude-light.png"><img src="docs/images/tab-claude.png" width="300" alt="Claude tab: Claude Code and the Claude app connected, the eight skills by slash command"></picture>
+  <picture><source media="(prefers-color-scheme: light)" srcset="docs/images/tab-settings-light.png"><img src="docs/images/tab-settings.png" width="300" alt="Settings tab: send policy, changes, search index and updates"></picture>
 </p>
 
 ## Why another Mail server?
@@ -49,8 +49,25 @@ never disturb Mail. See [Benchmarks](#benchmarks).
 
 ## Install
 
-1. Download **AppleMailMCP-x.y.z.dmg** from the [latest release](https://github.com/mp-consulting/apple-mail-mcp/releases/latest)
-   and drag **Apple Mail MCP** to Applications. Open it: an envelope appears in the menu bar.
+**Homebrew:**
+
+```sh
+brew install --cask mp-consulting/tap/apple-mail-mcp
+```
+
+**Or download** the app or the Claude extension from the [latest release](https://github.com/mp-consulting/apple-mail-mcp/releases/latest):
+
+| File | For |
+|---|---|
+| `AppleMailMCP-x.y.z.dmg` | The menu bar app with the server inside: approvals, activity, search index, skills, one-click setup. Recommended. |
+| `AppleMailMCP-x.y.z.mcpb` | The Claude app only: double-click to install the server as a Claude extension, no config or restart. |
+
+Both are notarized, signed with Developer ID, and run on Apple silicon and Intel Macs (macOS 14+). The server is also
+listed in the [MCP registry](https://registry.modelcontextprotocol.io) as `io.github.mp-consulting/apple-mail-mcp`.
+
+Then:
+
+1. Open **Apple Mail MCP**: an envelope appears in the menu bar.
 2. Click the envelope, open the **Claude** tab and click **Connect** next to Claude Code and/or the Claude app.
    - **Claude Code** gets the server and all the skills; new sessions see them.
    - **The Claude app** reads its servers only at launch: click **Restart Claude** when the tab offers it.
@@ -94,7 +111,7 @@ Run `apple-mail-mcp doctor` for a full check.
 | `list_attachments`, `save_attachment`, `export_messages` | Attachments to disk, messages to `.eml` or Markdown |
 | `get_message_source` | Raw headers, e.g. to check authentication or unsubscribe links |
 | `move_messages`, `update_messages`, `trash_messages`, `create_mailbox` | Archive and file, read/unread and flags, Trash; previews with `dry_run` |
-| `compose_email`, `reply_to_message`, `forward_message` | Draft (default), open for review, or send |
+| `compose_email`, `reply_to_message`, `forward_message` | Draft (default), open for review, or send; plain text or formatted HTML (replies and forwards quote the original with its formatting) |
 | `open_in_mail`, `check_new_mail`, `body_index` | Show a message in Mail, fetch new mail, manage the search index |
 
 Message ids are Mail's own; a moved message gets a new id, which `move_messages` returns.
@@ -123,7 +140,7 @@ as little of your mail as possible. When the app updates, skills you installed u
 ## You stay in control
 
 <p align="center">
-  <img src="docs/images/approval.png" width="460" alt="The approval window: one email shown in full with a 1 of 3 pager, two more waiting below">
+  <picture><source media="(prefers-color-scheme: light)" srcset="docs/images/approval-light.png"><img src="docs/images/approval.png" width="460" alt="The approval window: one email shown in full with a 1 of 3 pager, two more waiting below"></picture>
 </p>
 
 When Claude wants to send, a small window pops up (and the panel's **Mail** tab shows a count). With several

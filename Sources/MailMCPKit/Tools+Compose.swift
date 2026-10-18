@@ -82,11 +82,12 @@ extension MailToolbox {
                         "cc": Schema.strings("Cc addresses"),
                         "bcc": Schema.strings("Bcc addresses"),
                         "subject": Schema.string("Subject"),
-                        "body": Schema.string("Plain-text body"),
+                        "body": Schema.string("Plain-text body (or the fallback when html is given)"),
+                        "html": Schema.string("Formatted body in HTML (bold, links, lists, tables…); Mail sends it as an HTML email"),
                         "from": Schema.string("Send from this address (one of yours; default: Mail's default)"),
                         "attachments": Schema.strings("Absolute paths of files to attach"),
                         "mode": Self.modeSchema,
-                    ], required: ["to", "subject", "body"]), kind: .compose, openWorld: true),
+                    ], required: ["to", "subject"]), kind: .compose, openWorld: true),
             kind: .compose
         ) { [automation] arguments in
             let to = try arguments.strings("to")
@@ -97,7 +98,9 @@ extension MailToolbox {
             try Self.validateAddresses(cc, field: "cc")
             try Self.validateAddresses(bcc, field: "bcc")
             let subject = try arguments.string("subject") ?? ""
-            let body = try arguments.string("body") ?? ""
+            let html = try arguments.string("html")
+            let body = try arguments.string("body") ?? html.map { HTMLText.plainText(fromHTML: $0) } ?? ""
+            guard !body.isEmpty || html != nil else { throw ToolError("body or html is required") }
             let mode = try Self.mode(arguments)
             let from = try self.validatedSender(arguments)
             let attachments = try self.validatedAttachments(arguments)
@@ -108,7 +111,7 @@ extension MailToolbox {
             }
             let started = (try? self.store.maxMessageRowID()) ?? .max
             let handle = try await automation.compose(
-                OutgoingMessage(from: from, to: to, cc: cc, bcc: bcc, subject: subject, body: body, attachments: attachments),
+                OutgoingMessage(from: from, to: to, cc: cc, bcc: bcc, subject: subject, body: body, html: html, attachments: attachments),
                 mode: mode)
             let draftID = mode == .draft ? await self.settleDraft(handle, subject: subject, after: started) : nil
             return ToolReply(
@@ -129,6 +132,28 @@ extension MailToolbox {
         return body + "\n\n" + attribution + "\n" + quoted + "\n"
     }
 
+    /// HTML reply with the original quoted below it, formatting kept when it was HTML.
+    static func quotedReplyHTML(html: String, original: MessageDetail) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        let attribution = RichText.escape(
+            "On \(formatter.string(from: original.summary.dateReceived)), \(original.summary.sender.formatted) wrote:")
+        let quoted = original.htmlBody.map(Self.htmlBodyContent)
+            ?? RichText.escape(original.textBody ?? original.summary.preview ?? "")
+        return "\(html)<br><br><div>\(attribution)</div><blockquote type=\"cite\">\(quoted)</blockquote>"
+    }
+
+    /// The inside of an HTML document's <body>, so it can be embedded in another message.
+    static func htmlBodyContent(_ html: String) -> String {
+        guard let open = html.range(of: "<body", options: .caseInsensitive),
+              let openEnd = html[open.upperBound...].firstIndex(of: ">")
+        else { return html }
+        let start = html.index(after: openEnd)
+        let end = html.range(of: "</body>", options: [.caseInsensitive, .backwards])?.lowerBound ?? html.endIndex
+        return start <= end ? String(html[start..<end]) : html
+    }
+
     var replyToMessage: ToolDefinition {
         ToolDefinition(
             tool: Self.tool(
@@ -141,18 +166,21 @@ extension MailToolbox {
                     [
                         "id": Schema.integer("Message id to reply to"),
                         "body": Schema.string("Your reply (plain text)"),
+                        "html": Schema.string("Your reply as HTML instead of plain text; the original is quoted below it with its formatting"),
                         "reply_all": Schema.boolean("Reply to all recipients (default false)"),
                         "cc": Schema.strings("Additional Cc addresses"),
                         "bcc": Schema.strings("Bcc addresses"),
                         "attachments": Schema.strings("Absolute paths of files to attach"),
                         "quote_original": Schema.boolean("Quote the original message below the reply (default true)"),
                         "mode": Self.modeSchema,
-                    ], required: ["id", "body"]), kind: .compose, openWorld: true),
+                    ], required: ["id"]), kind: .compose, openWorld: true),
             kind: .compose
         ) { [automation] arguments in
             let store = try self.store
             guard let id = try arguments.ids("id").first else { throw ToolError("id is required") }
-            let body = try arguments.requiredString("body")
+            let replyHTML = try arguments.string("html")
+            let body = try arguments.string("body") ?? replyHTML.map { HTMLText.plainText(fromHTML: $0) } ?? ""
+            guard !body.isEmpty || replyHTML != nil else { throw ToolError("body or html is required") }
             let replyAll = try arguments.bool("reply_all") ?? false
             let cc = try arguments.strings("cc")
             let bcc = try arguments.strings("bcc")
@@ -163,7 +191,9 @@ extension MailToolbox {
             let original = try store.detail(id: id)
             guard let mailbox = try store.mailbox(id: original.summary.mailboxID) else { throw ToolError("Mailbox of message \(id) not found") }
             try Self.refuseDrafts(mailbox, id: id)
-            let fullBody = try arguments.bool("quote_original") ?? true ? Self.quotedReply(body: body, original: original) : body
+            let quote = try arguments.bool("quote_original") ?? true
+            let fullBody = quote ? Self.quotedReply(body: body, original: original) : body
+            let fullHTML = replyHTML.map { quote ? Self.quotedReplyHTML(html: $0, original: original) : $0 }
             let subject = original.summary.subject.lowercased().hasPrefix("re:") ? original.summary.subject : "Re: " + original.summary.subject
             if mode == .send {
                 let own = try store.ownAddresses()
@@ -180,7 +210,7 @@ extension MailToolbox {
             }
             let started = (try? self.store.maxMessageRowID()) ?? .max
             let handle = try await automation.reply(
-                to: id, in: MailboxTarget(mailbox), body: fullBody, replyAll: replyAll, cc: cc, bcc: bcc,
+                to: id, in: MailboxTarget(mailbox), body: fullBody, html: fullHTML, replyAll: replyAll, cc: cc, bcc: bcc,
                 attachments: attachments, mode: mode)
             let draftID = mode == .draft ? await self.settleDraft(handle, subject: subject, after: started) : nil
             return ToolReply(
@@ -203,6 +233,20 @@ extension MailToolbox {
         lines.append("")
         lines.append(original.textBody ?? s.preview ?? "")
         return lines.joined(separator: "\n").trimmingCharacters(in: .newlines) + "\n"
+    }
+
+    /// HTML forward: the note, a header block and the original (its own HTML when it has one).
+    static func forwardedHTML(note: String, original: MessageDetail) -> String {
+        let s = original.summary
+        let formatter = DateFormatter()
+        formatter.dateStyle = .long
+        formatter.timeStyle = .short
+        var header = ["From: \(s.sender.formatted)", "Date: \(formatter.string(from: s.dateReceived))", "Subject: \(s.subject)"]
+        if !original.to.isEmpty { header.append("To: \(original.to.map(\.formatted).joined(separator: ", "))") }
+        if !original.cc.isEmpty { header.append("Cc: \(original.cc.map(\.formatted).joined(separator: ", "))") }
+        let content = original.htmlBody.map(htmlBodyContent) ?? RichText.escape(original.textBody ?? s.preview ?? "")
+        return "\(note)<br><br><div>---------- Forwarded message ----------<br>"
+            + header.map(RichText.escape).joined(separator: "<br>") + "</div><br>\(content)"
     }
 
     /// Writes the original's attachments to a private cache folder so Mail can attach them.
@@ -246,6 +290,7 @@ extension MailToolbox {
                         "cc": Schema.strings("Cc addresses"),
                         "bcc": Schema.strings("Bcc addresses"),
                         "body": Schema.string("Note to put above the forwarded message"),
+                        "html": Schema.string("The note as HTML; the original keeps its formatting below it"),
                         "include_attachments": Schema.boolean("Attach the original's attachments (default true)"),
                         "mode": Self.modeSchema,
                     ], required: ["id", "to"]), kind: .compose, openWorld: true),
@@ -271,6 +316,8 @@ extension MailToolbox {
             let downloaded = original.attachments.filter(\.isDownloaded)
             let files = includeAttachments ? try self.extractAttachments(of: id, downloaded) : []
             let body = Self.forwardedBody(note: note, original: original)
+            let noteHTML = try arguments.string("html")
+            let html = noteHTML.map { Self.forwardedHTML(note: $0, original: original) }
             if mode == .send {
                 try await self.authorizeSend(
                     tool: "forward_message", from: nil, to: to, cc: cc, bcc: bcc, subject: subject, body: body, attachments: files,
@@ -278,7 +325,7 @@ extension MailToolbox {
             }
             let started = (try? self.store.maxMessageRowID()) ?? .max
             let handle = try await automation.compose(
-                OutgoingMessage(to: to, cc: cc, bcc: bcc, subject: subject, body: body, attachments: files), mode: mode)
+                OutgoingMessage(to: to, cc: cc, bcc: bcc, subject: subject, body: body, html: html, attachments: files), mode: mode)
             let draftID = mode == .draft ? await self.settleDraft(handle, subject: subject, after: started) : nil
             let skipped = includeAttachments ? original.attachments.count - downloaded.count : 0
             return ToolReply(

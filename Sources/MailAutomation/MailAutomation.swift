@@ -34,13 +34,17 @@ public struct OutgoingMessage: Sendable, Hashable {
     public var cc: [String]
     public var bcc: [String]
     public var subject: String
+    /// Plain text (also the fallback when `html` is set).
     public var body: String
+    /// Formatted body; when set, Mail sends a multipart HTML email.
+    public var html: String?
     public var attachments: [String]
 
     public init(
         from: String? = nil, to: [String], cc: [String] = [], bcc: [String] = [], subject: String, body: String,
-        attachments: [String] = []
+        html: String? = nil, attachments: [String] = []
     ) {
+        self.html = html
         self.from = from
         self.to = to
         self.cc = cc
@@ -77,7 +81,7 @@ public protocol MailAutomating: Sendable {
     func compose(_ message: OutgoingMessage, mode: DeliveryMode) async throws -> ComposeHandle?
     @discardableResult
     func reply(
-        to id: Int64, in mailbox: MailboxTarget, body: String, replyAll: Bool, cc: [String], bcc: [String],
+        to id: Int64, in mailbox: MailboxTarget, body: String, html: String?, replyAll: Bool, cc: [String], bcc: [String],
         attachments: [String], mode: DeliveryMode) async throws -> ComposeHandle?
     /// Closes a compose object without saving again.
     func closeCompose(_ handle: ComposeHandle) async throws
@@ -229,6 +233,16 @@ public final class MailAutomation: MailAutomating {
         Thread.sleep(forTimeInterval: 0.3)
     }
 
+    /// RTF for an HTML body, converted on the main thread before the Apple Events run.
+    private static func rtf(_ html: String?) async throws -> Data? {
+        guard let html, !html.isEmpty else { return nil }
+        return try await MainActor.run { try RichText.rtf(fromHTML: html) }
+    }
+
+    private static func richText(_ rtf: Data) -> NSAppleEventDescriptor {
+        NSAppleEventDescriptor(descriptorType: fourCC("RTF "), data: rtf) ?? NSAppleEventDescriptor(string: "")
+    }
+
     private static func handle(_ message: NSAppleEventDescriptor) -> ComposeHandle? {
         message.forKeyword(fourCC("seld")).map { ComposeHandle(id: $0.int32Value) }
     }
@@ -254,7 +268,8 @@ public final class MailAutomation: MailAutomating {
 
     @discardableResult
     public func compose(_ outgoing: OutgoingMessage, mode: DeliveryMode) async throws -> ComposeHandle? {
-        try await run { mail in
+        let rtf = try await Self.rtf(outgoing.html)
+        return try await run { mail in
             let message = try mail.make(
                 "bcke",
                 properties: [
@@ -262,6 +277,7 @@ public final class MailAutomation: MailAutomating {
                     "ctnt": NSAppleEventDescriptor(string: outgoing.body),
                     "pvis": NSAppleEventDescriptor(boolean: false),
                 ])
+            if let rtf { try mail.set(MailSpec.property("ctnt", of: message), to: Self.richText(rtf)) }
             if let from = outgoing.from, !from.isEmpty {
                 try mail.set(MailSpec.property("sndr", of: message), to: NSAppleEventDescriptor(string: from))
             }
@@ -274,16 +290,18 @@ public final class MailAutomation: MailAutomating {
 
     @discardableResult
     public func reply(
-        to id: Int64, in mailbox: MailboxTarget, body: String, replyAll: Bool, cc: [String], bcc: [String],
+        to id: Int64, in mailbox: MailboxTarget, body: String, html: String?, replyAll: Bool, cc: [String], bcc: [String],
         attachments: [String], mode: DeliveryMode
     ) async throws -> ComposeHandle? {
-        try await run { mail in
+        let rtf = try await Self.rtf(html)
+        return try await run { mail in
             // `reply` gives the threading headers (In-Reply-To, References). Mail always opens a
             // window for it, and the body (with our own quote) replaces Mail's as plain text.
             let reply = try mail.send(
                 "emal", "rpms", direct: MailSpec.message(id, in: mailbox),
                 ["ropw": NSAppleEventDescriptor(boolean: false), "rpal": NSAppleEventDescriptor(boolean: replyAll)])
-            try mail.set(MailSpec.property("ctnt", of: reply), to: NSAppleEventDescriptor(string: body))
+            try mail.set(
+                MailSpec.property("ctnt", of: reply), to: rtf.map(Self.richText) ?? NSAppleEventDescriptor(string: body))
             try Self.addRecipients(mail, to: reply, to: [], cc: cc, bcc: bcc)
             try Self.addAttachments(mail, to: reply, paths: attachments)
             try Self.finish(mail, reply, mode: mode, attachments: attachments.count)

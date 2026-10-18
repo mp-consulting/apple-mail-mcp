@@ -62,11 +62,15 @@ swift Scripts/make-icon.swift Resources
 - Insert all attachments, then wait until `count of attachments of content` matches before saving or
   sending; saving earlier drops the late ones.
 - Mail keeps compose objects in memory until it quits; `delete`/`close` do not free invisible ones.
+- HTML email: set `content` to an **RTF** descriptor (HTML → `NSAttributedString` → RTF, on the main thread). Mail
+  then saves and sends multipart HTML. The scripting `html content` property does nothing.
 
 ## Releases
 
-Publishing a GitHub release `vX.Y.Z` runs `.github/workflows/release.yml`: tests, builds, signs with the
-Developer ID certificate, makes `AppleMailMCP-X.Y.Z.dmg`, notarizes and attaches it. The menu bar app's
+Publishing a GitHub release `vX.Y.Z` runs `.github/workflows/release.yml`: tests, builds (universal), signs with the
+Developer ID certificate, makes and notarizes `AppleMailMCP-X.Y.Z.dmg` and `AppleMailMCP-X.Y.Z.mcpb` (the Claude
+extension, also signed with `mcpb sign`), attaches both, and publishes `server.json` to the MCP registry via GitHub
+OIDC. The Homebrew cask in `mp-consulting/homebrew-tap` updates itself from the latest release every 6 hours. The menu bar app's
 updater only installs that asset, notarized and signed by team 4HWBUF2R8D. Bump `MailMCPVersion.current`
 and `CHANGELOG.md` first. Secrets: `DEVELOPER_ID_CERTIFICATE`, `DEVELOPER_ID_CERTIFICATE_PASSWORD`,
 `APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`.

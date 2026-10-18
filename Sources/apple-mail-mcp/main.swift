@@ -77,6 +77,10 @@ let environmentWriteDirs = ProcessInfo.processInfo.environment["APPLE_MAIL_MCP_W
 let environmentAttachDirs = ProcessInfo.processInfo.environment["APPLE_MAIL_MCP_ATTACH_DIRS"]?.split(separator: ":").map(String.init) ?? []
 let extraWrite = writeDirs + environmentWriteDirs
 let extraAttach = attachDirs + environmentAttachDirs
+// The Claude app extension passes its "Read-only" setting this way.
+if let flag = ProcessInfo.processInfo.environment["APPLE_MAIL_MCP_READ_ONLY"]?.lowercased(), ["true", "1", "yes"].contains(flag) {
+    readOnly = true
+}
 let isReadOnly = readOnly
 let settings = SettingsProvider { settings in
     if isReadOnly {
@@ -150,6 +154,17 @@ case "install", "uninstall":
             print("\(client.displayName): \(error)")
         }
     }
+
+case "tools-json":
+    // Tool names and one-line descriptions, for the .mcpb manifest (see Scripts/make-mcpb.sh).
+    let toolbox = MailToolbox(storeProvider: { throw ToolError("not needed") }, automation: MailAutomation(), settings: settings, activity: nil)
+    let tools: [[String: String]] = toolbox.definitions.map { definition in
+        let text = definition.tool.description ?? ""
+        let first = text.firstIndex(of: ".").map { String(text[...$0]) } ?? text
+        return ["name": definition.tool.name, "description": first.replacingOccurrences(of: "\n", with: " ")]
+    }
+    let data = try JSONSerialization.data(withJSONObject: tools, options: [.sortedKeys])
+    print(String(decoding: data, as: UTF8.self))
 
 case "skills":
     let installer = SkillInstaller()

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.mp-consulting/apple-mail-mcp",
+  "title": "Apple Mail",
+  "description": "Search, read, sort and answer Apple Mail on macOS: fast local reads, drafts first, you approve sends",
+  "repository": {
+    "url": "https://github.com/mp-consulting/apple-mail-mcp",
+    "source": "github"
+  },
+  "websiteUrl": "https://github.com/mp-consulting/apple-mail-mcp",
+  "version": "__VERSION__",
+  "packages": [
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/mp-consulting/apple-mail-mcp/releases/download/v__VERSION__/AppleMailMCP-__VERSION__.mcpb",
+      "version": "__VERSION__",
+      "fileSha256": "__SHA256__",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

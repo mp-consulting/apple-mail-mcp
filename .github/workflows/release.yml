@@ -1,14 +1,17 @@
 name: Release
 
-# Publishing a GitHub release builds Apple Mail MCP, signs it with a Developer ID certificate, packs it into
-# a disk image, notarizes it and attaches AppleMailMCP-<version>.dmg to the release. The version comes
-# from the release tag (v1.2.0 -> 1.2.0). Secrets are listed in the README under "Releases".
+# Publishing a GitHub release builds Apple Mail MCP (universal), signs it with a Developer ID certificate,
+# and attaches two notarized files to the release: AppleMailMCP-<version>.dmg (the app) and
+# AppleMailMCP-<version>.mcpb (the Claude app extension, also signed for Claude). It then lists the
+# version in the MCP registry. The version comes from the release tag (v1.2.0 -> 1.2.0). Secrets are
+# listed in CLAUDE.md under "Releases"; the Homebrew tap picks the release up on its own schedule.
 on:
   release:
     types: [published]
 
 permissions:
   contents: write
+  id-token: write  # MCP registry login (GitHub OIDC)
 
 jobs:
   dmg:
@@ -72,10 +75,74 @@ jobs:
           xcrun stapler staple "$DMG"
           spctl --assess --type open --context context:primary-signature --verbose "$DMG"
 
-      - name: Attach to release
+      - name: Attach disk image
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "$TAG" "$DMG" --clobber
+
+      - name: Make Claude extension
+        run: |
+          MCPB="$HOME/Library/Caches/AppleMailMCP/dist/AppleMailMCP-${TAG#v}.mcpb"
+          Scripts/make-mcpb.sh "$HOME/Library/Caches/AppleMailMCP/dist/Apple Mail MCP.app" "$MCPB"
+          echo "MCPB=$MCPB" >> "$GITHUB_ENV"
+
+      # The .mcpb is a zip: notarizing it notarizes the server binary inside (checked online, a zip
+      # can't be stapled). This runs before signing, which appends Claude's signature to the zip.
+      - name: Notarize Claude extension
+        if: env.NOTARIZE == 'true'
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          KEY="$RUNNER_TEMP/AuthKey_$APPLE_API_KEY_ID.p8"
+          ZIP="$RUNNER_TEMP/extension.zip"
+          trap 'rm -f "$KEY" "$ZIP"' EXIT
+          (umask 077 && printf '%s\n' "$APPLE_API_KEY" > "$KEY")
+          cp "$MCPB" "$ZIP"
+          xcrun notarytool submit "$ZIP" --key "$KEY" --key-id "$APPLE_API_KEY_ID" \
+            --issuer "$APPLE_API_ISSUER" --wait
+
+      # Signs the bundle for Claude with the same Developer ID: certificate and key from the .p12,
+      # plus Apple's Developer ID intermediates, so Claude shows a verified publisher.
+      - name: Sign Claude extension
+        env:
+          CERTIFICATE: ${{ secrets.DEVELOPER_ID_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+        run: |
+          WORK="$RUNNER_TEMP/mcpb-sign"
+          mkdir -p "$WORK"
+          trap 'rm -rf "$WORK"' EXIT
+          (umask 077 && echo "$CERTIFICATE" | base64 --decode > "$WORK/id.p12")
+          pem() {
+            /usr/bin/openssl pkcs12 -in "$WORK/id.p12" -passin env:CERTIFICATE_PASSWORD "$@" 2>/dev/null \
+              || openssl pkcs12 -legacy -in "$WORK/id.p12" -passin env:CERTIFICATE_PASSWORD "$@"
+          }
+          (umask 077 && pem -nocerts -nodes -out "$WORK/key.pem")
+          pem -clcerts -nokeys -out "$WORK/cert.pem"
+          for ca in DeveloperIDG2CA DeveloperIDCA; do
+            curl -fsSL "https://www.apple.com/certificateauthority/$ca.cer" -o "$WORK/$ca.cer"
+            /usr/bin/openssl x509 -inform DER -in "$WORK/$ca.cer" -out "$WORK/$ca.pem"
+          done
+          npx --yes @anthropic-ai/mcpb@2.1.2 sign "$MCPB" --cert "$WORK/cert.pem" --key "$WORK/key.pem" \
+            --intermediate "$WORK/DeveloperIDG2CA.pem" "$WORK/DeveloperIDCA.pem"
+          npx --yes @anthropic-ai/mcpb@2.1.2 verify "$MCPB"
+
+      - name: Attach Claude extension
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" "$MCPB" --clobber
+
+      - name: Publish to the MCP registry
+        run: |
+          VERSION="${TAG#v}"
+          SHA256="$(shasum -a 256 "$MCPB" | cut -d' ' -f1)"
+          sed -e "s/__VERSION__/$VERSION/g" -e "s/__SHA256__/$SHA256/" server.json > "$RUNNER_TEMP/server.json"
+          cd "$RUNNER_TEMP"
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_darwin_arm64.tar.gz" \
+            | tar xz mcp-publisher
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
 
       - name: Remove keychain
         if: always()

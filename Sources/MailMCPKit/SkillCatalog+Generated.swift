@@ -114,7 +114,8 @@ outcome of a mistake is a message in Archive or Trash that can be moved back.
    3. **Receipts and notifications**: `category: "transactions"` → archive.
    4. **What is left**: real conversations. Use `needs_response`; reply, flag or archive one by one. Mail
       that can wait until a given day can be snoozed with `snooze_messages` (`until`), which brings it back
-      to the inbox, unread, on that day.
+      to the inbox, unread, on that day. If it reports that Mail did not keep the new mailbox, snooze into a
+      folder that already exists (`mailbox`, e.g. an archive folder).
 
 ## For every batch
 

@@ -260,7 +260,7 @@ extension MailToolbox {
             break
         }
         throw ToolError(
-            "Mail did not keep a new mailbox \(path). Create it in Mail (or with create_mailbox), check that it stays, then snooze again.")
+            "Mail did not keep a new mailbox \(path) (iCloud can refuse it). Pass mailbox with a folder that already exists, e.g. an archive folder, or create one in Mail and check that it stays.")
     }
 
     var listScheduled: ToolDefinition {

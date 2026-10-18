@@ -239,6 +239,7 @@ extension MailToolbox {
                 guard let target = step.destination else { return }
                 _ = try await automation.move(ids: step.messages.map(\.id), from: MailboxTarget(step.source), to: MailboxTarget(target))
             }
+            let changeID = self.journalMove(.move, tool: "move_messages", steps: steps, done: report.done)
             let mapping = report.newIDs.sorted { $0.key < $1.key }
             let destination = plan.first?.target.path ?? destinationName
             let json = JSON.obj(
@@ -246,6 +247,7 @@ extension MailToolbox {
                     ("moved", .int(Int64(report.done.count))),
                     ("to", .string(destination)),
                     ("new_ids", mapping.isEmpty ? nil : .object(mapping.map { (String($0.key), .int($0.value)) })),
+                    ("change_id", changeID.map(JSON.string)),
                 ] + report.fields(notFound: missing))
             return ToolReply(json: json, summary: report.summary("moved") + " to \(destination)", messageID: mapping.first?.value)
         }
@@ -276,6 +278,7 @@ extension MailToolbox {
             }
             guard read != nil || flagged != nil || color != nil else { throw ToolError("Give at least one of read, flagged or flag_color") }
             let (groups, missing) = try self.locate(ids)
+            let changeID = self.journalUpdate(groups, read: read, flags: flagged != nil || color != nil)
             var updated = 0
             for (mailbox, messages) in groups {
                 updated += try await automation.setState(
@@ -285,7 +288,10 @@ extension MailToolbox {
             if let read { changes.append(read ? "read" : "unread") }
             if let color { changes.append("flagged \(color.name)") } else if let flagged { changes.append(flagged ? "flagged" : "unflagged") }
             return ToolReply(
-                json: .obj([("updated", .int(Int64(updated))), ("not_found", missing.isEmpty ? nil : .array(missing.map { .int($0) }))]),
+                json: .obj([
+                    ("updated", .int(Int64(updated))), ("change_id", changeID.map(JSON.string)),
+                    ("not_found", missing.isEmpty ? nil : .array(missing.map { .int($0) })),
+                ]),
                 summary: "\(changes.joined(separator: ", ")) \(updated)", messageID: ids.count == 1 ? ids[0] : nil)
         }
     }
@@ -331,10 +337,12 @@ extension MailToolbox {
             let report = try await self.applyVerified(steps) { step in
                 _ = try await automation.trash(ids: step.messages.map(\.id), in: MailboxTarget(step.source))
             }
+            let changeID = self.journalMove(.trash, tool: "trash_messages", steps: steps, done: report.done)
             return ToolReply(
                 json: .obj(
                     [
                         ("trashed", .int(Int64(report.done.count))),
+                        ("change_id", changeID.map(JSON.string)),
                         ("skipped_already_in_trash_or_junk", skipped.isEmpty ? nil : .array(skipped.map { .int($0) })),
                     ] + report.fields(notFound: missing)),
                 summary: report.summary("trashed"))

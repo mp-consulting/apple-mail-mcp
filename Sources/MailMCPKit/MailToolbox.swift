@@ -49,6 +49,8 @@ public final class MailToolbox: @unchecked Sendable {
     public let settings: SettingsProvider
     public let approvals: ApprovalCenter
     public let activity: ActivityLog?
+    /// Recent changes to mail, for `undo_change`; nil turns undo off.
+    public let changes: ChangeJournal?
     public let bodyIndexURL: URL
     /// Where the body index key comes from: the Keychain, or a fixed key in tests.
     public let bodyIndexKey: @Sendable () throws -> BodyIndexKey
@@ -70,18 +72,19 @@ public final class MailToolbox: @unchecked Sendable {
     public convenience init(
         store: MailStore, automation: any MailAutomating, settings: SettingsProvider = SettingsProvider(),
         approvals: ApprovalCenter = ApprovalCenter(), activity: ActivityLog? = ActivityLog(),
-        bodyIndexURL: URL = SharedPaths.bodyIndex,
+        changes: ChangeJournal? = ChangeJournal(), bodyIndexURL: URL = SharedPaths.bodyIndex,
         bodyIndexKey: @escaping @Sendable () throws -> BodyIndexKey = BodyIndexKey.fromKeychain, readOnly: Bool = false
     ) {
         self.init(
             storeProvider: { store }, automation: automation, settings: settings, approvals: approvals,
-            activity: activity, bodyIndexURL: bodyIndexURL, bodyIndexKey: bodyIndexKey, readOnly: readOnly)
+            activity: activity, changes: changes, bodyIndexURL: bodyIndexURL, bodyIndexKey: bodyIndexKey, readOnly: readOnly)
     }
 
     public init(
         storeProvider: @escaping @Sendable () throws -> MailStore, automation: any MailAutomating,
         settings: SettingsProvider = SettingsProvider(), approvals: ApprovalCenter = ApprovalCenter(),
-        activity: ActivityLog? = ActivityLog(), bodyIndexURL: URL = SharedPaths.bodyIndex,
+        activity: ActivityLog? = ActivityLog(), changes: ChangeJournal? = ChangeJournal(),
+        bodyIndexURL: URL = SharedPaths.bodyIndex,
         bodyIndexKey: @escaping @Sendable () throws -> BodyIndexKey = BodyIndexKey.fromKeychain, readOnly: Bool = false
     ) {
         self.storeProvider = storeProvider
@@ -89,6 +92,7 @@ public final class MailToolbox: @unchecked Sendable {
         self.settings = settings
         self.approvals = approvals
         self.activity = activity
+        self.changes = changes
         self.bodyIndexURL = bodyIndexURL
         self.bodyIndexKey = bodyIndexKey
         self.readOnly = readOnly
@@ -236,7 +240,7 @@ public final class MailToolbox: @unchecked Sendable {
 
     // MARK: Tool list
 
-    public var definitions: [ToolDefinition] { readTools + fileTools + changeTools + composeTools }
+    public var definitions: [ToolDefinition] { readTools + fileTools + changeTools + undoTools + composeTools }
 
     /// Tools offered to clients (hides write tools in read-only launches).
     public var listedDefinitions: [ToolDefinition] {

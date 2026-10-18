@@ -108,6 +108,7 @@ struct Harness {
             store: try fixture.openStore(), automation: automation,
             settings: SettingsProvider(url: support.appending(path: "settings.json")), approvals: approvals,
             activity: ActivityLog(url: support.appending(path: "activity.jsonl")),
+            changes: ChangeJournal(url: support.appending(path: "changes.json")),
             bodyIndexURL: support.appending(path: "body-index.sqlite"), bodyIndexKey: { Self.indexKey }, readOnly: readOnly)
         // The fake changes the fixture synchronously, so a short wait shows everything.
         toolbox.verification = ChangeVerification(timeout: 0.3, interval: 0.02, settle: 0)

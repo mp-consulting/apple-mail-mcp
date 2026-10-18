@@ -29,6 +29,12 @@ All notable changes to this project are documented here. The format follows
   scope: 5 to 300 times faster on a 100,000-message mailbox. Result totals for sender, subject and other
   unscoped searches count through the filter's own index or a table scan (sender search 41 → 9 ms).
 
+### Fixed
+
+- Messages whose plain-text part is only a stub ("This is an HTML message.") now show, search and index the
+  text of their HTML part. Telecom bills and other HTML-only senders were unreadable to `get_message`, body
+  search and amount extraction.
+
 ### Security
 
 - Exported cells never run as formulas: CSV text starting with `=`, `+`, `-` or `@` gets a leading `'`,

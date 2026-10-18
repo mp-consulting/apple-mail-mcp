@@ -15,8 +15,22 @@ public enum MessageContent {
             }
             if text != nil && html != nil { break }
         }
-        if text == nil, let html { text = HTMLText.plainText(fromHTML: html) }
+        if let html {
+            if text == nil {
+                text = HTMLText.plainText(fromHTML: html)
+            } else if let stub = text, isPlaceholder(stub) {
+                // "This is an HTML message." and the like: the real content is only in the HTML part.
+                let fromHTML = HTMLText.plainText(fromHTML: html)
+                if fromHTML.count > stub.count * 2 { text = fromHTML }
+            }
+        }
         return (text.map(normalizeNewlines), html)
+    }
+
+    /// A plain-text part too short to be the message: senders that write only HTML often add a one-line
+    /// stub ("This is an HTML message.", "View this email in your browser").
+    static func isPlaceholder(_ text: String) -> Bool {
+        text.trimmingCharacters(in: .whitespacesAndNewlines).count < 160
     }
 
     /// Text used for body search and the full-text index.

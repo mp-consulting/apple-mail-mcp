@@ -339,14 +339,9 @@ final class NewMailTests {
 
     @Test func waitsForMatchingMail() async throws {
         let store = h.fixture.store, inbox = h.fixture.inbox
-        let delivery = Task {
-            try await Task.sleep(nanoseconds: 300_000_000)
-            _ = try Self.deliver("Newsletter", from: EmailAddress(address: "news@letters.test"), store: store, inbox: inbox)
-            try await Task.sleep(nanoseconds: 1_200_000_000)
-            return try Self.deliver("Sign-in code", store: store, inbox: inbox)
-        }
+        async let delivered = deliverNewsletterThenCode(store: store, inbox: inbox)
         let json = try await h.json("wait_for_mail", ["sender": "alice", "timeout": 10])
-        let expected = try await delivery.value
+        let expected = try await delivered
         #expect(json["arrived"] as? Int == 1 && ids(json["messages"]) == [expected])
         #expect((json["latest_id"] as? NSNumber)?.int64Value ?? 0 >= expected)
     }
@@ -382,6 +377,14 @@ final class NewMailTests {
         await client.disconnect()
         await server.stop()
     }
+}
+
+/// A newsletter after 0.3 s, then a message from Alice 1.2 s later; returns Alice's id.
+func deliverNewsletterThenCode(store: FixtureMailStore, inbox: Int64) async throws -> Int64 {
+    try await Task.sleep(nanoseconds: 300_000_000)
+    _ = try NewMailTests.deliver("Newsletter", from: EmailAddress(address: "news@letters.test"), store: store, inbox: inbox)
+    try await Task.sleep(nanoseconds: 1_200_000_000)
+    return try NewMailTests.deliver("Sign-in code", store: store, inbox: inbox)
 }
 
 final class UpdateBox: @unchecked Sendable {

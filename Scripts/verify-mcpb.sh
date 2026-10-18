@@ -23,6 +23,12 @@ footer = data.rfind(b"MCPB_SIG_END")
 header = data.rfind(b"MCPB_SIG_V1", 0, footer)
 if footer < 0 or header < 0:
     sys.exit("not signed: no MCPB signature block")
+# Claude opens the file with a strict zip reader: the end record's comment length must cover the
+# signature block, or it refuses the file ("Invalid comment length").
+end = data.rfind(b"PK\x05\x06", 0, header)
+comment = struct.unpack_from("<H", data, end + 20)[0] if end >= 0 else None
+if comment != len(data) - end - 22:
+    sys.exit(f"zip comment length is {comment}, but {len(data) - end - 22} bytes follow the end record")
 offset = header + len(b"MCPB_SIG_V1")
 (length,) = struct.unpack_from("<I", data, offset)
 open(f"{work}/content.zip", "wb").write(data[:header])

@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-18
+
+### Fixed
+
+- **Claude extension would not open**: double-clicking `AppleMailMCP-0.2.1.mcpb` failed with "Invalid comment
+  length. Expected: 4203. Found: 0." `mcpb sign` appends the signature after the zip without updating the zip's
+  comment length, and Claude's zip reader rejects that. Releases now set the comment length to cover the
+  signature before signing (`Scripts/sign-mcpb.sh`), and `Scripts/verify-mcpb.sh` fails if it does not match.
+
 ## [0.2.1] - 2026-10-18
 
 ### Fixed
@@ -66,7 +75,8 @@ First release.
   and a reply or forward waiting for approval links to the original.
 - Skills in the Claude tab are listed by their Claude Code slash command (`/mail-triage`…); click to copy.
 
-[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/mp-consulting/apple-mail-mcp/releases/tag/v0.1.0

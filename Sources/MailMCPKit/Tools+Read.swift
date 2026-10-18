@@ -203,7 +203,7 @@ extension MailToolbox {
                 "search_messages", "Search messages",
                 """
                 Search mail by any combination of filters; results are newest first with ids and message:// links. \
-                Fast on any mailbox size (reads Mail's index directly). `body` searches message text: instant when \
+                Fast on any mailbox size (reads Mail's index directly). `body` searches message text and attached PDFs and text files: instant when \
                 the body index is built (see body_index), otherwise a bounded scan of recent messages. \
                 For hundreds of results use export_search (writes a file) or group_by (counts only).
                 """,

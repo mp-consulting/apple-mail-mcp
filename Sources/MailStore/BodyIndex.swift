@@ -23,6 +23,8 @@ public final class BodyIndex: BodySearchIndex, @unchecked Sendable {
     private var keyError: Error?
     /// Version 1 kept every word with its position: the text could be read back without a key.
     static let schemaVersion: Int64 = 2
+    /// Version 1 adds the text of attached PDFs and text files; older indexes re-read their messages with attachments.
+    static let attachmentsVersion: Int64 = 1
 
     public static func defaultURL() -> URL {
         FileManager.default.homeDirectoryForCurrentUser
@@ -55,7 +57,10 @@ public final class BodyIndex: BodySearchIndex, @unchecked Sendable {
             CREATE VIRTUAL TABLE IF NOT EXISTS body_fts USING fts5(
                 tokens, content = '', contentless_delete = 1, detail = none, tokenize = 'ascii');
             """)
-        if try metaInt("schema_version") == nil { try setMeta("schema_version", Self.schemaVersion) }
+        if try metaInt("schema_version") == nil {
+            try setMeta("schema_version", Self.schemaVersion)
+            try setMeta("attachments_version", Self.attachmentsVersion)
+        }
         Self.protect(url)
     }
 
@@ -269,7 +274,7 @@ public final class BodyIndex: BodySearchIndex, @unchecked Sendable {
         let (indexed, pending) = try withDB { db in
             (
                 Int(try db.scalarInt("SELECT COUNT(*) FROM docs") ?? 0),
-                Int(try db.scalarInt("SELECT COUNT(*) FROM pending") ?? 0)
+                Int(try db.scalarInt("SELECT COUNT(*) FROM pending WHERE attempts > 0") ?? 0)
             )
         }
         let last = try metaInt("last_update").map { Date(timeIntervalSince1970: TimeInterval($0)) }
@@ -307,6 +312,7 @@ public final class BodyIndex: BodySearchIndex, @unchecked Sendable {
         let latest = try store.maxMessageRowID()
         var covered = try coveredThrough()
         let totalNew = try store.countMessages(after: covered)
+        if try metaInt("attachments_version") ?? 0 < Self.attachmentsVersion { try queueAttachmentBackfill(from: store) }
         // Words already in `vocab` need no prefix rows; loaded once per update.
         var knownWords = Set(try withDB { db in try db.all("SELECT DISTINCT word FROM vocab") { $0.int(0) } })
 
@@ -344,6 +350,22 @@ public final class BodyIndex: BodySearchIndex, @unchecked Sendable {
         return UpdateResult(
             indexed: indexed, pendingAdded: pendingAdded, pruned: 0, remaining: remaining,
             duration: Date().timeIntervalSince(started))
+    }
+
+    /// Re-reads indexed messages that have attachments, so their attachments' text gets indexed. They wait in
+    /// `pending` with no failed attempt (not counted as waiting for download) and go `batchSize` per update.
+    func queueAttachmentBackfill(from store: MailStore) throws {
+        let ids = try store.messageIDsWithAttachments()
+        try withDB { db in
+            try db.transaction {
+                for id in ids {
+                    try db.run(
+                        "INSERT OR IGNORE INTO pending (rowid, attempts, last_attempt) SELECT ?, 0, 0 WHERE EXISTS (SELECT 1 FROM docs WHERE rowid = ?)",
+                        [.int(id), .int(id)])
+                }
+                try db.run("INSERT OR REPLACE INTO meta (key, value) VALUES ('attachments_version', ?)", [.int(Self.attachmentsVersion)])
+            }
+        }
     }
 
     /// Removes index entries for messages Mail no longer has.
@@ -411,8 +433,10 @@ public final class BodyIndex: BodySearchIndex, @unchecked Sendable {
                   let emlx = try? EmlxFile(url: file)
             else { return }
             results[index] = autoreleasepool {
-                let body = MessageContent.searchableText(MIME.parse(emlx.message))
-                return document(id: candidate.id, fields: [candidate.subject, candidate.sender, body], tokens: tokens)
+                let root = MIME.parse(emlx.message)
+                let body = MessageContent.searchableText(root)
+                let attached = store.attachmentText(root, rowID: candidate.id, mailbox: mailbox)
+                return document(id: candidate.id, fields: [candidate.subject, candidate.sender, body] + attached, tokens: tokens)
             }
         }
         var docs: [Document] = []
@@ -492,6 +516,31 @@ public struct IndexCandidate: Sendable {
 extension MailStore {
     public func countMessages(after rowID: Int64) throws -> Int {
         Int(try withDB { try $0.scalarInt("SELECT COUNT(*) FROM messages WHERE ROWID > ? AND deleted = 0", [.int(rowID)]) ?? 0 })
+    }
+
+    func messageIDsWithAttachments() throws -> [Int64] {
+        try withDB { try $0.all("SELECT DISTINCT a.message FROM attachments a JOIN messages m ON m.ROWID = a.message WHERE m.deleted = 0") { $0.int(0) } }
+    }
+
+    /// Text of attached PDFs (first pages) and text files, one string per attachment, for the body index.
+    func attachmentText(_ root: MIMEPart, rowID: Int64, mailbox: MailboxURL, maxCharacters: Int = 40_000) -> [String] {
+        var texts: [String] = []
+        var budget = maxCharacters
+        for part in root.leaves where part.isAttachment && budget > 0 {
+            let type = part.contentType
+            let name = part.filename?.lowercased() ?? ""
+            var text: String?
+            if Self.isPDF(part) {
+                text = attachmentBytes(part, rowID: rowID, mailbox: mailbox, limit: 15 * 1_048_576).flatMap { Self.pdfText($0, maxPages: 5) }
+            } else if ["text/plain", "text/csv", "text/markdown"].contains(type) || [".txt", ".csv", ".md"].contains(where: name.hasSuffix) {
+                text = attachmentBytes(part, rowID: rowID, mailbox: mailbox, limit: 1_048_576)
+                    .map { MIME.decodeText($0, charset: part.parameters["charset"]) }
+            }
+            guard let text, !text.isEmpty else { continue }
+            texts.append(String(text.prefix(budget)))
+            budget -= text.count
+        }
+        return texts
     }
 
     public func liveMessageIDs() throws -> [Int64] {

@@ -1,3 +1,5 @@
+import CoreGraphics
+import CoreText
 import Foundation
 import MailFixtures
 import Testing
@@ -55,6 +57,52 @@ final class BodyIndexTests {
         #expect(terms.allSatisfy { $0.count == 16 && $0.allSatisfy(\.isHexDigit) })
         let permissions = try FileManager.default.attributesOfItem(atPath: indexURL.path)[.posixPermissions] as? NSNumber
         #expect(permissions?.intValue == 0o600)
+    }
+
+    /// A one-page PDF whose text layer says `text`.
+    static func pdf(_ text: String) -> Data {
+        let data = NSMutableData()
+        var box = CGRect(x: 0, y: 0, width: 300, height: 200)
+        let context = CGContext(consumer: CGDataConsumer(data: data)!, mediaBox: &box, nil)!
+        context.beginPDFPage(nil)
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [.font: CTFontCreateWithName("Helvetica" as CFString, 12, nil)]))
+        context.textPosition = CGPoint(x: 20, y: 100)
+        CTLineDraw(line, context)
+        context.endPDFPage()
+        context.closePDF()
+        return data as Data
+    }
+
+    @Test func indexesAttachedPDFsAndTextFiles() throws {
+        var message = FixtureMessage(
+            subject: "Signed papers", from: StandardFixture.alice, to: [StandardFixture.me], date: Date(), mailbox: fixture.inbox,
+            body: "See attached.")
+        message.attachments = [
+            ("contract.pdf", "application/pdf", Self.pdf("Indemnification clause appendix")),
+            ("notes.txt", "text/plain", Data("Escrow arrangements".utf8)),
+        ]
+        let withFiles = try fixture.store.addMessage(message)
+        message.partial = true
+        message.attachments = [("stripped.pdf", "application/pdf", Self.pdf("Quarterly forecast"))]
+        let stripped = try fixture.store.addMessage(message)
+        try index.update(from: store)
+        #expect(try index.matchingIDs(for: "indemnification clause", limit: 10) == [withFiles])
+        #expect(try index.matchingIDs(for: "escrow", limit: 10) == [withFiles])
+        #expect(try index.matchingIDs(for: "forecast", limit: 10) == [stripped])
+        let bytes = try Data(contentsOf: indexURL) + ((try? Data(contentsOf: URL(filePath: indexURL.path + "-wal"))) ?? Data())
+        #expect(bytes.range(of: Data("ndemnification".utf8)) == nil && bytes.range(of: Data("scrow".utf8)) == nil)
+    }
+
+    @Test func olderIndexesReReadMessagesWithAttachments() throws {
+        try index.update(from: store)
+        let waiting = try index.status().pendingMessages
+        try index.queueAttachmentBackfill(from: store)
+        // Queued messages are not reported as waiting for download, and the next update takes them.
+        #expect(try index.status().pendingMessages == waiting)
+        let db = try SQLiteConnection(path: indexURL.path, readOnly: false)
+        #expect(try db.scalarInt("SELECT COUNT(*) FROM pending WHERE attempts = 0") == 1)  // the kickoff, with its PDF
+        try index.update(from: store, retryAfter: 0)
+        #expect(try db.scalarInt("SELECT COUNT(*) FROM pending WHERE attempts = 0") == 0)
     }
 
     @Test func anotherKeyFindsNothingAndRebuilds() throws {

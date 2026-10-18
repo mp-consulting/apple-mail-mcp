@@ -17,7 +17,7 @@ enum SkillTarget: Hashable {
 
 /// Something the user has to fix, shown as a row only while it is wrong.
 struct AttentionItem: Identifiable, Hashable {
-    enum Fix: Hashable { case fullDiskAccess, automation }
+    enum Fix: Hashable { case fullDiskAccess, automation, openClaude }
     var id: String
     var icon: String
     var title: String
@@ -95,6 +95,12 @@ extension AgentModel {
                 id: "automation", icon: "hand.raised", title: "Mail automation is off",
                 detail: "Allow it so Claude can move, flag, draft and send.", action: "Open Settings…", fix: .automation))
         }
+        if clientInstaller.isSetUpTwiceInClaudeDesktop {
+            items.append(AttentionItem(
+                id: "claude-twice", icon: "square.on.square", title: "Apple Mail is set up twice in Claude",
+                detail: "Remove the Apple Mail extension in Claude › Settings › Extensions; this app's entry stays and updates with it.",
+                action: "Open Claude", fix: .openClaude))
+        }
         // A client that cannot read Mail reports it in the activity log (see LaunchContext.explain);
         // its next successful call clears the notice.
         for app in ActivityEntry.appsLackingFullDiskAccess(in: activity) {
@@ -109,6 +115,10 @@ extension AgentModel {
         switch item.fix {
         case .fullDiskAccess: openFullDiskAccessSettings()
         case .automation: openAutomationSettings()
+        case .openClaude:
+            if let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: Self.claudeAppBundleID) {
+                NSWorkspace.shared.openApplication(at: app, configuration: NSWorkspace.OpenConfiguration())
+            }
         }
     }
 

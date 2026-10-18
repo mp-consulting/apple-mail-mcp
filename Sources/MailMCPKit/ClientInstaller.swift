@@ -78,6 +78,43 @@ public struct ClientInstaller: Sendable {
         return command == serverPath ? .installed : .otherCommand(([command] + (entry["args"] as? [String] ?? [])).joined(separator: " "))
     }
 
+    /// The Apple Mail extension (`.mcpb`) as the Claude app recorded it.
+    public struct DesktopExtension: Equatable, Sendable {
+        public var id: String
+        public var version: String?
+        public var enabled: Bool
+    }
+
+    var claudeSupport: URL { home.appending(path: "Library/Application Support/Claude") }
+
+    /// The Claude app's Apple Mail extension, when installed (`extensions-installations.json`; on or off per
+    /// `Claude Extensions Settings/<id>.json`, on when that file says nothing).
+    public var desktopExtension: DesktopExtension? {
+        guard let root = readJSON(claudeSupport.appending(path: "extensions-installations.json")),
+              let extensions = root["extensions"] as? [String: Any]
+        else { return nil }
+        for (id, value) in extensions.sorted(by: { $0.key < $1.key }) {
+            guard let entry = value as? [String: Any], let manifest = entry["manifest"] as? [String: Any],
+                  manifest["name"] as? String == "apple-mail-mcp"
+            else { continue }
+            let settings = readJSON(claudeSupport.appending(path: "Claude Extensions Settings/\(id).json"))
+            return DesktopExtension(
+                id: id, version: entry["version"] as? String ?? manifest["version"] as? String,
+                enabled: settings?["isEnabled"] as? Bool ?? true)
+        }
+        return nil
+    }
+
+    /// The Claude app runs the server twice: through the extension and through its config file. Claude then
+    /// lists every tool twice and starts twice the processes.
+    public var isSetUpTwiceInClaudeDesktop: Bool {
+        guard desktopExtension?.enabled == true else { return false }
+        switch status(.claudeDesktop) {
+        case .installed, .otherCommand: return true
+        case .notInstalled, .clientMissing: return false
+        }
+    }
+
     // MARK: Install
 
     /// Installs (or repoints) the server for `client`; returns a message for the user.

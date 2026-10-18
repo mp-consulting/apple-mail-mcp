@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- The menu bar app notices when the Claude app runs Apple Mail twice (the extension and the config entry),
+  which lists every tool twice and starts twice the server processes, and says how to remove the extension.
+
 ## [0.4.0] - 2026-10-18
 
 ### Added

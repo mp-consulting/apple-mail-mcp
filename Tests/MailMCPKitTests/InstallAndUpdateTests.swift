@@ -64,6 +64,33 @@ struct ClientInstallerTests {
 
     var desktopConfig: URL { home.appending(path: "Library/Application Support/Claude/claude_desktop_config.json") }
 
+    func writeExtension(enabled: Bool?) throws {
+        let support = desktopConfig.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: support.appending(path: "Claude Extensions Settings"), withIntermediateDirectories: true)
+        let id = "local.mcpb.mickael-palma.apple-mail-mcp"
+        try Data(#"{"extensions":{"other.ext":{"manifest":{"name":"other"}},"\#(id)":{"version":"0.4.0","manifest":{"name":"apple-mail-mcp","version":"0.4.0"}}}}"#.utf8)
+            .write(to: support.appending(path: "extensions-installations.json"))
+        if let enabled {
+            try Data(#"{"isEnabled":\#(enabled)}"#.utf8).write(to: support.appending(path: "Claude Extensions Settings/\(id).json"))
+        }
+    }
+
+    @Test func noticesTheServerSetUpTwiceInTheClaudeApp() throws {
+        defer { try? FileManager.default.removeItem(at: home) }
+        let installer = installer()
+        #expect(installer.desktopExtension == nil && !installer.isSetUpTwiceInClaudeDesktop)
+        try writeExtension(enabled: nil)
+        #expect(installer.desktopExtension == .init(id: "local.mcpb.mickael-palma.apple-mail-mcp", version: "0.4.0", enabled: true))
+        #expect(!installer.isSetUpTwiceInClaudeDesktop)  // the extension alone is fine
+        try installer.install(.claudeDesktop)
+        #expect(installer.isSetUpTwiceInClaudeDesktop)
+        try writeExtension(enabled: false)
+        #expect(!installer.isSetUpTwiceInClaudeDesktop)  // switched off in Claude
+        try writeExtension(enabled: true)
+        try installer.uninstall(.claudeDesktop)
+        #expect(!installer.isSetUpTwiceInClaudeDesktop)
+    }
+
     @Test func desktopConfigKeepsOtherSettings() throws {
         try FileManager.default.createDirectory(at: desktopConfig.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(#"{"preferences":{"x":1},"mcpServers":{"other":{"command":"/bin/other"}}}"#.utf8).write(to: desktopConfig)

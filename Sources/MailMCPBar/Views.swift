@@ -581,10 +581,7 @@ struct SkillRow: View {
         {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 6) {
-                        Text(skill.title).font(.callout)
-                        SlashCommand(name: skill.name)
-                    }
+                    SlashCommand(name: skill.name)
                     Text(skill.summary).font(.caption).foregroundStyle(.secondary)
                         .lineLimit(2).fixedSize(horizontal: false, vertical: true)
                 }
@@ -614,9 +611,9 @@ struct SlashCommand: View {
                 copied = false
             }
         } label: {
-            Text(copied ? "Copied" : "/\(name)")
-                .font(.caption.monospaced())
-                .foregroundStyle(copied ? AnyShapeStyle(.green) : AnyShapeStyle(.tint))
+            Text(copied ? "Copied /\(name)" : "/\(name)")
+                .font(.callout.monospaced())
+                .foregroundStyle(copied ? AnyShapeStyle(.green) : AnyShapeStyle(.primary))
         }
         .buttonStyle(.borderless)
         .help("Type /\(name) in Claude Code to run this skill. Click to copy.")

@@ -103,16 +103,16 @@ Message ids are Mail's own; a moved message gets a new id, which `move_messages`
 
 Pick them in the panel's **Claude** tab: each one shows what it does and whether it's installed.
 
-| Skill | In Claude Code | Or just ask… |
-|---|---|---|
-| **Triage** | `/mail-triage` | "What needs my attention in my mail today?" |
-| **Inbox zero** | `/mail-inbox-zero` | "Help me get my inbox to zero." |
-| **Follow up** | `/mail-follow-up` | "Who hasn't replied to me this week?" |
-| **Reply writer** | `/mail-reply-writer` | "Reply to Anna's email about the roadmap." |
-| **Newsletter cleanup** | `/mail-newsletter-cleanup` | "I get too many newsletters, clean that up." |
-| **Research** | `/mail-research` | "Find the confirmation code from my hotel booking." |
-| **Attachments** | `/mail-attachments` | "Save all invoices from 2025 into Documents/Invoices." |
-| **Weekly report** | `/mail-weekly-report` | "How was my week in email?" |
+| Skill | Or just ask… |
+|---|---|
+| `/mail-triage` | "What needs my attention in my mail today?" |
+| `/mail-inbox-zero` | "Help me get my inbox to zero." |
+| `/mail-follow-up` | "Who hasn't replied to me this week?" |
+| `/mail-reply-writer` | "Reply to Anna's email about the roadmap." |
+| `/mail-newsletter-cleanup` | "I get too many newsletters, clean that up." |
+| `/mail-research` | "Find the confirmation code from my hotel booking." |
+| `/mail-attachments` | "Save all invoices from 2025 into Documents/Invoices." |
+| `/mail-weekly-report` | "How was my week in email?" |
 
 Claude picks the right skill from your request; in Claude Code you can also start one with its slash command.
 In the Claude app, skills are used automatically once uploaded.

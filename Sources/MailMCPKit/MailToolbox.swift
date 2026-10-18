@@ -19,6 +19,8 @@ public enum ToolKind: String, Sendable {
 public struct ToolReply: Sendable {
     public var json: JSON
     public var summary: String
+    /// The message this call was about (or the draft it saved): the menu bar app offers "Show in Mail".
+    public var messageID: Int64? = nil
 }
 
 public struct ToolDefinition: Sendable {
@@ -193,7 +195,7 @@ public final class MailToolbox: @unchecked Sendable {
     /// Applies the send policy; may wait for approval in the menu bar app.
     func authorizeSend(
         tool: String, from: String?, to: [String], cc: [String], bcc: [String], subject: String, body: String,
-        attachments: [String]
+        attachments: [String], originalLink: String? = nil
     ) async throws {
         let current = settings.current
         switch current.sendPolicy {
@@ -209,7 +211,7 @@ public final class MailToolbox: @unchecked Sendable {
             let request = ApprovalRequest(
                 id: UUID(), created: Date(), tool: tool, client: clientName, from: from, to: to, cc: cc, bcc: bcc,
                 subject: subject, bodyPreview: Render.truncate(body, 600), attachments: attachments.map { ($0 as NSString).lastPathComponent },
-                status: .pending, decided: nil)
+                status: .pending, decided: nil, originalLink: originalLink)
             switch try await approvals.requestApproval(request, timeout: current.approvalTimeout) {
             case .approved: return
             case .denied: throw ToolError("The user declined to send this message. Nothing was sent.")
@@ -238,10 +240,12 @@ public final class MailToolbox: @unchecked Sendable {
         var ok = true
         var text: String
         var summary: String
+        var link: String?
         do {
             let reply = try await definition.run(Arguments(arguments))
             text = reply.json.serialized()
             summary = reply.summary
+            if let id = reply.messageID { link = (try? store.message(id: id))?.mailLink }
         } catch {
             ok = false
             text = "Error: \(error)"
@@ -252,7 +256,7 @@ public final class MailToolbox: @unchecked Sendable {
             ActivityEntry(
                 date: started, pid: ProcessInfo.processInfo.processIdentifier, client: clientName, tool: name, ok: ok,
                 milliseconds: Int(Date().timeIntervalSince(started) * 1000), summary: Render.truncate(summary, 160),
-                isWrite: definition.kind != .read))
+                isWrite: definition.kind != .read, link: link))
         return .init(content: [.text(text: text, annotations: nil, _meta: nil)], isError: ok ? nil : true)
     }
 

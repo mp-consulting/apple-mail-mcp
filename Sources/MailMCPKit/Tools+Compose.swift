@@ -113,7 +113,7 @@ extension MailToolbox {
             let draftID = mode == .draft ? await self.settleDraft(handle, subject: subject, after: started) : nil
             return ToolReply(
                 json: .obj(self.draftResult(mode, draftID: draftID) + [("to", .array(to.map { .string($0) })), ("subject", .string(subject))]),
-                summary: "\(mode.rawValue): \(Render.truncate(subject, 60))")
+                summary: "\(mode.rawValue): \(Render.truncate(subject, 60))", messageID: draftID)
         }
     }
 
@@ -175,7 +175,8 @@ extension MailToolbox {
                 recipients = recipients.filter { seen.insert($0.lowercased()).inserted }
                 try await self.authorizeSend(
                     tool: "reply_to_message", from: nil, to: recipients,
-                    cc: cc, bcc: bcc, subject: subject, body: body, attachments: attachments)
+                    cc: cc, bcc: bcc, subject: subject, body: body, attachments: attachments,
+                    originalLink: original.summary.mailLink)
             }
             let started = (try? self.store.maxMessageRowID()) ?? .max
             let handle = try await automation.reply(
@@ -184,7 +185,7 @@ extension MailToolbox {
             let draftID = mode == .draft ? await self.settleDraft(handle, subject: subject, after: started) : nil
             return ToolReply(
                 json: .obj(self.draftResult(mode, draftID: draftID) + [("in_reply_to", .int(id)), ("subject", .string(subject))]),
-                summary: "reply \(mode.rawValue): \(Render.truncate(subject, 60))")
+                summary: "reply \(mode.rawValue): \(Render.truncate(subject, 60))", messageID: draftID ?? id)
         }
     }
 
@@ -272,7 +273,8 @@ extension MailToolbox {
             let body = Self.forwardedBody(note: note, original: original)
             if mode == .send {
                 try await self.authorizeSend(
-                    tool: "forward_message", from: nil, to: to, cc: cc, bcc: bcc, subject: subject, body: body, attachments: files)
+                    tool: "forward_message", from: nil, to: to, cc: cc, bcc: bcc, subject: subject, body: body, attachments: files,
+                    originalLink: original.summary.mailLink)
             }
             let started = (try? self.store.maxMessageRowID()) ?? .max
             let handle = try await automation.compose(
@@ -285,7 +287,7 @@ extension MailToolbox {
                     ("attachments", files.isEmpty ? nil : .int(Int64(files.count))),
                     ("attachments_not_downloaded", skipped > 0 ? .int(Int64(skipped)) : nil),
                 ]),
-                summary: "forward \(mode.rawValue): \(Render.truncate(subject, 60))")
+                summary: "forward \(mode.rawValue): \(Render.truncate(subject, 60))", messageID: draftID ?? id)
         }
     }
 
@@ -302,7 +304,7 @@ extension MailToolbox {
             // A message:// link needs no Apple Events or automation permission.
             if let link = message.mailLink, let url = URL(string: link) {
                 let opened = await MainActor.run { NSWorkspace.shared.open(url) }
-                if opened { return ToolReply(json: .obj([("opened", .int(id))]), summary: "opened \(id)") }
+                if opened { return ToolReply(json: .obj([("opened", .int(id))]), summary: "opened \(id)", messageID: id) }
             }
             guard let mailbox = try store.mailbox(id: message.mailboxID) else { throw ToolError("Mailbox of message \(id) not found") }
             try await automation.open(id, in: MailboxTarget(mailbox))

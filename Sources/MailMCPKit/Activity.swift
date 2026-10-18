@@ -12,10 +12,14 @@ public struct ActivityEntry: Codable, Sendable, Hashable, Identifiable {
     /// Short outcome, e.g. "12 results" or "moved 3 to Archive".
     public var summary: String
     public var isWrite: Bool
+    /// `message://` link of the message the call was about, when there is one.
+    public var link: String?
 
     public init(
-        date: Date, pid: Int32, client: String?, tool: String, ok: Bool, milliseconds: Int, summary: String, isWrite: Bool
+        date: Date, pid: Int32, client: String?, tool: String, ok: Bool, milliseconds: Int, summary: String, isWrite: Bool,
+        link: String? = nil
     ) {
+        self.link = link
         self.date = date
         self.pid = pid
         self.client = client
@@ -101,11 +105,14 @@ public struct ApprovalRequest: Codable, Sendable, Hashable, Identifiable {
     public var attachments: [String]
     public var status: Status
     public var decided: Date?
+    /// For a reply or forward: the original message, to look at before deciding.
+    public var originalLink: String?
 
     public init(
         id: UUID, created: Date, tool: String, client: String?, from: String?, to: [String], cc: [String], bcc: [String],
-        subject: String, bodyPreview: String, attachments: [String], status: Status, decided: Date?
+        subject: String, bodyPreview: String, attachments: [String], status: Status, decided: Date?, originalLink: String? = nil
     ) {
+        self.originalLink = originalLink
         self.id = id
         self.created = created
         self.tool = tool

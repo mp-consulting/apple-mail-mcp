@@ -425,10 +425,12 @@ case "demo":
         ("awaiting_reply", "4 awaiting reply", 47, true, false, 90),
         ("search_messages", "3 results", 44, true, false, 20),
     ]
+    let messageTools: Set<String> = ["get_thread", "get_message", "reply_to_message", "move_messages", "save_attachment"]
     for (tool, summary, ms, ok, write, ago) in entries {
         log.append(ActivityEntry(
             date: Date().addingTimeInterval(-ago), pid: 4242, client: "claude-code", tool: tool, ok: ok,
-            milliseconds: ms, summary: summary, isWrite: write))
+            milliseconds: ms, summary: summary, isWrite: write,
+            link: messageTools.contains(tool) ? "message://%3Cdemo-\(Int(ago))@northwind.test%3E" : nil))
     }
     let approvals = ApprovalCenter(directory: support.appending(path: "approvals"), heartbeat: support.appending(path: "agent.heartbeat"))
     if options.values["approval"] != nil {
@@ -443,7 +445,8 @@ case "demo":
             id: UUID(), created: Date().addingTimeInterval(-5), tool: "reply_to_message", client: "claude-code", from: nil,
             to: ["anna.keller@northwind.test"], cc: ["tom@northwind.test"], bcc: [], subject: "Re: Q3 roadmap review",
             bodyPreview: "Hi Anna,\n\nThanks for the deck. The timeline works for us; I'd move the API migration to week 34 so it lands after the security review. I'll send the updated estimates by Friday.\n\nBest,\nSam",
-            attachments: ["estimates-q3.xlsx"], status: .pending, decided: nil))
+            attachments: ["estimates-q3.xlsx"], status: .pending, decided: nil,
+            originalLink: "message://%3Croadmap@northwind.test%3E"))
     }
     report = """
         Demo data in \(folder.path). Run the app with:

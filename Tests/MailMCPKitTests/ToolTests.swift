@@ -147,6 +147,10 @@ final class ReadToolTests {
         #expect(entries.first?.tool == "get_message")
         #expect(entries.first?.ok == true)
         #expect(entries.first?.summary.contains("Kubernetes") == false)
+        // The menu bar app's "Show in Mail" uses this link.
+        #expect(entries.first?.link == "message://%3Ckickoff@example.test%3E")
+        _ = await h.call("search_messages", ["subject": "kickoff"])
+        #expect(h.toolbox.activity?.recent().first?.link == nil)
     }
 }
 
@@ -350,6 +354,27 @@ final class ComposeToolTests {
         #expect(denied.isError && denied.text.contains("declined"))
         #expect(h.automation.calls == [.compose(OutgoingMessage(to: ["a@x.test"], subject: "Approved", body: "y"), .send)])
         #expect(approvals.pending().isEmpty)
+    }
+
+    @Test func replyApprovalLinksToTheOriginal() async throws {
+        var settings = Settings()
+        settings.sendPolicy = .confirm
+        settings.approvalTimeout = 10
+        let h = try Harness(settings: settings)
+        defer { h.remove() }
+        h.approvals.beat()
+        let approvals = h.approvals
+        let agent = Task { () -> String? in
+            while true {
+                if let request = approvals.pending().first {
+                    try approvals.decide(request.id, approve: false)
+                    return request.originalLink
+                }
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+        }
+        _ = await h.call("reply_to_message", ["id": .int(Int(h.id("kickoff"))), "body": "ok", "mode": "send"])
+        #expect(try await agent.value == "message://%3Ckickoff@example.test%3E")
     }
 
     @Test func forwardComposesWithOriginalAndAttachments() async throws {

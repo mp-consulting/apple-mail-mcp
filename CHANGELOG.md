@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Show in Mail**: activity rows about a message (read, replied, moved, flagged, drafted…) open it in Mail,
+  and a reply or forward waiting for approval links to the original.
+
 ## [0.1.0] - 2026-10-18
 
 First release.

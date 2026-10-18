@@ -63,7 +63,7 @@ extension MailToolbox {
                 try data.write(to: URL(filePath: path), options: .atomic)
                 saved.append(.obj([("path", .string(path)), ("bytes", .int(Int64(data.count)))]))
             }
-            return ToolReply(json: .obj([("saved", .array(saved))]), summary: "saved \(saved.count) attachment(s)")
+            return ToolReply(json: .obj([("saved", .array(saved))]), summary: "saved \(saved.count) attachment(s)", messageID: id)
         }
     }
 
@@ -203,7 +203,8 @@ extension MailToolbox {
                 ("new_ids", mapping.isEmpty ? nil : .object(mapping)),
                 ("not_found", missing.isEmpty ? nil : .array(missing.map { .int($0) })),
             ])
-            return ToolReply(json: json, summary: "moved \(moved) to \(destination)")
+            let firstNew: Int64? = mapping.first.flatMap { if case .int(let id) = $0.1 { id } else { nil } }
+            return ToolReply(json: json, summary: "moved \(moved) to \(destination)", messageID: firstNew)
         }
     }
 
@@ -242,7 +243,7 @@ extension MailToolbox {
             if let color { changes.append("flagged \(color.name)") } else if let flagged { changes.append(flagged ? "flagged" : "unflagged") }
             return ToolReply(
                 json: .obj([("updated", .int(Int64(updated))), ("not_found", missing.isEmpty ? nil : .array(missing.map { .int($0) }))]),
-                summary: "\(changes.joined(separator: ", ")) \(updated)")
+                summary: "\(changes.joined(separator: ", ")) \(updated)", messageID: ids.count == 1 ? ids[0] : nil)
         }
     }
 

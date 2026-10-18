@@ -386,10 +386,35 @@ struct ActivityRow: View {
             Text(entry.tool).font(.caption.monospaced()).frame(width: 120, alignment: .leading)
             Text(entry.summary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             Spacer(minLength: 4)
+            if let link = entry.link, let url = URL(string: link) {
+                ShowInMailButton(url: url, compact: true)
+            }
             Text(entry.date, format: .dateTime.hour().minute()).font(.caption2.monospacedDigit()).foregroundStyle(.tertiary)
         }
         .frame(height: 22)
         .help("\(entry.client ?? "unknown client") · \(entry.milliseconds) ms\(entry.ok ? "" : " · failed")")
+    }
+}
+
+/// Opens a message in Mail through its `message://` link (no Apple Events, no permission needed).
+struct ShowInMailButton: View {
+    let url: URL
+    var compact: Bool
+    var title = "Show in Mail"
+
+    var body: some View {
+        Button {
+            NSWorkspace.shared.open(url)
+        } label: {
+            if compact {
+                Image(systemName: "arrow.up.forward.app").font(.caption)
+            } else {
+                Label(title, systemImage: "arrow.up.forward.app").font(.caption)
+            }
+        }
+        .buttonStyle(.borderless)
+        .help(title)
+        .accessibilityLabel(title)
     }
 }
 
@@ -498,6 +523,9 @@ struct ApprovalBlock: View {
             Divider()
             Text(request.bodyPreview).font(.callout).lineLimit(10).fixedSize(horizontal: false, vertical: true)
             HStack {
+                if let link = request.originalLink, let url = URL(string: link) {
+                    ShowInMailButton(url: url, compact: false, title: "Show original in Mail")
+                }
                 Spacer()
                 Button("Don't Send", role: .cancel) { decide(false) }.glassButton()
                 Button("Send") { decide(true) }.glassButton(prominent: true).keyboardShortcut(.defaultAction)

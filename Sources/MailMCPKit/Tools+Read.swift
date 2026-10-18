@@ -248,7 +248,7 @@ extension MailToolbox {
                 ("headers", try arguments.bool("include_headers") ?? false
                     ? .array(detail.headers.map { .string("\($0.name): \($0.value)") }) : nil),
             ])
-            return ToolReply(json: json, summary: "message \(id)")
+            return ToolReply(json: json, summary: "message \(id)", messageID: id)
         }
     }
 
@@ -294,7 +294,9 @@ extension MailToolbox {
                 }
                 return .obj(entry)
             }
-            return ToolReply(json: .obj([("count", .int(Int64(items.count))), ("messages", .array(items))]), summary: "\(items.count) in thread")
+            return ToolReply(
+                json: .obj([("count", .int(Int64(items.count))), ("messages", .array(items))]), summary: "\(items.count) in thread",
+                messageID: messages.last?.id ?? id)
         }
     }
 
@@ -310,7 +312,7 @@ extension MailToolbox {
             let detail = try store.detail(id: id)
             return ToolReply(
                 json: .obj([("id", .int(id)), ("attachments", .array(detail.attachments.map(Self.attachmentJSON)))]),
-                summary: "\(detail.attachments.count) attachments")
+                summary: "\(detail.attachments.count) attachments", messageID: id)
         }
     }
 
@@ -339,7 +341,7 @@ extension MailToolbox {
             if truncated { text = String(decoding: text.utf8.prefix(maxBytes), as: UTF8.self) }
             return ToolReply(
                 json: .obj([("id", .int(id)), ("source", .string(text)), ("truncated", truncated ? .bool(true) : nil)]),
-                summary: "\(text.utf8.count) bytes")
+                summary: "\(text.utf8.count) bytes", messageID: id)
         }
     }
 

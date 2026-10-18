@@ -42,6 +42,8 @@ swift Scripts/make-icon.swift Resources
 - The server must start even when Mail data is unreadable: the store opens lazily and errors explain
   which app needs Full Disk Access (`LaunchContext`).
 - Skills may only mention tools and parameters that exist (`SkillTests.skillsOnlyReferenceRealTools`).
+- **No Claude attribution in git.** Commit messages and pull request descriptions carry no `Co-Authored-By: Claude`
+  trailer and no "Generated with Claude Code" line.
 - **The body index stores no text.** It sits outside Full Disk Access, so `BodyIndex` keeps only SipHash tokens
   (words, bigrams, and a prefix → word `vocab`), keyed by `BodyIndexKey` from the login Keychain. Contentless FTS5
   alone is not enough: `fts5vocab` reads every word and position back. Tests pass a fixed key and never touch

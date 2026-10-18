@@ -312,3 +312,72 @@ final class DraftToolTests {
         #expect(locked.automation.calls.isEmpty)
     }
 }
+
+@Suite("New mail")
+final class NewMailTests {
+    let h: Harness
+    init() throws { h = try Harness() }
+    deinit { h.remove() }
+
+    func deliver(_ subject: String, from: EmailAddress = StandardFixture.alice) throws -> Int64 {
+        try Self.deliver(subject, from: from, store: h.fixture.store, inbox: h.fixture.inbox)
+    }
+
+    static func deliver(_ subject: String, from: EmailAddress = StandardFixture.alice, store: FixtureMailStore, inbox: Int64) throws -> Int64 {
+        try store.addMessage(FixtureMessage(
+            subject: subject, from: from, to: [StandardFixture.me], date: Date(), mailbox: inbox, body: "Your code is 1234"))
+    }
+
+    @Test func waitsForMatchingMail() async throws {
+        let store = h.fixture.store, inbox = h.fixture.inbox
+        let delivery = Task {
+            try await Task.sleep(nanoseconds: 300_000_000)
+            _ = try Self.deliver("Newsletter", from: EmailAddress(address: "news@letters.test"), store: store, inbox: inbox)
+            try await Task.sleep(nanoseconds: 1_200_000_000)
+            return try Self.deliver("Sign-in code", store: store, inbox: inbox)
+        }
+        let json = try await h.json("wait_for_mail", ["sender": "alice", "timeout": 10])
+        let expected = try await delivery.value
+        #expect(json["arrived"] as? Int == 1 && ids(json["messages"]) == [expected])
+        #expect((json["latest_id"] as? NSNumber)?.int64Value ?? 0 >= expected)
+    }
+
+    @Test func returnsWhatArrivedSinceAfterIDAndTimesOut() async throws {
+        let before = try h.toolbox.store.maxMessageRowID()
+        let id = try deliver("Already here")
+        let json = try await h.json("wait_for_mail", ["after_id": .int(Int(before)), "timeout": 5])
+        #expect(ids(json["messages"]) == [id])
+        let started = Date()
+        let none = try await h.json("wait_for_mail", ["timeout": 1])
+        #expect(none["timed_out"] as? Bool == true && Date().timeIntervalSince(started) < 4)
+    }
+
+    @Test func resourcesNotifySubscribers() async throws {
+        let server = await MailMCPServer.make(toolbox: h.toolbox, watchInterval: 0.1)
+        let (clientTransport, serverTransport) = await InMemoryTransport.createConnectedPair()
+        try await server.start(transport: serverTransport)
+        let client = Client(name: "test-client", version: "1.0")
+        let updates = UpdateBox()
+        await client.onNotification(ResourceUpdatedNotification.self) { message in updates.add(message.params.uri) }
+        _ = try await client.connect(transport: clientTransport)
+        let (resources, _) = try await client.listResources()
+        #expect(resources.map(\.uri) == [MailResources.unreadURI, MailResources.needsResponseURI])
+        let contents = try await client.readResource(uri: MailResources.unreadURI)
+        #expect(contents.first?.text?.contains("Project kickoff") == true)
+        try await client.subscribeToResource(uri: MailResources.unreadURI)
+        try await Task.sleep(nanoseconds: 300_000_000)
+        #expect(updates.uris.isEmpty)
+        _ = try deliver("Fresh")
+        for _ in 0..<40 where updates.uris.isEmpty { try await Task.sleep(nanoseconds: 50_000_000) }
+        #expect(updates.uris.first == MailResources.unreadURI)
+        await client.disconnect()
+        await server.stop()
+    }
+}
+
+final class UpdateBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _uris: [String] = []
+    var uris: [String] { lock.withLock { _uris } }
+    func add(_ uri: String) { lock.withLock { _uris.append(uri) } }
+}

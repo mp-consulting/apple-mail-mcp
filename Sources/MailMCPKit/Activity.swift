@@ -151,8 +151,19 @@ public struct ApprovalRequest: Codable, Sendable, Hashable, Identifiable {
     public var kind: Kind?
     /// A scheduled send: when it goes out.
     public var sendAt: Date?
+    /// The menu bar app's signature over the decision and everything shown (see ``SigningKey``).
+    public var signature: String?
 
     public var action: Kind { kind ?? .send }
+
+    /// What a decision signs: the request as the server wrote it, the answer and when it was given.
+    func signedFields(status: Status, decided: Date?) -> [String] {
+        [
+            "approval", id.uuidString, status.rawValue, SigningKey.seconds(decided), tool, action.rawValue, from ?? "",
+            SigningKey.list(to), SigningKey.list(cc), SigningKey.list(bcc), subject, bodyPreview, SigningKey.list(attachments),
+            SigningKey.seconds(sendAt), originalLink ?? "",
+        ]
+    }
 
     public init(
         id: UUID, created: Date, tool: String, client: String?, from: String?, to: [String], cc: [String], bcc: [String],
@@ -183,10 +194,21 @@ public struct ApprovalRequest: Codable, Sendable, Hashable, Identifiable {
 public final class ApprovalCenter: @unchecked Sendable {
     public let directory: URL
     public let heartbeat: URL
+    let signing: SigningKeyProvider
 
-    public init(directory: URL = SharedPaths.approvals, heartbeat: URL = SharedPaths.agentHeartbeat) {
+    public init(
+        directory: URL = SharedPaths.approvals, heartbeat: URL = SharedPaths.agentHeartbeat, signing: SigningKeyProvider = SigningKeyProvider()
+    ) {
         self.directory = directory
         self.heartbeat = heartbeat
+        self.signing = signing
+    }
+
+    private func write(_ request: ApprovalRequest) throws {
+        SharedPaths.ensureDirectory(directory)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        try Self.encoder.encode(request).write(to: file(request.id), options: .atomic)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file(request.id).path)
     }
 
     private static let encoder: JSONEncoder = {
@@ -219,10 +241,7 @@ public final class ApprovalCenter: @unchecked Sendable {
         try? Data(String(ProcessInfo.processInfo.processIdentifier).utf8).write(to: heartbeat, options: .atomic)
     }
 
-    public func submit(_ request: ApprovalRequest) throws {
-        SharedPaths.ensureDirectory(directory)
-        try Self.encoder.encode(request).write(to: file(request.id), options: .atomic)
-    }
+    public func submit(_ request: ApprovalRequest) throws { try write(request) }
 
     public func load(_ id: UUID) -> ApprovalRequest? {
         guard let data = try? Data(contentsOf: file(id)) else { return nil }
@@ -237,11 +256,13 @@ public final class ApprovalCenter: @unchecked Sendable {
             .sorted { $0.created < $1.created }
     }
 
+    /// Records the user's answer, signed: the server takes an approval only with a valid signature.
     public func decide(_ id: UUID, approve: Bool) throws {
         guard var request = load(id) else { return }
         request.status = approve ? .approved : .denied
-        request.decided = Date()
-        try Self.encoder.encode(request).write(to: file(id), options: .atomic)
+        request.decided = Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down))
+        request.signature = try signing.key().sign(request.signedFields(status: request.status, decided: request.decided))
+        try write(request)
     }
 
     public func remove(_ id: UUID) {
@@ -254,7 +275,13 @@ public final class ApprovalCenter: @unchecked Sendable {
         defer { remove(request.id) }
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if let current = load(request.id), current.status != .pending { return current.status }
+            if let current = load(request.id), current.status != .pending {
+                // Checked against the request as this server wrote it: an answer written by anything but the
+                // menu bar app, or for a request edited on disk, is no answer, and nothing is sent.
+                let fields = request.signedFields(status: current.status, decided: current.decided)
+                guard (try? signing.key())?.verify(current.signature, fields) == true else { return .denied }
+                return current.status
+            }
             try await Task.sleep(nanoseconds: 250_000_000)
         }
         return .pending

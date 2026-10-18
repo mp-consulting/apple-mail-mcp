@@ -15,12 +15,7 @@ public struct BodyIndexKey: Sendable, Equatable {
         self.bytes = bytes
     }
 
-    public static func random() -> BodyIndexKey {
-        var bytes = [UInt8](repeating: 0, count: 16)
-        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
-        precondition(status == errSecSuccess, "SecRandomCopyBytes failed")
-        return BodyIndexKey(bytes: bytes)
-    }
+    public static func random() -> BodyIndexKey { BodyIndexKey(bytes: KeychainSecret.random(16)) }
 
     static let service = "apple-mail-mcp.body-index"
     static let account = "token-key"
@@ -30,24 +25,51 @@ public struct BodyIndexKey: Sendable, Equatable {
     /// When this runs from the app bundle, the item trusts both the menu bar app and the server
     /// next to it, so neither is prompted for a key the other created.
     public static func fromKeychain() throws -> BodyIndexKey {
-        if let existing = try readKeychain() { return existing }
-        let key = random()
+        do {
+            return BodyIndexKey(bytes: try KeychainSecret.load(
+                service: service, account: account, length: 16, label: "Apple Mail MCP search index key",
+                description: "Unlocks the body search index of Apple Mail MCP"))
+        } catch KeychainSecret.Failure.keychain(let status) {
+            throw BodyIndexKeyError.keychain(status)
+        } catch {
+            throw BodyIndexKeyError.malformed
+        }
+    }
+}
+
+/// A random secret in the login Keychain, created on first use and shared by the executables of this app bundle.
+public enum KeychainSecret {
+    public enum Failure: Error, Sendable {
+        case keychain(OSStatus)
+        case malformed
+    }
+
+    public static func random(_ length: Int) -> [UInt8] {
+        var bytes = [UInt8](repeating: 0, count: length)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        precondition(status == errSecSuccess, "SecRandomCopyBytes failed")
+        return bytes
+    }
+
+    public static func load(service: String, account: String, length: Int, label: String, description: String) throws -> [UInt8] {
+        if let existing = try read(service: service, account: account, length: length) { return existing }
+        let bytes = random(length)
         var item: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
-            kSecAttrLabel as String: "Apple Mail MCP search index key",
-            kSecAttrDescription as String: "Unlocks the body search index of Apple Mail MCP",
-            kSecValueData as String: Data(key.bytes),
+            kSecAttrLabel as String: label,
+            kSecAttrDescription as String: description,
+            kSecValueData as String: Data(bytes),
         ]
-        if let access = bundleAccess() { item[kSecAttrAccess as String] = access }
+        if let access = bundleAccess(label) { item[kSecAttrAccess as String] = access }
         let status = SecItemAdd(item as CFDictionary, nil)
-        if status == errSecDuplicateItem, let raced = try readKeychain() { return raced }
-        guard status == errSecSuccess else { throw BodyIndexKeyError.keychain(status) }
-        return key
+        if status == errSecDuplicateItem, let raced = try read(service: service, account: account, length: length) { return raced }
+        guard status == errSecSuccess else { throw Failure.keychain(status) }
+        return bytes
     }
 
-    private static func readKeychain() throws -> BodyIndexKey? {
+    private static func read(service: String, account: String, length: Int) throws -> [UInt8]? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -58,14 +80,14 @@ public struct BodyIndexKey: Sendable, Equatable {
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess else { throw BodyIndexKeyError.keychain(status) }
-        guard let data = result as? Data, data.count == 16 else { throw BodyIndexKeyError.malformed }
-        return BodyIndexKey(bytes: [UInt8](data))
+        guard status == errSecSuccess else { throw Failure.keychain(status) }
+        guard let data = result as? Data, data.count == length else { throw Failure.malformed }
+        return [UInt8](data)
     }
 
     /// An access list naming every executable in this app bundle's Contents/MacOS, or nil
     /// outside a bundle (the creating program alone is then trusted, the Keychain default).
-    private static func bundleAccess() -> SecAccess? {
+    private static func bundleAccess(_ label: String) -> SecAccess? {
         guard let executable = Bundle.main.executableURL?.resolvingSymlinksInPath() else { return nil }
         let directory = executable.deletingLastPathComponent()
         guard directory.lastPathComponent == "MacOS", directory.deletingLastPathComponent().lastPathComponent == "Contents",
@@ -78,7 +100,7 @@ public struct BodyIndexKey: Sendable, Equatable {
         }
         guard !trusted.isEmpty else { return nil }
         var access: SecAccess?
-        let status = SecAccessCreate("Apple Mail MCP search index key" as CFString, trusted as CFArray, &access)
+        let status = SecAccessCreate(label as CFString, trusted as CFArray, &access)
         return status == errSecSuccess ? access : nil
     }
 }

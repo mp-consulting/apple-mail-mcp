@@ -161,7 +161,12 @@ final class AgentModel {
     }
 
     func decide(_ request: ApprovalRequest, approve: Bool) {
-        try? approvals.decide(request.id, approve: approve)
+        do {
+            try approvals.decide(request.id, approve: approve)
+        } catch {
+            // Without the approval key nothing can be signed, and the server treats the request as declined.
+            lastError = "Could not record your answer: \(error)"
+        }
         pending.removeAll { $0.id == request.id }
         if focusedApproval == request.id { focusedApproval = pending.first?.id }
         if pending.isEmpty { closeApprovalWindow?() }

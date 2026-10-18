@@ -44,6 +44,20 @@ public struct ScheduledSend: Codable, Sendable, Hashable, Identifiable {
     public var reply: Reply?
     public var attempts = 0
     public var lastError: String?
+    /// When the last failed attempt started: an Apple Event can time out after Mail sent the message, so
+    /// the next run looks in Sent from then on before trying again.
+    public var lastAttempt: Date?
+    /// Written by the server that queued it (see ``SigningKey``): an entry added to the file by anything else is not sent.
+    public var signature: String?
+
+    /// Everything that decides what goes out, and to whom; attempts and errors change, so they are not signed.
+    var signedFields: [String] {
+        [
+            "scheduled-send", id, SigningKey.seconds(sendAt), tool, from ?? "", SigningKey.list(to), SigningKey.list(cc),
+            SigningKey.list(bcc), subject, body, html ?? "", SigningKey.list(attachments), reply?.messageID ?? "",
+            reply.map { $0.replyAll ? "all" : "sender" } ?? "",
+        ]
+    }
 }
 
 struct ScheduleState: Codable, Sendable {
@@ -56,10 +70,26 @@ public final class ScheduleStore: @unchecked Sendable {
     let file: SharedJSONFile<ScheduleState>
     /// Attachments of scheduled sends wait here (owner-only).
     public let filesDirectory: URL
+    let signing: SigningKeyProvider
 
-    public init(url: URL = SharedPaths.schedule, filesDirectory: URL = SharedPaths.scheduledFiles) {
+    public init(
+        url: URL = SharedPaths.schedule, filesDirectory: URL = SharedPaths.scheduledFiles, signing: SigningKeyProvider = SigningKeyProvider()
+    ) {
         file = SharedJSONFile(url: url, empty: ScheduleState())
         self.filesDirectory = filesDirectory
+        self.signing = signing
+    }
+
+    /// Queues a send, signed.
+    func schedule(_ send: ScheduledSend) throws {
+        var signed = send
+        signed.signature = try signing.key().sign(send.signedFields)
+        try add(signed)
+    }
+
+    /// Whether `send` was queued by a server of this bundle and not changed since.
+    func isAuthentic(_ send: ScheduledSend) -> Bool {
+        (try? signing.key())?.verify(send.signature, send.signedFields) == true
     }
 
     public var snoozes: [Snooze] { file.value.snoozes.sorted { $0.until < $1.until } }
@@ -162,8 +192,8 @@ extension MailToolbox {
             originalLink: originalLink, sendAt: sendAt)
         let id = Self.newScheduleID("s")
         let files = try schedule.keepFiles(attachments, for: id)
-        try schedule.add(ScheduledSend(
-            id: id, created: Date(), sendAt: sendAt, client: clientName, tool: tool, from: from, to: to, cc: cc, bcc: bcc,
+        try schedule.schedule(ScheduledSend(
+            id: id, created: Date(), sendAt: Date(timeIntervalSince1970: sendAt.timeIntervalSince1970.rounded(.down)), client: clientName, tool: tool, from: from, to: to, cc: cc, bcc: bcc,
             subject: subject, body: body, html: html, attachments: files, reply: reply))
         return ToolReply(
             json: .obj([
@@ -332,6 +362,24 @@ extension MailToolbox {
             if let returned = try? await wake(snooze) { report.returned += returned }
         }
         for send in schedule.claimDueSends(now: now, maxAttempts: Self.maxSendAttempts) {
+            guard schedule.isAuthentic(send) else {
+                // Not queued by this app (or edited since): kept in the list with the reason, never sent.
+                var refused = send
+                refused.attempts = Self.maxSendAttempts
+                refused.lastError = "Not sent: this entry was not scheduled by Apple Mail MCP, or was changed since."
+                try? schedule.add(refused)
+                report.failed.append(send.subject)
+                continue
+            }
+            if let last = send.lastAttempt, alreadySent(send, since: last) {
+                schedule.discardFiles(for: send.id)
+                report.sent.append(send.subject)
+                activity?.append(ActivityEntry(
+                    date: Date(), pid: ProcessInfo.processInfo.processIdentifier, client: send.client, tool: "scheduled send", ok: true,
+                    milliseconds: 0, summary: "sent \(Render.truncate(send.subject, 60)) (found in Sent after an error)", isWrite: true))
+                continue
+            }
+            let attempt = Date()
             do {
                 try await deliver(send)
                 schedule.discardFiles(for: send.id)
@@ -343,6 +391,7 @@ extension MailToolbox {
                 var retry = send
                 retry.attempts += 1
                 retry.lastError = "\(error)"
+                retry.lastAttempt = attempt
                 try? schedule.add(retry)
                 report.failed.append(send.subject)
             }
@@ -387,6 +436,32 @@ extension MailToolbox {
             schedule.updateSnooze(snooze.id) { $0?.lastError = "\(error)" }
             throw error
         }
+    }
+
+    /// Whether `send` reached Sent (or the Outbox) since `since`: same subject (a reply's carries "Re:") and,
+    /// for a new message, the same first recipient.
+    func alreadySent(_ send: ScheduledSend, since: Date) -> Bool {
+        guard let store = try? self.store, let boxes = try? store.mailboxes() else { return false }
+        var query = MessageQuery()
+        query.mailboxIDs = boxes.filter { $0.role == .sent || $0.role == .outbox }.map(\.id)
+        guard !query.mailboxIDs.isEmpty else { return false }
+        query.dateFrom = since.addingTimeInterval(-120)
+        query.recipient = send.reply == nil ? send.to.first : nil
+        query.limit = 100
+        guard let page = try? store.search(query) else { return false }
+        let subject = Self.baseSubject(send.subject)
+        return page.messages.contains { Self.baseSubject($0.subject) == subject }
+    }
+
+    /// The subject without reply and forward prefixes, case and spacing.
+    static func baseSubject(_ subject: String) -> String {
+        var text = subject.trimmingCharacters(in: .whitespaces).lowercased()
+        while let colon = text.firstIndex(of: ":"), text.distance(from: text.startIndex, to: colon) <= 4,
+              ["re", "fw", "fwd", "aw", "tr", "wg", "sv", "vs"].contains(text[..<colon].trimmingCharacters(in: .whitespaces))
+        {
+            text = text[text.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+        }
+        return text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 
     private func deliver(_ send: ScheduledSend) async throws {

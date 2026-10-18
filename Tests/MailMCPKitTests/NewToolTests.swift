@@ -537,6 +537,71 @@ final class ScheduleTests {
         #expect(h.toolbox.schedule?.sends.isEmpty == true)
     }
 
+    @Test func aSendThatTimedOutAfterMailSentItIsNotSentAgain() async throws {
+        h.approvals.beat()
+        _ = try await h.json("compose_email", ["to": "a@x.test", "subject": "Quarterly numbers", "body": "y", "send_at": .string(tomorrow)])
+        let fixture = h.fixture
+        h.automation.onCompose = { message, _ in
+            // Mail sends it, then the Apple Event times out.
+            _ = try fixture.store.addMessage(FixtureMessage(
+                subject: message.subject, from: StandardFixture.me, to: [EmailAddress(address: "a@x.test", name: nil)], date: Date(),
+                mailbox: fixture.sent, body: message.body))
+            throw ToolError("Apple Event timed out")
+        }
+        let later = Date().addingTimeInterval(2 * 86_400)
+        #expect(await h.toolbox.runDueSchedules(now: later).failed == ["Quarterly numbers"])
+        h.automation.onCompose = nil
+        let next = await h.toolbox.runDueSchedules(now: later.addingTimeInterval(60))
+        #expect(next.sent == ["Quarterly numbers"])
+        #expect(h.automation.calls.count == 1)  // found in Sent: not sent a second time
+        #expect(h.toolbox.schedule?.sends.isEmpty == true)
+    }
+
+    @Test func aSendAddedToTheFileByHandIsNotSent() async throws {
+        h.approvals.beat()
+        _ = try await h.json("compose_email", ["to": "a@x.test", "subject": "Mine", "body": "y", "send_at": .string(tomorrow)])
+        let url = h.support.appending(path: "scheduled.json")
+        var state = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+        var sends = state["sends"] as! [[String: Any]]
+        var injected = sends[0]
+        injected["id"] = "s-injected"
+        injected["to"] = ["attacker@evil.test"]
+        injected["subject"] = "Injected"
+        injected.removeValue(forKey: "signature")
+        var redirected = sends[0]
+        redirected["id"] = "s-redirected"
+        redirected["to"] = ["attacker@evil.test"]  // keeps the real entry's signature
+        redirected["subject"] = "Redirected"
+        sends += [injected, redirected]
+        state["sends"] = sends
+        try JSONSerialization.data(withJSONObject: state).write(to: url)
+
+        let report = await h.toolbox.runDueSchedules(now: Date().addingTimeInterval(2 * 86_400))
+        #expect(report.sent == ["Mine"])
+        #expect(Set(report.failed) == ["Injected", "Redirected"])
+        #expect(h.automation.calls.count == 1)
+        let listed = try await h.json("list_scheduled")["scheduled_sends"] as? [[String: Any]]
+        #expect(listed?.allSatisfy { ($0["error"] as? String)?.contains("not scheduled by Apple Mail MCP") == true } == true)
+        // Never retried.
+        #expect(await h.toolbox.runDueSchedules(now: Date().addingTimeInterval(3 * 86_400)).failed.isEmpty)
+    }
+
+    @Test func aSendThatReallyFailedIsRetried() async throws {
+        h.approvals.beat()
+        _ = try await h.json("compose_email", ["to": "a@x.test", "subject": "Retry me", "body": "y", "send_at": .string(tomorrow)])
+        h.automation.onCompose = { _, _ in throw ToolError("Mail is not running") }
+        let later = Date().addingTimeInterval(2 * 86_400)
+        _ = await h.toolbox.runDueSchedules(now: later)
+        h.automation.onCompose = nil
+        #expect(await h.toolbox.runDueSchedules(now: later.addingTimeInterval(60)).sent == ["Retry me"])
+        #expect(h.automation.calls.count == 2)
+    }
+
+    @Test func baseSubjectIgnoresReplyPrefixes() {
+        #expect(MailToolbox.baseSubject("Re: FW:  Quarterly   numbers") == "quarterly numbers")
+        #expect(MailToolbox.baseSubject("Return: policy") == "return: policy")
+    }
+
     @Test func failedSendsStayListedWithTheError() async throws {
         h.approvals.beat()
         _ = try await h.json("compose_email", ["to": "a@x.test", "subject": "Blocked", "body": "y", "send_at": .string(tomorrow)])

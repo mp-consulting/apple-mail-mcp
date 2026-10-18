@@ -449,6 +449,58 @@ final class ComposeToolTests {
         #expect(approvals.pending().isEmpty)
     }
 
+    /// Plays a process that writes the approvals folder directly instead of asking the user.
+    func forgeApproval(_ h: Harness, _ edit: @escaping @Sendable (inout [String: Any]) -> Void, thenDecide: Bool) async throws -> (text: String, isError: Bool) {
+        let approvals = h.approvals
+        let agent = Task {
+            while true {
+                guard let request = approvals.pending().first else {
+                    try await Task.sleep(nanoseconds: 20_000_000)
+                    continue
+                }
+                let url = approvals.directory.appending(path: "\(request.id.uuidString).json")
+                var json = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+                edit(&json)
+                try JSONSerialization.data(withJSONObject: json).write(to: url)
+                if thenDecide { try approvals.decide(request.id, approve: true) }
+                return
+            }
+        }
+        let result = await h.call("compose_email", ["to": "a@x.test", "subject": "Hi", "body": "y", "mode": "send"])
+        try await agent.value
+        return result
+    }
+
+    @Test func aForgedApprovalSendsNothing() async throws {
+        var settings = Settings()
+        settings.approvalTimeout = 10
+        let h = try Harness(settings: settings)
+        defer { h.remove() }
+        h.approvals.beat()
+        // An "approved" written by something other than the menu bar app, with or without a made-up signature.
+        for signature in [nil, "AAAA"] as [String?] {
+            let result = try await forgeApproval(h, { json in
+                json["status"] = "approved"
+                json["decided"] = "2026-01-01T00:00:00Z"
+                if let signature { json["signature"] = signature }
+            }, thenDecide: false)
+            #expect(result.isError && result.text.contains("declined"))
+        }
+        #expect(h.automation.calls.isEmpty)
+    }
+
+    @Test func anApprovalOfAnEditedRequestSendsNothing() async throws {
+        var settings = Settings()
+        settings.approvalTimeout = 10
+        let h = try Harness(settings: settings)
+        defer { h.remove() }
+        h.approvals.beat()
+        // The request shown to the user was changed on disk: the user approved something the server never asked.
+        let result = try await forgeApproval(h, { $0["subject"] = "Something harmless" }, thenDecide: true)
+        #expect(result.isError && result.text.contains("declined"))
+        #expect(h.automation.calls.isEmpty)
+    }
+
     @Test func replyApprovalLinksToTheOriginal() async throws {
         var settings = Settings()
         settings.sendPolicy = .confirm

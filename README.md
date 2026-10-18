@@ -176,8 +176,11 @@ as little of your mail as possible. When the app updates, skills you installed u
 When Claude wants to send, a small window pops up (and the panel's **Mail** tab shows a count). With several
 emails waiting you review them one by one; nothing goes out without a click on **Send**.
 
-- **Send policy** (Settings): *Ask me first* shows each outgoing email (recipients, subject, text,
-  attachments) for **Send** or **Don't Send**; *Send right away*; or *Never send* (drafts only).
+- **Send policy** (Settings): *Ask me first* (the default) shows each outgoing email (recipients, subject,
+  text, attachments) for **Send** or **Don't Send**, and refuses to send while the menu bar app is not
+  running; *Send right away*; or *Never send* (drafts only).
+- **Signed approvals**: your answers and scheduled sends are signed with a key in your login Keychain, so
+  another program cannot approve a send by writing a file.
 - **Drafts by default**: compose, reply and forward save to Drafts unless Claude is asked to send.
 - **Batch limits**: at most 50 messages per change by default; `dry_run` previews moves and trash. Optionally,
   moves and trashes above a size you choose wait for your OK in the menu bar app.

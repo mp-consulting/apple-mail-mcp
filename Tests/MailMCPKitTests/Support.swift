@@ -27,6 +27,8 @@ final class RecordingAutomation: MailAutomating, @unchecked Sendable {
     var onMove: (@Sendable ([Int64], MailboxTarget) -> Void)?
     /// Runs inside `createMailbox`, e.g. to make the mailbox appear in the fixture.
     var onCreateMailbox: (@Sendable (MailboxTarget) -> Void)?
+    /// Runs inside `compose`, e.g. to simulate Mail sending and then the Apple Event timing out.
+    var onCompose: (@Sendable (OutgoingMessage, DeliveryMode) throws -> Void)?
     /// Runs inside `trash`, e.g. to simulate Mail moving the messages to Trash (or more than that).
     var onTrash: (@Sendable ([Int64], MailboxTarget) -> Void)?
     private var exclusiveDepth = 0
@@ -75,6 +77,7 @@ final class RecordingAutomation: MailAutomating, @unchecked Sendable {
     func checkForNewMail(accountID: String?) async throws { record(.check(accountID)) }
     func compose(_ message: OutgoingMessage, mode: DeliveryMode) async throws -> ComposeHandle? {
         record(.compose(message, mode))
+        try onCompose?(message, mode)
         return nil
     }
 
@@ -105,25 +108,35 @@ struct FixedContacts: ContactsProviding {
 struct Harness {
     /// Tests never read the Keychain.
     static let indexKey = BodyIndexKey(bytes: Array(0..<16))
+    static let signing = SigningKeyProvider { SigningKey(bytes: Array(0..<32)) }
     let fixture: StandardFixture
     let toolbox: MailToolbox
     let automation: RecordingAutomation
     let support: URL
     let approvals: ApprovalCenter
 
-    init(settings: Settings = Settings(), readOnly: Bool = false) throws {
+    /// Most tests send without the approval window; the ones about approvals set their own policy.
+    static var sendingAllowed: Settings {
+        var settings = Settings()
+        settings.sendPolicy = .allow
+        return settings
+    }
+
+    init(settings: Settings = Harness.sendingAllowed, readOnly: Bool = false) throws {
         fixture = try StandardFixture.make()
         support = fixture.store.directory.appending(path: "support")
         try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         try settings.save(to: support.appending(path: "settings.json"))
         automation = RecordingAutomation()
-        approvals = ApprovalCenter(directory: support.appending(path: "approvals"), heartbeat: support.appending(path: "agent.heartbeat"))
+        approvals = ApprovalCenter(
+            directory: support.appending(path: "approvals"), heartbeat: support.appending(path: "agent.heartbeat"), signing: Self.signing)
         toolbox = MailToolbox(
             store: try fixture.openStore(), automation: automation,
             settings: SettingsProvider(url: support.appending(path: "settings.json")), approvals: approvals,
             activity: ActivityLog(url: support.appending(path: "activity.jsonl")),
             changes: ChangeJournal(url: support.appending(path: "changes.json")),
-            schedule: ScheduleStore(url: support.appending(path: "scheduled.json"), filesDirectory: support.appending(path: "scheduled-files")),
+            schedule: ScheduleStore(
+                url: support.appending(path: "scheduled.json"), filesDirectory: support.appending(path: "scheduled-files"), signing: Self.signing),
             contacts: FixedContacts(),
             bodyIndexURL: support.appending(path: "body-index.sqlite"), bodyIndexKey: { Self.indexKey }, readOnly: readOnly)
         // The fake changes the fixture synchronously, so a short wait shows everything.

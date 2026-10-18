@@ -144,6 +144,7 @@ struct SharedStateTests {
         #expect(settings.allowMailChanges)
         #expect(settings.maxBatchSize == 50)
         #expect(Settings.load(from: directory.appending(path: "missing.json")) == Settings())
+        #expect(Settings().sendPolicy == .confirm)
     }
 
     @Test func badSettingsFailClosed() throws {

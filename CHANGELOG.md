@@ -6,6 +6,27 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **"Ask me first" is the default send policy.** New installs, and anyone who never saved a send policy,
+  confirm each email in the menu bar app; sending refuses while the app is not running. A saved choice is
+  kept.
+
+### Security
+
+- **Approvals are signed.** The menu bar app signs each answer, together with everything it showed, with a
+  key from the login Keychain ("Apple Mail MCP approval key"), and the server checks it against the request it
+  wrote. An answer written to the approvals folder by another process, or for a request edited on disk,
+  counts as declined.
+- **Scheduled sends are signed** by the server that queued them. An entry added to or changed in
+  `scheduled.json` by anything else is listed with the reason and never sent.
+- Approval files are owner-only.
+
+### Fixed
+
+- A scheduled send whose Apple Event timed out after Mail had sent it is no longer sent again: before a
+  retry, the menu bar app looks for it in Sent.
+
 ## [0.4.2] - 2026-10-18
 
 ### Security

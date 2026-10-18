@@ -36,7 +36,8 @@ public enum SendPolicy: String, Codable, Sendable, CaseIterable {
 /// User settings, stored as JSON and editable from the menu bar app. The
 /// server re-reads the file when it changes, so toggles apply immediately.
 public struct Settings: Codable, Sendable, Equatable {
-    public var sendPolicy: SendPolicy = .allow
+    /// Ask first by default: a prompt injected through an email can only send what the user approves.
+    public var sendPolicy: SendPolicy = .confirm
     /// Allow moving, flagging, trashing and creating mailboxes.
     public var allowMailChanges = true
     /// Largest number of messages one move/update/trash call may touch.

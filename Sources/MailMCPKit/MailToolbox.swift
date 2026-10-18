@@ -240,7 +240,7 @@ public final class MailToolbox: @unchecked Sendable {
 
     // MARK: Tool list
 
-    public var definitions: [ToolDefinition] { readTools + fileTools + changeTools + undoTools + composeTools }
+    public var definitions: [ToolDefinition] { readTools + trustTools + fileTools + changeTools + undoTools + composeTools }
 
     /// Tools offered to clients (hides write tools in read-only launches).
     public var listedDefinitions: [ToolDefinition] {

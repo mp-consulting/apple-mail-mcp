@@ -105,3 +105,30 @@ final class UndoTests {
         #expect(journal.records().map(\.id) == ["c-4", "c-3", "c-2"])
     }
 }
+
+@Suite("Authenticity tool")
+final class AuthenticityToolTests {
+    let h: Harness
+    init() throws { h = try Harness() }
+    deinit { h.remove() }
+
+    @Test func checksFixtureMessages() async throws {
+        var forged = FixtureMessage(
+            subject: "Verify your account", from: EmailAddress(address: "security@alice-martin.test", name: "alice@example.test"),
+            to: [StandardFixture.me], date: Date(), mailbox: h.fixture.inbox, body: "",
+            html: #"<a href="https://evil.test/login">https://example.test/account</a>"#)
+        forged.extraHeaders = ["Authentication-Results: mx.icloud.test; spf=fail smtp.mailfrom=evil.test; dkim=none; dmarc=fail header.from=alice-martin.test"]
+        let id = try h.fixture.store.addMessage(forged)
+        let json = try await h.json("check_authenticity", ["ids": [.int(Int(id)), .int(Int(h.id("kickoff"))), .int(Int(h.id("pending")))]])
+        let messages = json["messages"] as? [[String: Any]] ?? []
+        #expect(messages.count == 3)
+        #expect(messages[0]["verdict"] as? String == "fail" && messages[0]["dmarc"] as? String == "fail")
+        let codes = (messages[0]["findings"] as? [[String: Any]] ?? []).compactMap { $0["code"] as? String }
+        #expect(codes.contains("display_name_spoof") && codes.contains("link_mismatch") && codes.contains("first_contact"))
+        // Alice has written before; the fixture records no authentication.
+        let kickoffCodes = (messages[1]["findings"] as? [[String: Any]] ?? []).compactMap { $0["code"] as? String }
+        #expect(kickoffCodes == ["no_authentication"])
+        #expect(messages[2]["note"] as? String != nil)
+        #expect(await h.call("check_authenticity", ["ids": []]).isError)
+    }
+}

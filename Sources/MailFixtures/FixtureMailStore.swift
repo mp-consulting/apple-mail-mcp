@@ -27,6 +27,8 @@ public struct FixtureMessage: Sendable {
     public var labels: [Int64] = []
     public var deleted = false
     public var charset = "utf-8"
+    /// Raw header lines added as they are, e.g. `Authentication-Results: …` or `List-Unsubscribe: …`.
+    public var extraHeaders: [String] = []
 
     public init(
         subject: String, from: EmailAddress, to: [EmailAddress], date: Date, mailbox: Int64, body: String,
@@ -319,6 +321,7 @@ public final class FixtureMailStore: @unchecked Sendable {
         if !message.cc.isEmpty { headers.append("Cc: \(message.cc.map(formatAddress).joined(separator: ", "))") }
         if let reply = message.inReplyTo { headers.append("In-Reply-To: <\(reply)>") }
         if message.isList { headers.append("List-Id: <news.fixture.test>") }
+        headers += message.extraHeaders
 
         func textPart(_ text: String, type: String) -> String {
             let encoding = message.charset.lowercased() == "utf-8" ? String.Encoding.utf8 : MIME.stringEncoding(forCharset: message.charset) ?? .utf8

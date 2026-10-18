@@ -52,6 +52,22 @@ struct InvoiceExtractorTests {
         #expect(ContinuousClock.now - start < .seconds(3))
     }
 
+    @Test func appleReceiptsChargeOnTheCardLine() {
+        let f = fields("iCloud+ with 2 TB\n9,99 €\nincl. VAT at 20 % 1,67 €\nSubtotal\n8,32 €\nVAT charged at 20 %\n1,67 €\nVisa •••• 1234\n9,99 €\nIf you have any questions about your bill")
+        #expect(f.total == "9.99" && f.currency == "EUR" && f.confidence == .high)
+    }
+
+    @Test func prixTTCAndInferredCurrency() {
+        #expect(fields("Prix TTC 86.4 euros dont 14.40 euros de TVA").total == "86.40")
+        let ikea = fields("Montant en EUR\nArticle 1  10,00\nTotal\n149,00")
+        #expect(ikea.total == "149.00" && ikea.currency == "EUR" && ikea.confidence == .medium)
+    }
+
+    @Test func fallbackTakesTheLargestAmount() {
+        let f = fields("Item one 4,00 €\nItem two 6,50 €\nYou paid 10,50 € today")
+        #expect(f.total == "10.50" && f.confidence == .low)
+    }
+
     @Test func amountNormalization() {
         #expect(InvoiceExtractor.normalizeAmount("1 234,56") == "1234.56")
         #expect(InvoiceExtractor.normalizeAmount("1,234.56") == "1234.56")

@@ -126,7 +126,7 @@ Run `apple-mail-mcp doctor` for a full check.
 | `find_contact` | Addresses from Contacts and from the people you write with, most frequent first |
 | `wait_for_mail` | Waits for a matching message to arrive (a sign-in code, an expected reply) and returns it |
 | `mail_setup` | Your Mail rules, VIPs, smart mailboxes and signatures |
-| `create_rule`, `update_rule`, `set_rule_enabled`, `delete_rule` | Make, change, turn on or off and delete Mail rules (forwarding, replies and deleting ask first), each checked against Mail's saved rules |
+| `create_rule`, `update_rule`, `set_rule_enabled`, `delete_rule` | Make, change, turn on or off and delete Mail rules (forwarding, replies and deleting ask first), each checked against Mail's saved rules and undoable with `undo_change` |
 | `apply_rules` | Run rules on mail already in a mailbox, like Message › Apply Rules; a dry run shows what each rule would do |
 | `needs_response` | Mail from people, to you, still waiting on you (lists, promotions and no-reply excluded) |
 | `awaiting_reply` | What you sent that nobody answered |
@@ -135,7 +135,7 @@ Run `apple-mail-mcp doctor` for a full check.
 | `list_attachments`, `save_attachment`, `export_messages` | Attachments to disk, messages to `.eml` or Markdown |
 | `get_message_source` | Raw headers, e.g. to check authentication or unsubscribe links |
 | `move_messages`, `update_messages`, `trash_messages`, `create_mailbox` | Archive and file, read/unread and flags, Trash; previews with `dry_run` |
-| `undo_change` | Lists recent moves, trashes and flag changes and puts one back |
+| `undo_change` | Lists recent moves, trashes, flag and rule changes and puts one back |
 | `snooze_messages`, `list_scheduled`, `cancel_scheduled` | Hide messages until a day, then back to the inbox unread; see or cancel snoozes and scheduled sends |
 | `compose_email`, `reply_to_message`, `forward_message` | Draft (default), open for review, send, or send later (`send_at`); plain text or formatted HTML (replies and forwards quote the original with its formatting) |
 | `list_drafts`, `send_draft` | Unsent drafts with their recipients; send one as it is |

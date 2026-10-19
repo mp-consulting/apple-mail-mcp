@@ -3,9 +3,24 @@ import MCP
 import MailAutomation
 import MailStore
 
-/// One change to mail that `undo_change` can reverse. Holds Message-IDs and mailbox paths, never subjects or bodies.
+/// One change to mail that `undo_change` can reverse. Holds Message-IDs and mailbox paths, never subjects or bodies
+/// (a rule change holds the rule as it was, which the user's own Mail settings already hold).
 public struct ChangeRecord: Codable, Sendable, Hashable, Identifiable {
-    public enum Kind: String, Codable, Sendable { case move, trash, update }
+    public enum Kind: String, Codable, Sendable { case move, trash, update, rule }
+
+    /// A change to a Mail rule, with what undoing it needs.
+    public struct Rule: Codable, Sendable, Hashable {
+        public enum Action: String, Codable, Sendable { case created, deleted, updated, enabled }
+        public var action: Action
+        /// The rule's name after the change.
+        public var name: String
+        /// The rule as it was before (deleted or updated); nil when the tools cannot make it again.
+        public var before: RuleSpec?
+        /// For `enabled`: whether it was on before.
+        public var wasEnabled: Bool?
+        /// Why `before` is missing: what the rule had that the tools cannot make.
+        public var cannotUndo: String?
+    }
 
     /// One message as it was before the change.
     public struct Item: Codable, Sendable, Hashable {
@@ -43,14 +58,17 @@ public struct ChangeRecord: Codable, Sendable, Hashable, Identifiable {
     public var tool: String
     public var kind: Kind
     public var items: [Item]
+    /// For `rule` changes.
+    public var rule: Rule?
     /// Messages the change touched that had no Message-ID: they cannot be found again, so not undone.
     public var untracked: Int
     public var undone: Date?
 
     public init(
         id: String = ChangeRecord.newID(), date: Date = Date(), client: String?, tool: String, kind: Kind, items: [Item],
-        untracked: Int = 0, undone: Date? = nil
+        rule: Rule? = nil, untracked: Int = 0, undone: Date? = nil
     ) {
+        self.rule = rule
         self.id = id
         self.date = date
         self.client = client
@@ -82,7 +100,7 @@ public final class ChangeJournal: @unchecked Sendable {
     public func records() -> [ChangeRecord] { file.value.reversed() }
 
     public func record(_ record: ChangeRecord) {
-        guard !record.items.isEmpty else { return }
+        guard !record.items.isEmpty || record.rule != nil else { return }
         try? file.modify { records in
             records.append(record)
             if records.count > limit { records.removeFirst(records.count - limit) }
@@ -118,9 +136,20 @@ extension MailToolbox {
     }
 
     private func record(_ record: ChangeRecord) -> String? {
-        guard let changes, !record.items.isEmpty else { return nil }
+        guard let changes, !record.items.isEmpty || record.rule != nil else { return nil }
         changes.record(record)
         return record.id
+    }
+
+    /// Records a rule change; returns the change id to quote for undo.
+    func journalRule(
+        _ action: ChangeRecord.Rule.Action, name: String, before: RuleSpec?, wasEnabled: Bool? = nil, reason: String? = nil
+    ) -> String? {
+        let tool = ["created": "create_rule", "deleted": "delete_rule", "updated": "update_rule", "enabled": "set_rule_enabled"][action.rawValue]!
+        let rule = ChangeRecord.Rule(
+            action: action, name: name, before: before, wasEnabled: wasEnabled,
+            cannotUndo: before == nil && action != .created && action != .enabled ? reason ?? "parts the tools cannot make" : nil)
+        return record(ChangeRecord(client: clientName, tool: tool, kind: .rule, items: [], rule: rule))
     }
 
     /// Records the read and flag state that `update_messages` is about to change.
@@ -144,6 +173,15 @@ extension MailToolbox {
     }
 
     static func changeJSON(_ record: ChangeRecord) -> JSON {
+        if let rule = record.rule {
+            return .obj([
+                ("change_id", .string(record.id)), ("date", Render.date(record.date)), ("tool", .string(record.tool)),
+                ("kind", .string("rule")), ("rule", .string(rule.name)), ("change", .string(rule.action.rawValue)),
+                ("client", record.client.map { .string($0) }),
+                ("cannot_undo", rule.cannotUndo.map { .string("the rule had \($0)") }),
+                ("undone", record.undone.map(Render.date)),
+            ])
+        }
         let destinations = Set(record.items.compactMap(\.to)).sorted()
         let sources = Set(record.items.map(\.from)).sorted()
         return .obj([
@@ -165,9 +203,10 @@ extension MailToolbox {
             tool: Self.tool(
                 "undo_change", "Undo a change",
                 """
-                List recent moves, trashes and flag changes (action "list"), or put one back (action "undo", the \
-                latest by default): moved and trashed messages return to their mailbox, read and flag states are \
-                restored. Messages are found again by Message-ID. Use dry_run to preview.
+                List recent moves, trashes, flag changes and rule changes (action "list"), or put one back (action \
+                "undo", the latest by default): moved and trashed messages return to their mailbox, read and flag \
+                states are restored, a created rule is deleted, a deleted or changed rule comes back as it was, and a \
+                rule turned on or off is switched back. Messages are found again by Message-ID. Use dry_run to preview.
                 """,
                 Schema.object([
                     "action": Schema.string("list (default) or undo", enum: ["list", "undo"]),
@@ -204,6 +243,9 @@ extension MailToolbox {
             return boxes.first { $0.accountID == accountID && $0.path == path }
         }
         switch record.kind {
+        case .rule:
+            guard let change = record.rule else { throw ToolError("Change \(record.id) has no rule recorded.") }
+            return try await undoRule(record.id, change, dryRun: dryRun)
         case .move, .trash:
             // Where each message is now (its destination), and where it goes back to.
             var steps: [ChangeStep] = []
@@ -295,5 +337,62 @@ extension MailToolbox {
                     ("not_found", missing > 0 ? .int(Int64(missing)) : nil),
                 ]), summary: "restored \(restored)")
         }
+    }
+
+    private func undoRule(_ id: String, _ change: ChangeRecord.Rule, dryRun: Bool) async throws -> ToolReply {
+        let store = try self.store
+        if let reason = change.cannotUndo { throw ToolError("Change \(id) cannot be undone: the rule had \(reason), which the tools cannot make again.") }
+        let current = store.rules().filter { $0.name == change.name }
+        let what: String
+        switch change.action {
+        case .created: what = "delete the rule \"\(change.name)\""
+        case .deleted: what = "make the rule \"\(change.name)\" again"
+        case .updated: what = "put the rule \"\(change.name)\" back as it was\(change.before.map { $0.name == change.name ? "" : " (named \"\($0.name)\")" } ?? "")"
+        case .enabled: what = "turn the rule \"\(change.name)\" \(change.wasEnabled == true ? "on" : "off") again"
+        }
+        if dryRun { return ToolReply(json: .obj([("dry_run", .bool(true)), ("change_id", .string(id)), ("would", .string(what))]), summary: "dry run: \(what)") }
+        try requireMailChanges()
+        if change.action == .deleted {
+            guard current.isEmpty else { throw ToolError("A rule named \"\(change.name)\" exists again; nothing was changed.") }
+        } else if current.count != 1 {
+            throw ToolError(current.isEmpty ? "No rule named \"\(change.name)\" any more; nothing was changed." : "\(current.count) rules are named \"\(change.name)\"")
+        }
+        let restoring = change.before
+        if let restoring, change.action != .enabled {
+            try await authorizeRule(restoring.name, verb: "Restore", summary: Self.describe(restoring), sendsTo: restoring.forwardTo + restoring.redirectTo,
+                sendsMail: restoring.sendsMail, risky: restoring.delete || restoring.conditions.contains { $0.field == .everyMessage })
+        }
+        let before = store.ruleFileDates()
+        let pending: PendingRule
+        switch change.action {
+        case .created:
+            try await automation.exclusive { try await automation.deleteRule(named: change.name) }
+            pending = PendingRule(name: change.name, expectation: .absent, requested: Date())
+        case .deleted, .updated:
+            guard let restoring else { throw ToolError("Change \(id) did not record the rule as it was.") }
+            if change.action == .deleted {
+                try await automation.exclusive { try await automation.createRule(restoring) }
+            } else {
+                try await automation.exclusive { try await automation.replaceRule(named: change.name, with: restoring) }
+            }
+            pending = PendingRule(
+                name: restoring.name, expectation: .present(spec: restoring, enabled: restoring.enabled, conditions: restoring.conditions.count),
+                requested: Date())
+        case .enabled:
+            let enabled = change.wasEnabled ?? false
+            let rule = current[0]
+            if enabled, rule.definition.autoResponse != 0 || rule.definition.deletes {
+                try await authorizeRule(change.name, verb: "Turn on", summary: Self.describe(rule), sendsTo: rule.definition.forwardTo + rule.definition.redirectTo,
+                    sendsMail: rule.definition.autoResponse != 0, risky: true)
+            }
+            try await automation.exclusive { try await automation.setRuleEnabled(named: change.name, enabled: enabled) }
+            var expected = spec(of: rule).spec
+            expected?.enabled = enabled
+            pending = PendingRule(name: change.name, expectation: .present(spec: expected, enabled: enabled, conditions: rule.criteria.count), requested: Date())
+        }
+        let save = try await waitForRule(pending, before: before)
+        track(save, pending)
+        changes?.markUndone(id)
+        return ToolReply(json: .obj([("undone", .string(id)), ("did", .string(what))] + Self.saveFields(save)), summary: "undid \(id): \(what)")
     }
 }

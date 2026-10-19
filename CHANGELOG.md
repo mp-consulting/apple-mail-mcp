@@ -13,12 +13,16 @@ All notable changes to this project are documented here. The format follows
   change its name, conditions or actions, turn it on or off, or delete it. Rules that forward, redirect, auto-reply
   or delete, or match every message, ask in the menu bar app first, and so does every delete. Mail saves a change
   made by another app only when a rule's properties change through its setters, which turning a rule on or off and
-  deleting it do not do, so each change ends with one that does; then it waits for Mail's rule files, says when Mail
-  has not saved it yet, and `mail_setup` lists those under `pending_rules` (or as lost if Mail quit first).
+  deleting it do not do, so each change ends with one that does. Then it reads Mail's rule files back and compares
+  the whole rule with what was asked (`differences` when Mail saved something else), says when Mail has not saved
+  it yet, and `mail_setup` lists those under `pending_rules` (or as lost if Mail quit first), across sessions.
+  `undo_change` undoes rule changes too: a created rule is deleted, a deleted or changed one comes back as it was,
+  a rule turned on or off is switched back.
 - **`apply_rules`** runs rules on mail already in a mailbox, as Message › Apply Rules does (Mail offers other apps
   no way to run that): every enabled rule in Mail's order, or the ones named, matched the way Mail matches them.
-  Dry run by default. Moves, flags and trashes go through the usual tools, so they are checked and undoable; rules
-  that send mail or run AppleScripts, and conditions it cannot reproduce exactly, are skipped and listed.
+  Dry run by default; above the user's threshold it asks once for the whole run. Moves, flags and trashes go
+  through the usual tools, so they are checked and undoable; rules that send mail or run AppleScripts, and
+  conditions it cannot reproduce exactly, are skipped and listed.
 
 ## [0.4.3] - 2026-10-18
 

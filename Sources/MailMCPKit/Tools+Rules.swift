@@ -17,39 +17,6 @@ public struct RuleVerification: Sendable {
     }
 }
 
-/// A rule change Mail had not saved when its tool returned.
-struct PendingRule: Sendable, Hashable {
-    enum Expectation: Sendable, Hashable {
-        /// One rule by that name, on or off, with this many conditions.
-        case present(enabled: Bool, conditions: Int)
-        /// No rule by that name.
-        case absent
-    }
-
-    var name: String
-    var expectation: Expectation
-    var requested: Date
-
-    /// Whether Mail's saved rules show the change.
-    func isSaved(in rules: [MailRule]) -> Bool {
-        let named = rules.filter { $0.name == name }
-        switch expectation {
-        case .absent: return named.isEmpty
-        case .present(let enabled, let conditions): return named.count == 1 && named[0].enabled == enabled && named[0].criteria.count == conditions
-        }
-    }
-}
-
-/// How far Mail got with saving a rule change.
-enum RuleSave: String {
-    /// The rule is in Mail's rule files as asked.
-    case saved
-    /// Mail saved locally; the definition waits for iCloud Drive. Quitting Mail now loses the change.
-    case pendingICloud = "pending_icloud"
-    /// Mail has the change but wrote nothing yet (its save can take a minute).
-    case saving
-}
-
 extension MailToolbox {
     var ruleTools: [ToolDefinition] { [createRule, setRuleEnabled, updateRule, deleteRule, applyRules] }
 
@@ -113,15 +80,14 @@ extension MailToolbox {
                 sendsMail: spec.sendsMail, risky: spec.delete || spec.conditions.contains { $0.field == .everyMessage })
             let before = store.ruleFileDates()
             try await automation.exclusive { try await automation.createRule(spec) }
-            let pending = PendingRule(name: spec.name, expectation: .present(enabled: spec.enabled, conditions: spec.conditions.count), requested: Date())
+            let pending = PendingRule(
+                name: spec.name, expectation: .present(spec: spec, enabled: spec.enabled, conditions: spec.conditions.count), requested: Date())
             let save = try await self.waitForRule(pending, before: before)
             self.track(save, pending)
+            let change = self.journalRule(.created, name: spec.name, before: nil)
             return ToolReply(
-                json: .obj([
-                    ("created", .string(spec.name)), ("enabled", .bool(spec.enabled)), ("saved", .bool(save == .saved)),
-                    ("pending", save == .saved ? nil : .string(save.rawValue)), ("note", save == .saved ? nil : .string(Self.ruleNote)),
-                ]),
-                summary: save == .saved ? "created rule \(spec.name)" : "created rule \(spec.name) (not saved yet)")
+                json: .obj([("created", .string(spec.name)), ("enabled", .bool(spec.enabled))] + Self.saveFields(save) + [("change_id", change.map(JSON.string))]),
+                summary: save.isSaved ? "created rule \(spec.name)" : "created rule \(spec.name) (\(save.pending == nil ? "saved differently" : "not saved yet"))")
         }
     }
 
@@ -153,17 +119,15 @@ extension MailToolbox {
             }
             let before = store.ruleFileDates()
             try await automation.exclusive { try await automation.setRuleEnabled(named: name, enabled: enabled) }
-            let pending = PendingRule(name: name, expectation: .present(enabled: enabled, conditions: rule.criteria.count), requested: Date())
+            var expected = self.spec(of: rule).spec
+            expected?.enabled = enabled
+            let pending = PendingRule(name: name, expectation: .present(spec: expected, enabled: enabled, conditions: rule.criteria.count), requested: Date())
             let save = try await self.waitForRule(pending, before: before)
             self.track(save, pending)
-            let changed = save == .saved ? store.rules().first { $0.name == name }.map { !Self.sameRule($0, rule) } ?? false : false
+            let change = self.journalRule(.enabled, name: name, before: self.spec(of: rule).spec, wasEnabled: rule.enabled ?? !enabled)
             return ToolReply(
-                json: .obj([
-                    ("rule", .string(name)), ("enabled", .bool(enabled)), ("saved", .bool(save == .saved)),
-                    ("pending", save == .saved ? nil : .string(save.rawValue)), ("note", save == .saved ? nil : .string(Self.ruleNote)),
-                    ("warning", changed ? .string("Mail saved the rule with different conditions or actions than before; check it in Mail › Settings › Rules") : nil),
-                ]),
-                summary: "turned rule \(name) \(enabled ? "on" : "off")\(save == .saved ? "" : " (not saved yet)")")
+                json: .obj([("rule", .string(name)), ("enabled", .bool(enabled))] + Self.saveFields(save) + [("change_id", change.map(JSON.string))]),
+                summary: "turned rule \(name) \(enabled ? "on" : "off")\(save.isSaved ? "" : " (not saved yet)")")
         }
     }
 
@@ -217,27 +181,34 @@ extension MailToolbox {
                     sendsMail: update.addsSending || (update.enabled == true && rule.definition.autoResponse != 0), risky: true)
             }
             let before = store.ruleFileDates()
+            let (base, reason) = self.spec(of: rule)
             if let conditions = update.conditions, conditions.count < rule.criteria.count {
                 // Scripting cannot remove a condition (Mail crashes), so the rule is made again.
-                let spec = try self.replacementSpec(rule, update, conditions: conditions)
+                guard let base else {
+                    throw ToolError("Removing conditions means making \"\(name)\" again, which cannot keep \(reason ?? "all of it"); change it in Mail › Settings › Rules")
+                }
+                let spec = Self.applying(update, to: base)
                 try await automation.exclusive { try await automation.replaceRule(named: name, with: spec) }
             } else {
                 try await automation.exclusive { try await automation.updateRule(named: name, update) }
             }
             let pending = PendingRule(
                 name: newName,
-                expectation: .present(enabled: update.enabled ?? rule.enabled ?? false, conditions: update.conditions?.count ?? rule.criteria.count),
+                expectation: .present(
+                    spec: base.map { Self.applying(update, to: $0) }, enabled: update.enabled ?? rule.enabled ?? false,
+                    conditions: update.conditions?.count ?? rule.criteria.count),
                 requested: Date())
             let save = try await self.waitForRule(pending, before: before)
             self.track(save, pending)
-            if newName != name { self.pendingRules = self.pendingRules.filter { $0.name != name } }
+            if newName != name { self.pendingRules?.set(name, nil) }
+            let change = self.journalRule(.updated, name: newName, before: base, reason: reason)
             return ToolReply(
-                json: .obj([
-                    ("rule", .string(newName)), ("renamed_from", newName == name ? nil : .string(name)), ("saved", .bool(save == .saved)),
-                    ("pending", save == .saved ? nil : .string(save.rawValue)), ("note", save == .saved ? nil : .string(Self.ruleNote)),
-                    ("actions", save == .saved ? store.rules().first { $0.name == newName }.map { .array($0.actions.map(JSON.string)) } : nil),
-                ]),
-                summary: "changed rule \(newName)\(save == .saved ? "" : " (not saved yet)")")
+                json: .obj(
+                    [("rule", .string(newName)), ("renamed_from", newName == name ? nil : .string(name))] + Self.saveFields(save) + [
+                        ("actions", save.isSaved ? store.rules().first { $0.name == newName }.map { .array($0.actions.map(JSON.string)) } : nil),
+                        ("change_id", change.map(JSON.string)),
+                    ]),
+                summary: "changed rule \(newName)\(save.isSaved ? "" : " (not saved yet)")")
         }
     }
 
@@ -262,13 +233,11 @@ extension MailToolbox {
             let pending = PendingRule(name: name, expectation: .absent, requested: Date())
             let save = try await self.waitForRule(pending, before: before)
             self.track(save, pending)
+            let (snapshot, reason) = self.spec(of: rule)
+            let change = self.journalRule(.deleted, name: name, before: snapshot, reason: reason)
             return ToolReply(
-                json: .obj([
-                    ("deleted", .string(name)), ("saved", .bool(save == .saved)),
-                    ("pending", save == .saved ? nil : .string(save.rawValue)), ("note", save == .saved ? nil : .string(Self.ruleNote)),
-                    ("was", Self.ruleJSON(rule)),
-                ]),
-                summary: "deleted rule \(name)\(save == .saved ? "" : " (not saved yet)")")
+                json: .obj([("deleted", .string(name))] + Self.saveFields(save) + [("was", Self.ruleJSON(rule)), ("change_id", change.map(JSON.string))]),
+                summary: "deleted rule \(name)\(save.isSaved ? "" : " (not saved yet)")")
         }
     }
 
@@ -396,28 +365,16 @@ extension MailToolbox {
         return update
     }
 
-    /// The rule as it is saved, with `update` applied and `conditions` instead of its own, to make it again.
-    func replacementSpec(_ rule: MailRule, _ update: RuleUpdate, conditions: [RuleCondition]) throws -> RuleSpec {
-        let saved = rule.definition
-        let custom = saved.color.map { MailRuleActions.colorNames[$0] == nil } ?? false
-        if saved.notifies || saved.sound != nil || saved.appleScript != nil || saved.colorsText || custom
-            || (saved.autoResponse == 1 && saved.responseText != nil) || ![0, 1, 2, 3].contains(saved.autoResponse)
-        {
-            throw ToolError(
-                "Removing conditions means making \"\(rule.name)\" again, and it has actions scripting cannot make again (a notification, sound, AppleScript, text or custom colour, or forward text); change it in Mail › Settings › Rules")
-        }
-        func target(_ url: String?) throws -> MailboxTarget? {
-            guard let url else { return nil }
-            guard let mailbox = try store.mailbox(ruleURL: url) else { throw ToolError("\"\(rule.name)\" files mail into a mailbox that no longer exists") }
-            return MailboxTarget(mailbox)
-        }
-        var spec = RuleSpec(
-            name: update.name ?? rule.name, enabled: update.enabled ?? rule.enabled ?? false, allMustMatch: update.allMustMatch ?? rule.allMustMatch,
-            conditions: conditions, moveTo: try target(saved.moveTo), copyTo: try target(saved.copyTo), markRead: update.markRead ?? saved.markRead,
-            flag: saved.flag.flatMap(FlagColor.init(rawValue:)), color: saved.color.flatMap { MailRuleActions.colorNames[$0] }.flatMap(RuleColor.init(rawValue:)),
-            delete: update.delete ?? saved.deletes, forwardTo: saved.autoResponse == 1 ? saved.forwardTo : [],
-            redirectTo: saved.autoResponse == 3 ? saved.redirectTo : [], replyText: saved.autoResponse == 2 ? saved.responseText : nil,
-            stopEvaluating: update.stopEvaluating ?? saved.stopEvaluating)
+    /// `base` with `update` applied: what the rule should be after an update.
+    static func applying(_ update: RuleUpdate, to base: RuleSpec) -> RuleSpec {
+        var spec = base
+        if let name = update.name { spec.name = name }
+        if let enabled = update.enabled { spec.enabled = enabled }
+        if let match = update.allMustMatch { spec.allMustMatch = match }
+        if let conditions = update.conditions { spec.conditions = conditions }
+        if let markRead = update.markRead { spec.markRead = markRead }
+        if let delete = update.delete { spec.delete = delete }
+        if let stop = update.stopEvaluating { spec.stopEvaluating = stop }
         switch update.moveTo { case .keep: break; case .set(let box): spec.moveTo = box; case .clear: spec.moveTo = nil }
         switch update.copyTo { case .keep: break; case .set(let box): spec.copyTo = box; case .clear: spec.copyTo = nil }
         switch update.flag { case .keep: break; case .set(let flag): spec.flag = flag; case .clear: spec.flag = nil }
@@ -446,61 +403,12 @@ extension MailToolbox {
         if sendsMail, settings.current.sendPolicy == .never {
             throw ToolError("Sending is turned off (send policy \"never\"), so rules that forward, redirect or reply are too")
         }
-        let tool = ["Create": "create_rule", "Turn on": "set_rule_enabled", "Change": "update_rule", "Delete": "delete_rule"][verb] ?? "rules"
+        let tool = ["Create": "create_rule", "Turn on": "set_rule_enabled", "Change": "update_rule", "Delete": "delete_rule", "Restore": "undo_change"][verb] ?? "rules"
         try await askUser(
             ApprovalRequest(
                 id: UUID(), created: Date(), tool: tool, client: clientName, from: nil, to: sendsTo, cc: [], bcc: [],
                 subject: "\(verb) rule \"\(name)\"", bodyPreview: summary, attachments: [], status: .pending, decided: nil, kind: .rule),
             what: "This rule", declined: "The user declined this rule change. Nothing was changed.", nothing: "Nothing was changed.")
-    }
-
-    /// Waits for Mail's rule files to show `pending`'s change.
-    func waitForRule(_ pending: PendingRule, before: [String: Date]) async throws -> RuleSave {
-        let store = try self.store
-        let started = Date()
-        var wroteLocally = false
-        while true {
-            if pending.isSaved(in: store.rules()) { return .saved }
-            let dates = store.ruleFileDates()
-            wroteLocally = wroteLocally || MailStore.ruleFiles.contains { dates[$0] != before[$0] }
-            let waited = Date().timeIntervalSince(started)
-            if waited >= ruleVerification.local + (wroteLocally ? ruleVerification.synced : 0) {
-                return wroteLocally ? .pendingICloud : .saving
-            }
-            try await Task.sleep(nanoseconds: UInt64(ruleVerification.interval * 1_000_000_000))
-        }
-    }
-
-    func track(_ save: RuleSave, _ rule: PendingRule) {
-        var pending = pendingRules.filter { $0.name != rule.name }
-        if save != .saved { pending.append(rule) }
-        pendingRules = pending
-    }
-
-    /// Pending rule changes, checked against Mail's files: saved ones are dropped, the rest reported.
-    func pendingRuleStatus(_ rules: [MailRule]) -> [JSON] {
-        let launched = mailLaunchDate()
-        var still: [PendingRule] = []
-        var report: [JSON] = []
-        for entry in pendingRules where !entry.isSaved(in: rules) {
-            let lost = launched.map { $0 > entry.requested } ?? true
-            if !lost { still.append(entry) }
-            let change: JSON
-            switch entry.expectation {
-            case .absent: change = .string("deleted")
-            case .present(let enabled, _): change = .string(enabled ? "on" : "off")
-            }
-            report.append(.obj([
-                ("name", .string(entry.name)), ("change", change),
-                ("status", .string(lost ? "lost: Mail quit before saving it" : "not saved yet")),
-            ]))
-        }
-        pendingRules = still
-        return report
-    }
-
-    static func sameRule(_ a: MailRule, _ b: MailRule) -> Bool {
-        a.name == b.name && a.allMustMatch == b.allMustMatch && a.criteria == b.criteria && a.actions == b.actions
     }
 
     static func describe(_ spec: RuleSpec) -> String {

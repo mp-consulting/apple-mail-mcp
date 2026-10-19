@@ -53,6 +53,8 @@ public final class MailToolbox: @unchecked Sendable {
     public let changes: ChangeJournal?
     /// Snoozes and scheduled sends; nil turns both off.
     public let schedule: ScheduleStore?
+    /// Rule changes Mail had not saved when their tool returned; `mail_setup` reports them until it does.
+    public let pendingRules: PendingRuleStore?
     /// The user's address book, for `find_contact`.
     public let contacts: any ContactsProviding
     public let bodyIndexURL: URL
@@ -80,31 +82,26 @@ public final class MailToolbox: @unchecked Sendable {
     private var _bodyIndex: BodyIndex?
     private var registeredSettingsAddresses: [String] = []
     private var askedMailForAddresses = false
-    private var _pendingRules: [PendingRule] = []
-
-    /// Rule changes Mail has but had not saved when their tool returned; `mail_setup` reports them until it does.
-    var pendingRules: [PendingRule] {
-        get { lock.withLock { _pendingRules } }
-        set { lock.withLock { _pendingRules = newValue } }
-    }
 
     public convenience init(
         store: MailStore, automation: any MailAutomating, settings: SettingsProvider = SettingsProvider(),
         approvals: ApprovalCenter = ApprovalCenter(), activity: ActivityLog? = ActivityLog(),
         changes: ChangeJournal? = ChangeJournal(), schedule: ScheduleStore? = ScheduleStore(),
+        pendingRules: PendingRuleStore? = PendingRuleStore(),
         contacts: any ContactsProviding = SystemContacts(), bodyIndexURL: URL = SharedPaths.bodyIndex,
         bodyIndexKey: @escaping @Sendable () throws -> BodyIndexKey = BodyIndexKey.fromKeychain, readOnly: Bool = false
     ) {
         self.init(
             storeProvider: { store }, automation: automation, settings: settings, approvals: approvals,
-            activity: activity, changes: changes, schedule: schedule, contacts: contacts, bodyIndexURL: bodyIndexURL, bodyIndexKey: bodyIndexKey, readOnly: readOnly)
+            activity: activity, changes: changes, schedule: schedule, pendingRules: pendingRules, contacts: contacts, bodyIndexURL: bodyIndexURL, bodyIndexKey: bodyIndexKey, readOnly: readOnly)
     }
 
     public init(
         storeProvider: @escaping @Sendable () throws -> MailStore, automation: any MailAutomating,
         settings: SettingsProvider = SettingsProvider(), approvals: ApprovalCenter = ApprovalCenter(),
         activity: ActivityLog? = ActivityLog(), changes: ChangeJournal? = ChangeJournal(),
-        schedule: ScheduleStore? = ScheduleStore(), contacts: any ContactsProviding = SystemContacts(),
+        schedule: ScheduleStore? = ScheduleStore(), pendingRules: PendingRuleStore? = PendingRuleStore(),
+        contacts: any ContactsProviding = SystemContacts(),
         bodyIndexURL: URL = SharedPaths.bodyIndex,
         bodyIndexKey: @escaping @Sendable () throws -> BodyIndexKey = BodyIndexKey.fromKeychain, readOnly: Bool = false
     ) {
@@ -115,6 +112,7 @@ public final class MailToolbox: @unchecked Sendable {
         self.activity = activity
         self.changes = changes
         self.schedule = schedule
+        self.pendingRules = pendingRules
         self.contacts = contacts
         self.bodyIndexURL = bodyIndexURL
         self.bodyIndexKey = bodyIndexKey
@@ -262,7 +260,7 @@ public final class MailToolbox: @unchecked Sendable {
     /// Asks before moving or trashing more messages than the user's threshold (Settings: "Ask me before changing more than").
     func authorizeChange(tool: String, summary: String, messages: [MessageSummary]) async throws {
         let threshold = settings.current.approveChangesAbove
-        guard threshold > 0, messages.count > threshold else { return }
+        guard threshold > 0, messages.count > threshold, !Self.changesApproved else { return }
         var lines = messages.prefix(15).map { "\($0.sender.name ?? $0.sender.address) — \($0.subject)" }
         if messages.count > 15 { lines.append("… and \(messages.count - 15) more") }
         try await askUser(
@@ -272,6 +270,10 @@ public final class MailToolbox: @unchecked Sendable {
             what: "Changing more than \(threshold) messages",
             declined: "The user declined this change. Nothing was moved.", nothing: "Nothing was moved.")
     }
+
+    /// Set while carrying out a change the user already approved as a whole (`apply_rules`), so the moves and
+    /// trashes it is made of do not ask again.
+    @TaskLocal static var changesApproved = false
 
     /// Waits for the user's decision in the menu bar app; throws unless approved.
     func askUser(_ request: ApprovalRequest, what: String, declined: String, nothing: String) async throws {

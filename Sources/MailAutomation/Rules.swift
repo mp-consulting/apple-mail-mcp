@@ -39,6 +39,35 @@ public enum RuleField: String, Sendable, CaseIterable, Codable {
         }
     }
 
+    /// The `Header` Mail saves for this condition (`-[MFMessageCriterion dictionaryRepresentation]`); a header
+    /// condition saves the header's own name. "To or cc" saves as `AnyRecipient`, like "any recipient".
+    public var savedName: String {
+        switch self {
+        case .from: "From"
+        case .to: "To"
+        case .cc: "Cc"
+        case .toOrCc, .anyRecipient: "AnyRecipient"
+        case .subject: "Subject"
+        case .body: "Body"
+        case .header: "Header"
+        case .account: "Account"
+        case .attachmentType: "AttachmentType"
+        case .everyMessage: "AnyMessage"
+        case .junk: "IsJunkMail"
+        case .inContacts: "SenderIsInAddressBook"
+        case .notInContacts: "SenderIsNotInAddressBook"
+        case .inPreviousRecipients: "SenderIsInAddressHistory"
+        case .notInPreviousRecipients: "SenderIsNotInAddressHistory"
+        }
+    }
+
+    /// The field for a saved `Header`; nil for Mail condition types the tools do not make. Any other name is a
+    /// message header (``RuleField/header``).
+    public static func saved(_ name: String, mailTypes: Set<String>) -> (field: RuleField, header: String?)? {
+        if name != "Header", let field = allCases.first(where: { $0.savedName == name && $0 != .toOrCc }) { return (field, nil) }
+        return mailTypes.contains(name) || name == "Compound" ? nil : (.header, name)
+    }
+
     /// Whether the condition compares text (and so needs a value).
     public var takesValue: Bool {
         switch self {
@@ -54,6 +83,22 @@ public enum RuleQualifier: String, Sendable, CaseIterable, Codable {
     case beginsWith = "begins_with"
     case endsWith = "ends_with"
     case equals
+
+    /// The `Qualifier` Mail saves (none for contains).
+    public var savedName: String {
+        switch self {
+        case .contains: "Contains"
+        case .notContains: "DoesNotContain"
+        case .beginsWith: "BeginsWith"
+        case .endsWith: "EndsWith"
+        case .equals: "IsEqualTo"
+        }
+    }
+
+    public init?(savedName: String) {
+        guard let match = Self.allCases.first(where: { $0.savedName == savedName }) else { return nil }
+        self = match
+    }
 
     var code: String {
         switch self {
@@ -99,7 +144,7 @@ public struct RuleCondition: Sendable, Hashable, Codable {
 }
 
 /// A new Mail rule: its conditions and what it does to matching messages.
-public struct RuleSpec: Sendable, Hashable {
+public struct RuleSpec: Sendable, Hashable, Codable {
     public var name: String
     public var enabled: Bool
     public var allMustMatch: Bool

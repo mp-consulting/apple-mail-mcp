@@ -185,6 +185,7 @@ struct Harness {
             changes: ChangeJournal(url: support.appending(path: "changes.json")),
             schedule: ScheduleStore(
                 url: support.appending(path: "scheduled.json"), filesDirectory: support.appending(path: "scheduled-files"), signing: Self.signing),
+            pendingRules: PendingRuleStore(url: support.appending(path: "pending-rules.json")),
             contacts: FixedContacts(),
             bodyIndexURL: support.appending(path: "body-index.sqlite"), bodyIndexKey: { Self.indexKey }, readOnly: readOnly)
         // The fake changes the fixture synchronously, so a short wait shows everything.

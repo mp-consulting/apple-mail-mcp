@@ -2,7 +2,7 @@ import Foundation
 import MailStore
 
 /// A mailbox as AppleScript addresses it: account UUID (empty for "On My Mac") and path.
-public struct MailboxTarget: Sendable, Hashable, CustomStringConvertible {
+public struct MailboxTarget: Sendable, Hashable, Codable, CustomStringConvertible {
     public var accountID: String
     public var path: String
 

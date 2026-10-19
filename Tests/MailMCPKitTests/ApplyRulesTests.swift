@@ -92,6 +92,44 @@ final class ApplyRulesTests {
         #expect((changes["changes"] as? [Any])?.isEmpty == false)
     }
 
+    @Test func asksOnceForTheWholeRun() async throws {
+        var settings = Harness.sendingAllowed
+        settings.approveChangesAbove = 1
+        let strict = try Harness(settings: settings)
+        defer { strict.remove() }
+        let fixture = strict.fixture
+        let boxes = ["INBOX": fixture.inbox, "Archive": fixture.archive]
+        strict.automation.onMove = { ids, target in for id in ids { _ = try? fixture.store.moveMessage(id, to: boxes[target.path]!) } }
+        try fixture.store.writeMailData("SyncedRules.plist", plist: [[
+            "RuleId": "R1", "RuleName": "Shop", "Criteria": [["Header": "From", "Expression": "shop.test", "Qualifier": "EndsWith"]],
+            "ShouldTransferMessage": true, "MailboxURL": "imap://\(fixture.icloud)/Archive", "MarkRead": true,
+        ]])
+        try fixture.store.writeMailData("RulesActiveState.plist", plist: ["R1": true])
+
+        let refused = await strict.call("apply_rules", ["mailbox": "inbox", "account": "iCloud", "dry_run": false])
+        #expect(refused.isError && refused.text.contains("menu bar app") && strict.automation.calls.isEmpty)
+
+        strict.approvals.beat()
+        let approvals = strict.approvals
+        let agent = Task { () -> [ApprovalRequest] in
+            var seen: [ApprovalRequest] = []
+            for _ in 0..<150 {
+                for request in approvals.pending() where !seen.contains(where: { $0.id == request.id }) {
+                    try approvals.decide(request.id, approve: true)
+                    seen.append(request)
+                }
+                try await Task.sleep(nanoseconds: 20_000_000)
+            }
+            return seen
+        }
+        let json = try await strict.json("apply_rules", ["mailbox": "inbox", "account": "iCloud", "dry_run": false])
+        let requests = try await agent.value
+        #expect(requests.count == 1)
+        #expect(requests.first?.subject == "Apply rule \"Shop\" to 2 messages" && requests.first?.bodyPreview.contains("Shop: 2") == true)
+        #expect((json["done"] as? [Any])?.isEmpty == false)
+        #expect(strict.automation.calls.contains { if case .move = $0 { true } else { false } })
+    }
+
     @Test func namedRulesRunEvenWhenOff() async throws {
         let json = try await h.json("apply_rules", ["rules": ["Off"], "ids": [.int(Int(h.id("kickoff")))]])
         #expect(rule(json, "Off")?["matched"] as? Int == 1)

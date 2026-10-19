@@ -138,7 +138,11 @@ extension MailToolbox {
             let summary = Self.planSummary(plans)
             var done: [JSON] = []
             if !dryRun, !plans.isEmpty {
-                done = try await self.carryOut(plans, messages: messages, boxes: boxes, automation: automation)
+                // One question for the whole run (above the user's threshold), not one per move or trash batch.
+                try await self.authorizeApply(plans, messages: messages, rules: usable.map(\.rule), matched: matched)
+                done = try await Self.$changesApproved.withValue(true) {
+                    try await self.carryOut(plans, messages: messages, boxes: boxes, automation: automation)
+                }
             }
             let json = JSON.obj([
                 ("dry_run", dryRun ? .bool(true) : nil),
@@ -167,6 +171,28 @@ extension MailToolbox {
             let verb = dryRun ? "would change" : "changed"
             return ToolReply(json: json, summary: "\(verb) \(plans.count) of \(messages.count) messages with \(usable.count) rules")
         }
+    }
+
+    /// Asks once before changing more messages than the user's threshold, listing each rule and what it does.
+    private func authorizeApply(
+        _ plans: [Int64: RulePlan], messages: [MessageSummary], rules: [MailRule], matched: [String: [MessageSummary]]
+    ) async throws {
+        let threshold = settings.current.approveChangesAbove
+        guard threshold > 0, plans.count > threshold else { return }
+        var lines = rules.compactMap { rule -> String? in
+            guard let hits = matched[rule.name], !hits.isEmpty else { return nil }
+            return "\(rule.name): \(hits.count) — \(rule.actions.joined(separator: ", "))"
+        }
+        lines.append("")
+        let changed = messages.filter { plans[$0.id] != nil }
+        lines += changed.prefix(15).map { "\($0.sender.name ?? $0.sender.address) — \($0.subject)" }
+        if changed.count > 15 { lines.append("… and \(changed.count - 15) more") }
+        try await askUser(
+            ApprovalRequest(
+                id: UUID(), created: Date(), tool: "apply_rules", client: clientName, from: nil, to: [], cc: [], bcc: [],
+                subject: "Apply \(rules.count == 1 ? "rule \"\(rules[0].name)\"" : "\(rules.count) rules") to \(changed.count) messages",
+                bodyPreview: lines.joined(separator: "\n"), attachments: [], status: .pending, decided: nil, kind: .change),
+            what: "Applying rules to \(changed.count) messages", declined: "The user declined. Nothing was changed.", nothing: "Nothing was changed.")
     }
 
     /// Carries out the plan through the tools used by hand: marks and flags first, then colours and copies, then

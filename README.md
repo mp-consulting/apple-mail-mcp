@@ -126,6 +126,7 @@ Run `apple-mail-mcp doctor` for a full check.
 | `find_contact` | Addresses from Contacts and from the people you write with, most frequent first |
 | `wait_for_mail` | Waits for a matching message to arrive (a sign-in code, an expected reply) and returns it |
 | `mail_setup` | Your Mail rules, VIPs, smart mailboxes and signatures |
+| `create_rule`, `set_rule_enabled` | Make a Mail rule (move, copy, mark, flag, colour; forwarding, replies and deleting need approval) and turn rules on or off, with a check that Mail saved it |
 | `needs_response` | Mail from people, to you, still waiting on you (lists, promotions and no-reply excluded) |
 | `awaiting_reply` | What you sent that nobody answered |
 | `mail_statistics`, `top_senders` | Volume, busiest days and hours, categories, who writes most |

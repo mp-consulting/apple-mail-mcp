@@ -70,6 +70,18 @@ swift Scripts/make-icon.swift Resources
 - Mail keeps compose objects in memory until it quits; `delete`/`close` do not free invisible ones.
 - HTML email: set `content` to an **RTF** descriptor (HTML → `NSAttributedString` → RTF, on the main thread). Mail
   then saves and sends multipart HTML. The scripting `html content` property does nothing.
+- Rules: a scripted `make new rule` and any edit in Mail › Settings › Rules make Mail save its whole in-memory
+  rule list, usually 1.5 s later but once 56 s (log: `MFMessageRouter` "Rules written to disk"). A scripted
+  `delete rule` or property `set` (e.g. `enabled`) changes memory only: quitting Mail before the next save brings
+  the old state back. Quitting never saves. `UnsyncedRules.plist` and `RulesActiveState.plist` are written at
+  once; `SyncedRules.plist` (the definitions) only once Mail holds its iCloud Drive copy (`SyncedFileActivity`):
+  usually instant, once 27 minutes after launch. The save copies the list as it is when it runs, so changes made
+  around a `make` go in with it: `setRuleEnabled` builds a copy under a temporary name, then deletes the original
+  and renames the copy, and the copy's `make` saves all of it. `make` ignores `enabled` (set it straight after)
+  and cannot take object references (set `move message`/`copy message` afterwards). Reading a rule's `properties`
+  gives `missing value` (a `type` descriptor `msng`) and empty texts that Mail refuses to take back (-1700,
+  -10000): leave them out. Rules are addressed by name (no scripting `id`); "sender is VIP" shares code `tsig`
+  with "sender is not member of group". Probe: `RuleProbeTests` (`APPLE_MAIL_MCP_LIVE_RULES=1`).
 
 ## Releases
 

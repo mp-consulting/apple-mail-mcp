@@ -17,6 +17,8 @@ final class RecordingAutomation: MailAutomating, @unchecked Sendable {
         case compose(OutgoingMessage, DeliveryMode)
         case reply(Int64, MailboxTarget, String, Bool, DeliveryMode)
         case open(Int64)
+        case createRule(RuleSpec)
+        case setRuleEnabled(String, Bool, Int)
     }
 
     private let lock = NSLock()
@@ -31,6 +33,10 @@ final class RecordingAutomation: MailAutomating, @unchecked Sendable {
     var onCompose: (@Sendable (OutgoingMessage, DeliveryMode) throws -> Void)?
     /// Runs inside `trash`, e.g. to simulate Mail moving the messages to Trash (or more than that).
     var onTrash: (@Sendable ([Int64], MailboxTarget) -> Void)?
+    /// Runs inside `createRule` and `setRuleEnabled`, e.g. to write the rule files as Mail would.
+    var onRuleChange: (@Sendable (Call) -> Void)?
+    /// What `ruleNames` returns: the rules Mail has in memory.
+    var mailRuleNames: [String] = []
     private var exclusiveDepth = 0
     private var _unguardedChanges = 0
     /// Moves and trashes requested outside `exclusive` (should stay 0).
@@ -93,6 +99,18 @@ final class RecordingAutomation: MailAutomating, @unchecked Sendable {
     }
 
     func open(_ id: Int64, in mailbox: MailboxTarget) async throws { record(.open(id)) }
+
+    func createRule(_ rule: RuleSpec) async throws {
+        recordChange(.createRule(rule))
+        onRuleChange?(.createRule(rule))
+    }
+
+    func setRuleEnabled(named name: String, enabled: Bool, expectedConditions: Int) async throws {
+        recordChange(.setRuleEnabled(name, enabled, expectedConditions))
+        onRuleChange?(.setRuleEnabled(name, enabled, expectedConditions))
+    }
+
+    func ruleNames() async throws -> [String] { mailRuleNames }
 }
 
 /// Contacts without the Contacts framework.

@@ -70,6 +70,19 @@ extension MailStore {
         }
     }
 
+    /// When Mail last wrote each rule file. A rule change shows in `UnsyncedRules.plist` and `RulesActiveState.plist`
+    /// at once; `SyncedRules.plist`, which holds the definitions, waits until Mail has its iCloud Drive copy.
+    public func ruleFileDates() -> [String: Date] {
+        var dates: [String: Date] = [:]
+        for name in Self.ruleFiles {
+            let path = mailData.appending(path: name).path
+            if let date = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date { dates[name] = date }
+        }
+        return dates
+    }
+
+    public static let ruleFiles = ["SyncedRules.plist", "UnsyncedRules.plist", "RulesActiveState.plist"]
+
     private func ruleActions(_ rule: [String: Any]) -> [String] {
         var actions: [String] = []
         func flag(_ key: String) -> Bool { rule[key] as? Bool ?? false }

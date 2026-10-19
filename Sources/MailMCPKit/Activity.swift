@@ -130,6 +130,9 @@ public struct ApprovalRequest: Codable, Sendable, Hashable, Identifiable {
         case change
         /// Unsubscribe from a mailing list; `to` holds where the request goes.
         case unsubscribe
+        /// Create or turn on a Mail rule that sends mail or deletes it, or matches every message; `to` holds the
+        /// addresses it forwards, redirects or replies to, `bodyPreview` its conditions and actions.
+        case rule
     }
 
     public var id: UUID

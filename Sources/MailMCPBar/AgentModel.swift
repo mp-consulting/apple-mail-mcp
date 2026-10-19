@@ -184,6 +184,7 @@ final class AgentModel {
         case .send: content.title = request.sendAt == nil ? "Send this email?" : "Schedule this email?"
         case .change: content.title = "Change these messages?"
         case .unsubscribe: content.title = "Unsubscribe?"
+        case .rule: content.title = "Allow this Mail rule?"
         }
         content.subtitle = request.subject.isEmpty ? "(no subject)" : request.subject
         let target = request.to.isEmpty ? "" : "To " + request.to.joined(separator: ", ")

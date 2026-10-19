@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`create_rule` and `set_rule_enabled`.** Make a Mail rule (conditions on sender, recipients, subject, body,
+  headers, account, contacts or junk; move, copy, mark read, flag, colour, stop) and turn rules on or off. Rules
+  that forward, redirect, auto-reply or delete, or match every message, ask in the menu bar app first. Mail saves
+  rule changes made by other apps only after a new rule is made, so turning a rule on or off makes it again with
+  the same conditions and actions (rules scripting cannot copy exactly are refused). Each change waits for Mail's
+  rule files and says when Mail has not saved it yet; `mail_setup` lists those under `pending_rules` until it
+  does, or reports them lost if Mail quit first.
+
 ## [0.4.3] - 2026-10-18
 
 ### Changed

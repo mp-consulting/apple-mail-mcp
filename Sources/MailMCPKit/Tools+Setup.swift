@@ -28,8 +28,9 @@ extension MailToolbox {
                 "mail_setup", "Rules, VIPs, smart mailboxes, signatures",
                 """
                 How Mail is set up, read from its settings files: rules (conditions and actions), VIP senders, smart \
-                mailboxes (their conditions), and signatures (with their text when the file is on this Mac). Read-only: \
-                change these in Mail › Settings.
+                mailboxes (their conditions), and signatures (with their text when the file is on this Mac). Rules \
+                created or turned on or off here and not saved by Mail yet are listed under pending_rules. Make rules \
+                with create_rule, turn them on or off with set_rule_enabled; change the rest in Mail › Settings.
                 """,
                 Schema.object([
                     "include": .object([
@@ -61,6 +62,10 @@ extension MailToolbox {
                             ("actions", .array(rule.actions.map(JSON.string))),
                         ])
                     })
+                }),
+                ("pending_rules", rules.flatMap { list in
+                    let pending = self.pendingRuleStatus(list)
+                    return pending.isEmpty ? nil : .array(pending)
                 }),
                 ("vips", vips.map { list in
                     .array(list.map { vip in

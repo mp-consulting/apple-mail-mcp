@@ -23,7 +23,7 @@ final class ReadToolTests {
             "trash_messages", "create_mailbox", "check_new_mail", "compose_email", "reply_to_message", "forward_message",
             "open_in_mail", "export_search", "get_messages", "extract_invoice_fields", "undo_change", "check_authenticity",
             "find_contact", "extract_fields", "mail_setup", "list_drafts", "send_draft", "wait_for_mail", "snooze_messages",
-            "list_scheduled", "cancel_scheduled", "unsubscribe",
+            "list_scheduled", "cancel_scheduled", "unsubscribe", "create_rule", "set_rule_enabled",
         ]))
         #expect(tools.count == names.count)
         #expect(tools.first { $0.name == "search_messages" }?.annotations.readOnlyHint == true)

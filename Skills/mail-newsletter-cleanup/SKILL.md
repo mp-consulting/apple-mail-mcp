@@ -30,7 +30,9 @@ Present one table: sender, messages in 90 days, unread %, category, suggested ac
   `dry_run`. One-click is used only for senders whose signature verified; for a `link`, give the user the
   `url` to open. Do not open web links yourself.
 - **Prevent it next time**: check the user's existing rules with `mail_setup` (`include: ["rules"]`), then
-  suggest a Mail rule (Mail → Settings → Rules) for senders the user wants to keep but not see in the inbox.
+  offer a rule for senders the user wants to keep but not see in the inbox. Once they agree, `create_rule`
+  (e.g. `conditions: [{field: "from", value: "news@example.com"}]`, `move_to: "archive"`). If it comes back
+  `saved: false`, tell the user to keep Mail open until `mail_setup` no longer lists it under `pending_rules`.
 - **Undo**: if the user regrets a batch, `undo_change` with `action: "list"` shows recent changes and
   `action: "undo"` puts one back (the latest by default, or its `change_id`).
 

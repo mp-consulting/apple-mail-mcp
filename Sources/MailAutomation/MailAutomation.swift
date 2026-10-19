@@ -86,6 +86,12 @@ public protocol MailAutomating: Sendable {
     /// Closes a compose object without saving again.
     func closeCompose(_ handle: ComposeHandle) async throws
     func open(_ id: Int64, in mailbox: MailboxTarget) async throws
+    /// Makes a rule; Mail saves it (see ``RuleSpec``).
+    func createRule(_ rule: RuleSpec) async throws
+    /// Turns a rule on or off by making it again (a scripted `set` alone is never saved).
+    func setRuleEnabled(named name: String, enabled: Bool, expectedConditions: Int) async throws
+    /// Names of the rules Mail has now, saved or not.
+    func ruleNames() async throws -> [String]
     /// Runs `body` with Mail automation reserved for this caller, across processes, so a bulk change
     /// and the check of its outcome cannot interleave with another client's changes.
     func exclusive<T>(_ body: () async throws -> T) async throws -> T
@@ -113,7 +119,7 @@ public final class MailAutomation: MailAutomating {
         sender.permissionStatus(askIfNeeded: askIfNeeded)
     }
 
-    private func run<T: Sendable>(_ body: @escaping @Sendable (MailEventSender) throws -> T) async throws -> T {
+    func run<T: Sendable>(_ body: @escaping @Sendable (MailEventSender) throws -> T) async throws -> T {
         let sender = self.sender
         let queue = self.queue
         return try await AutomationLock.withLock(timeout: lockTimeout) {

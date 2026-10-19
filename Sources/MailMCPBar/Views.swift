@@ -509,6 +509,7 @@ struct ApprovalBlock: View {
         case .send: (request.sendAt == nil ? "SEND THIS EMAIL?" : "SEND THIS EMAIL LATER?", request.sendAt == nil ? "Send" : "Schedule", "Don't Send")
         case .change: ("CHANGE THESE MESSAGES?", "Go Ahead", "Don't")
         case .unsubscribe: ("UNSUBSCRIBE?", "Unsubscribe", "Don't")
+        case .rule: ("ALLOW THIS MAIL RULE?", "Allow", "Don't")
         }
     }
 

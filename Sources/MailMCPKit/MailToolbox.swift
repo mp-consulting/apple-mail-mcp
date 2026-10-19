@@ -66,6 +66,10 @@ public final class MailToolbox: @unchecked Sendable {
     public var mailboxSettle: TimeInterval = 3
     /// How long moves and trashes wait for Mail's database to show their outcome (tests shorten it).
     public var verification = ChangeVerification()
+    /// How long rule changes wait for Mail to save its rule files (tests shorten it).
+    public var ruleVerification = RuleVerification()
+    /// When the running Mail started (nil when it is not running); tests fix it.
+    public var mailLaunchDate: @Sendable () -> Date? = { MailAutomation.mailLaunchDate() }
     public var clientName: String? {
         get { lock.withLock { _clientName } }
         set { lock.withLock { _clientName = newValue } }
@@ -76,6 +80,13 @@ public final class MailToolbox: @unchecked Sendable {
     private var _bodyIndex: BodyIndex?
     private var registeredSettingsAddresses: [String] = []
     private var askedMailForAddresses = false
+    private var _pendingRules: [PendingRule] = []
+
+    /// Rule changes Mail has but had not saved when their tool returned; `mail_setup` reports them until it does.
+    var pendingRules: [PendingRule] {
+        get { lock.withLock { _pendingRules } }
+        set { lock.withLock { _pendingRules = newValue } }
+    }
 
     public convenience init(
         store: MailStore, automation: any MailAutomating, settings: SettingsProvider = SettingsProvider(),
@@ -278,7 +289,7 @@ public final class MailToolbox: @unchecked Sendable {
 
     // MARK: Tool list
 
-    public var definitions: [ToolDefinition] { readTools + trustTools + watchTools + fileTools + changeTools + undoTools + scheduleTools + composeTools + draftTools }
+    public var definitions: [ToolDefinition] { readTools + trustTools + watchTools + fileTools + changeTools + ruleTools + undoTools + scheduleTools + composeTools + draftTools }
 
     /// Tools offered to clients (hides write tools in read-only launches).
     public var listedDefinitions: [ToolDefinition] {

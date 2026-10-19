@@ -46,12 +46,6 @@ public enum RuleField: String, Sendable, CaseIterable, Codable {
         default: true
         }
     }
-
-    /// Every condition type Mail's dictionary lists, ours or not ("sender is VIP" and the group ones share codes),
-    /// so a rule whose conditions all have one of these can be copied condition by condition.
-    static let scriptableCodes: Set<FourCharCode> = Set(
-        ["tacc", "tanr", "tccc", "tevm", "tfro", "thdk", "tmec", "tmij", "tsii", "tsah", "tsim", "tsin", "tnah", "tsig",
-         "tsub", "ttoo", "ttoc", "tatt"].map(fourCC))
 }
 
 public enum RuleQualifier: String, Sendable, CaseIterable, Codable {
@@ -146,63 +140,155 @@ public struct RuleSpec: Sendable, Hashable {
     public var sendsMail: Bool { !forwardTo.isEmpty || !redirectTo.isEmpty || replyText != nil }
 }
 
-/// A rule Mail has that scripting cannot copy faithfully, so it is left alone.
-public struct RuleCopyError: Error, CustomStringConvertible, Sendable {
-    public var description: String
+/// What a rule update changes (see ``MailAutomation/updateRule(named:_:)``): nil and ``RuleChange/keep`` leave a part
+/// as it is.
+public struct RuleUpdate: Sendable, Hashable {
+    public var name: String?
+    public var enabled: Bool?
+    public var allMustMatch: Bool?
+    /// Replaces every condition.
+    public var conditions: [RuleCondition]?
+    public var moveTo: RuleChange<MailboxTarget> = .keep
+    public var copyTo: RuleChange<MailboxTarget> = .keep
+    public var markRead: Bool?
+    public var flag: RuleChange<FlagColor> = .keep
+    public var color: RuleChange<RuleColor> = .keep
+    public var delete: Bool?
+    public var forwardTo: RuleChange<[String]> = .keep
+    public var redirectTo: RuleChange<[String]> = .keep
+    public var replyText: RuleChange<String> = .keep
+    public var stopEvaluating: Bool?
+
+    public init() {}
+
+    /// Whether the update makes the rule send mail out (forward, redirect or auto-reply).
+    public var addsSending: Bool {
+        if case .set = forwardTo { return true }
+        if case .set = redirectTo { return true }
+        if case .set = replyText { return true }
+        return false
+    }
 }
 
-/// Mail saves its rule list only after a `make` (a scripted `set` or `delete` changes its memory alone), and the
-/// save copies the list as it is when it runs, 1.5 s to about a minute later. So every rule change here includes a
-/// `make`, and the changes around it (such as `enabled`, which `make` ignores) go in with it.
+public enum RuleChange<Value: Sendable & Hashable>: Sendable, Hashable {
+    case keep
+    case set(Value)
+    case clear
+}
+
+/// Mail saves its rule list when a rule's property changes through its setters (`handleDidChangeIfNeeded`), which a
+/// scripted `make` and every scripted `set` do, except `enabled` (`setIsActive:` only marks the rule changed) and
+/// `delete` (`removeRuleAtIndex:`). The save copies the list as it is 1.5 s to a minute later. So every change here
+/// ends by renaming the rule to a temporary name and back: two real changes, which save everything done before them,
+/// whatever Mail's change flag says.
 extension MailAutomation {
     public func createRule(_ rule: RuleSpec) async throws {
-        try await run { mail in try Self.make(rule, mail) }
+        try await run { mail in
+            try Self.make(rule, mail)
+            try Self.saveSoon(rule.name, mail)
+        }
     }
 
-    /// Turns a rule on or off. A scripted `set` alone is never saved, so the rule is made again with the same
-    /// properties and conditions: the copy is built in full under a temporary name, and only then does it replace
-    /// the original, so a copy that fails leaves the original alone. `expectedConditions` (from the saved rule)
-    /// guards against a copy that would lose some.
-    public func setRuleEnabled(named name: String, enabled: Bool, expectedConditions: Int) async throws {
+    /// Turns a rule on or off, keeping it as it is (same id, conditions and actions).
+    public func setRuleEnabled(named name: String, enabled: Bool) async throws {
         try await run { mail in
-            let rule = Self.rule(named: name)
-            let properties = try Self.fields(of: mail.get(MailSpec.property("pALL", of: rule)))
-            let conditions = Self.items(try mail.get(MailSpec.property("pALL", of: MailSpec.every("rucr", of: rule))))
-                .map(Self.fields)
-            guard conditions.count == expectedConditions else {
-                throw RuleCopyError(description: "Mail shows \(conditions.count) conditions for \"\(name)\" but its saved rule has \(expectedConditions)")
-            }
-            for condition in conditions {
-                guard let type = condition["rtyp"]?.enumCodeValue, RuleField.scriptableCodes.contains(type) else {
-                    throw RuleCopyError(description: "\"\(name)\" has a condition scripting cannot copy")
-                }
-            }
-            // `make` cannot take object references (the move and copy mailboxes): those are set afterwards, and the
-            // switches they turn on are set back to the original's.
-            let isReference = { (value: NSAppleEventDescriptor) in value.descriptorType == fourCC("obj ") }
-            let temporary = "\(name) (apple-mail-mcp \(UUID().uuidString.prefix(8)))"
-            var plain = properties.filter { $0.key != "isac" && !isReference($0.value) }
-            plain["pnam"] = NSAppleEventDescriptor(string: temporary)
-            _ = try mail.make("rule", at: MailSpec.insertion("end ", of: MailSpec.every("rule", of: nil)), properties: plain)
-            let copy = Self.rule(named: temporary)
+            try mail.set(MailSpec.property("isac", of: Self.rule(named: name)), to: NSAppleEventDescriptor(boolean: enabled))
+            try Self.saveSoon(name, mail)
+        }
+    }
+
+    /// Deletes a rule: renamed first (a real change, which starts Mail's save), then deleted at once, so the save
+    /// writes the list without it.
+    public func deleteRule(named name: String) async throws {
+        try await run { mail in
+            let temporary = Self.temporaryName(name)
+            try mail.set(MailSpec.property("pnam", of: Self.rule(named: name)), to: NSAppleEventDescriptor(string: temporary))
+            try mail.send("core", "delo", direct: Self.rule(named: temporary))
+        }
+    }
+
+    /// Replaces a rule with `spec` (for changes scripting cannot make in place, such as fewer conditions): the new
+    /// rule is made in full under a temporary name, then the old one is deleted and the new one takes `spec.name`. A
+    /// new rule that fails half-way is deleted again and the old one stays.
+    public func replaceRule(named name: String, with spec: RuleSpec) async throws {
+        try await run { mail in
+            var draft = spec
+            draft.name = Self.temporaryName(spec.name)
             do {
-                for (key, value) in properties where isReference(value) {
-                    try mail.set(MailSpec.property(key, of: copy), to: value)
-                }
-                for key in ["rstm", "rscm"] {
-                    if let value = properties[key] { try mail.set(MailSpec.property(key, of: copy), to: value) }
-                }
-                for condition in conditions {
-                    _ = try mail.make("rucr", at: MailSpec.insertion("end ", of: MailSpec.every("rucr", of: copy)), properties: condition)
-                }
+                try Self.make(draft, mail)
             } catch {
-                _ = try? mail.send("core", "delo", direct: copy)
+                _ = try? mail.send("core", "delo", direct: Self.rule(named: draft.name))
                 throw error
             }
-            // The copy is complete: it takes the original's place.
-            try mail.send("core", "delo", direct: rule)
-            try mail.set(MailSpec.property("pnam", of: copy), to: NSAppleEventDescriptor(string: name))
-            if enabled { try mail.set(MailSpec.property("isac", of: rule), to: NSAppleEventDescriptor(boolean: true)) }
+            let old = Self.temporaryName(name)
+            try mail.set(MailSpec.property("pnam", of: Self.rule(named: name)), to: NSAppleEventDescriptor(string: old))
+            try mail.send("core", "delo", direct: Self.rule(named: old))
+            try mail.set(MailSpec.property("pnam", of: Self.rule(named: draft.name)), to: NSAppleEventDescriptor(string: spec.name))
+            try Self.saveSoon(spec.name, mail)
+        }
+    }
+
+    /// Changes a rule's name, conditions or actions in place.
+    public func updateRule(named name: String, _ update: RuleUpdate) async throws {
+        try await run { mail in
+            let rule = Self.rule(named: name)
+            func set(_ code: String, _ value: NSAppleEventDescriptor) throws { try mail.set(MailSpec.property(code, of: rule), to: value) }
+            func set(_ code: String, _ value: Bool?) throws { if let value { try set(code, NSAppleEventDescriptor(boolean: value)) } }
+            if let conditions = update.conditions {
+                // Never `delete` a rule condition: `-[MFMessageRule(Applescript) removeFromCriteriaAtIndex:]` calls itself
+                // until Mail runs out of stack and crashes. Existing conditions are rewritten in place, extra ones added;
+                // fewer conditions need ``replaceRule(named:with:)``.
+                let existing = Int(try mail.send("core", "cnte", direct: rule, ["kocl": NSAppleEventDescriptor(typeCode: fourCC("rucr"))]).int32Value)
+                guard conditions.count >= existing else {
+                    throw AppleEventError(number: -1, message: "\(name) has \(existing) conditions; scripting cannot remove one (Mail crashes)")
+                }
+                for (index, condition) in conditions.enumerated() {
+                    if index < existing { try Self.rewrite(index + 1, of: rule, to: condition, mail) } else { try Self.add(condition, to: rule, mail) }
+                }
+            }
+            try set("racm", update.allMustMatch)
+            try set("rmre", update.markRead)
+            try set("rdme", update.delete)
+            try set("rser", update.stopEvaluating)
+            switch update.moveTo {
+            case .keep: break
+            case .set(let target): try set("rtme", MailSpec.mailbox(target)); try set("rstm", true)
+            case .clear: try set("rstm", false)
+            }
+            switch update.copyTo {
+            case .keep: break
+            case .set(let target): try set("rcmb", MailSpec.mailbox(target)); try set("rscm", true)
+            case .clear: try set("rscm", false)
+            }
+            switch update.flag {
+            case .keep: break
+            case .set(let flag): try set("rmfl", true); try set("rfcl", NSAppleEventDescriptor(int32: Int32(flag.rawValue)))
+            case .clear: try set("rmfl", false)
+            }
+            switch update.color {
+            case .keep: break
+            case .set(let color): try set("rcme", NSAppleEventDescriptor(enumCode: fourCC(color.code))); try set("htuc", false)
+            case .clear: try set("rcme", NSAppleEventDescriptor(enumCode: fourCC("ccno")))
+            }
+            for (code, change) in [("rfad", update.forwardTo), ("rrad", update.redirectTo)] {
+                switch change {
+                case .keep: break
+                case .set(let addresses): try set(code, NSAppleEventDescriptor(string: addresses.joined(separator: ",")))
+                case .clear: try set(code, NSAppleEventDescriptor(string: ""))
+                }
+            }
+            switch update.replyText {
+            case .keep: break
+            case .set(let text): try set("rrte", NSAppleEventDescriptor(string: text))
+            case .clear: try set("rrte", NSAppleEventDescriptor(string: ""))
+            }
+            try set("isac", update.enabled)
+            var current = name
+            if let newName = update.name, newName != name {
+                try set("pnam", NSAppleEventDescriptor(string: newName))
+                current = newName
+            }
+            try Self.saveSoon(current, mail)
         }
     }
 
@@ -245,15 +331,7 @@ extension MailAutomation {
         // window before Mail's save copies the list.
         _ = try mail.make("rule", at: MailSpec.insertion("end ", of: MailSpec.every("rule", of: nil)), properties: properties)
         let rule = rule(named: spec.name)
-        for condition in spec.conditions {
-            var fields: [String: NSAppleEventDescriptor] = [
-                "rtyp": NSAppleEventDescriptor(enumCode: fourCC(condition.field.code)),
-                "rqua": NSAppleEventDescriptor(enumCode: fourCC(condition.field.takesValue ? condition.qualifier.code : "rqno")),
-            ]
-            if condition.field.takesValue { fields["rexp"] = NSAppleEventDescriptor(string: condition.value) }
-            if let header = condition.header { fields["rhed"] = NSAppleEventDescriptor(string: header) }
-            _ = try mail.make("rucr", at: MailSpec.insertion("end ", of: MailSpec.every("rucr", of: rule)), properties: fields)
-        }
+        for condition in spec.conditions { try add(condition, to: rule, mail) }
         if let target = spec.moveTo {
             try mail.set(MailSpec.property("rtme", of: rule), to: MailSpec.mailbox(target))
             try mail.set(MailSpec.property("rstm", of: rule), to: NSAppleEventDescriptor(boolean: true))
@@ -262,31 +340,38 @@ extension MailAutomation {
             try mail.set(MailSpec.property("rcmb", of: rule), to: MailSpec.mailbox(target))
             try mail.set(MailSpec.property("rscm", of: rule), to: NSAppleEventDescriptor(boolean: true))
         }
+        // `make` leaves new rules disabled (`insertInRules:atIndex:` sets it); `saveSoon` follows and saves this too.
         if spec.enabled { try mail.set(MailSpec.property("isac", of: rule), to: NSAppleEventDescriptor(boolean: true)) }
     }
 
-    static func items(_ list: NSAppleEventDescriptor) -> [NSAppleEventDescriptor] {
-        guard list.descriptorType == fourCC("list") else { return list.descriptorType == fourCC("null") ? [] : [list] }
-        return (0..<list.numberOfItems).compactMap { list.atIndex($0 + 1) }
+    private static func add(_ condition: RuleCondition, to rule: NSAppleEventDescriptor, _ mail: MailEventSender) throws {
+        var fields: [String: NSAppleEventDescriptor] = [
+            "rtyp": NSAppleEventDescriptor(enumCode: fourCC(condition.field.code)),
+            "rqua": NSAppleEventDescriptor(enumCode: fourCC(condition.field.takesValue ? condition.qualifier.code : "rqno")),
+        ]
+        if condition.field.takesValue { fields["rexp"] = NSAppleEventDescriptor(string: condition.value) }
+        if let header = condition.header { fields["rhed"] = NSAppleEventDescriptor(string: header) }
+        _ = try mail.make("rucr", at: MailSpec.insertion("end ", of: MailSpec.every("rucr", of: rule)), properties: fields)
     }
 
-    /// The keyword → value pairs of a `properties` record, ready to `make` again: without `class`, `missing value`
-    /// (Mail cannot take one back) and empty text (the default, which Mail refuses to set: forward, redirect and
-    /// reply addresses and texts).
-    static func fields(of record: NSAppleEventDescriptor) -> [String: NSAppleEventDescriptor] {
-        guard record.numberOfItems > 0 else { return [:] }
-        var fields: [String: NSAppleEventDescriptor] = [:]
-        for index in 1...record.numberOfItems {
-            let keyword = record.keywordForDescriptor(at: index)
-            guard let value = record.atIndex(index), keyword != fourCC("pcls") else { continue }
-            let missing = value.descriptorType == fourCC("null") || value.descriptorType == fourCC("msng")
-                || (value.descriptorType == fourCC("type") && value.typeCodeValue == fourCC("msng"))
-            let emptyText = value.descriptorType == fourCC("utxt") && value.stringValue?.isEmpty == true
-            guard !missing, !emptyText else { continue }
-            fields[String(fourCharCode: keyword)] = value
-        }
-        return fields
+    private static func rewrite(_ index: Int, of rule: NSAppleEventDescriptor, to condition: RuleCondition, _ mail: MailEventSender) throws {
+        let criterion = MailSpec.object(want: "rucr", form: "indx", seld: NSAppleEventDescriptor(int32: Int32(index)), from: rule)
+        func set(_ code: String, _ value: NSAppleEventDescriptor) throws { try mail.set(MailSpec.property(code, of: criterion), to: value) }
+        try set("rtyp", NSAppleEventDescriptor(enumCode: fourCC(condition.field.code)))
+        if let header = condition.header { try set("rhed", NSAppleEventDescriptor(string: header)) }
+        try set("rqua", NSAppleEventDescriptor(enumCode: fourCC(condition.field.takesValue ? condition.qualifier.code : "rqno")))
+        if condition.field.takesValue { try set("rexp", NSAppleEventDescriptor(string: condition.value)) }
     }
+
+    /// Renames the rule to a temporary name and back: two real changes, so Mail saves its list (with everything
+    /// changed before) whatever its change flag says.
+    private static func saveSoon(_ name: String, _ mail: MailEventSender) throws {
+        let temporary = temporaryName(name)
+        try mail.set(MailSpec.property("pnam", of: rule(named: name)), to: NSAppleEventDescriptor(string: temporary))
+        try mail.set(MailSpec.property("pnam", of: rule(named: temporary)), to: NSAppleEventDescriptor(string: name))
+    }
+
+    static func temporaryName(_ name: String) -> String { "\(name) (apple-mail-mcp \(UUID().uuidString.prefix(8)))" }
 }
 
 extension String {

@@ -150,49 +150,129 @@ final class RuleToolTests {
         #expect(result.isError && result.text.contains("send policy"))
     }
 
-    @Test func turnsARuleOnByMakingItAgain() async throws {
+    @Test func turnsARuleOnInPlace() async throws {
         let store = h.fixture.store
         let archive = "imap://\(h.fixture.icloud)/Archive"
-        let criteria: [[String: Any]] = [["CriterionUniqueId": "c1", "Header": "From", "Expression": "news@letters.test"]]
-        Self.write(store, rules: [Self.saved("OLD", "Newsletters", criteria: criteria, move: archive)], active: ["OLD": false])
+        // A compound condition: kept as it is, since the rule is not copied.
+        @Sendable func compound() -> [[String: Any]] { [["Header": "Compound", "Criteria": [["Header": "From", "Expression": "news@letters.test"]]]] }
+        Self.write(store, rules: [Self.saved("R1", "Newsletters", criteria: compound(), move: archive)], active: ["R1": false])
         h.automation.onRuleChange = { call in
-            guard case .setRuleEnabled(let name, let enabled, _) = call else { return }
-            // Mail saves the copy under a new id, with new condition ids.
-            Self.write(store, rules: [Self.saved("NEW", name, criteria: [["CriterionUniqueId": "c9", "Header": "From", "Expression": "news@letters.test"]], move: archive)],
-                active: ["NEW": enabled])
+            guard case .setRuleEnabled(_, let enabled) = call else { return }
+            Self.write(store, rules: [Self.saved("R1", "Newsletters", criteria: compound(), move: archive)], active: ["R1": enabled])
         }
         let json = try await h.json("set_rule_enabled", ["name": "Newsletters", "enabled": true])
         #expect(json["enabled"] as? Bool == true && json["saved"] as? Bool == true && json["warning"] == nil)
-        #expect(h.automation.calls.last == .setRuleEnabled("Newsletters", true, 1))
+        #expect(h.automation.calls.last == .setRuleEnabled("Newsletters", true))
 
         let again = try await h.json("set_rule_enabled", ["name": "Newsletters", "enabled": true])
         #expect(again["unchanged"] as? Bool == true)
         #expect(h.automation.calls.count == 1)
     }
 
-    @Test func warnsWhenTheCopyDiffers() async throws {
-        let store = h.fixture.store
-        Self.write(store, rules: [Self.saved("OLD", "Newsletters", criteria: [["Header": "From", "Expression": "a"]], move: "imap://\(h.fixture.icloud)/Archive")],
-            active: ["OLD": true])
-        h.automation.onRuleChange = { _ in
-            Self.write(store, rules: [Self.saved("NEW", "Newsletters", criteria: [["Header": "From", "Expression": "a"]])], active: ["NEW": false])
-        }
-        let json = try await h.json("set_rule_enabled", ["name": "Newsletters", "enabled": false])
-        #expect((json["warning"] as? String)?.contains("different conditions or actions") == true)
-    }
-
-    @Test func refusesRulesItCannotCopy() async throws {
+    @Test func refusesMissingOrAmbiguousRules() async throws {
         try h.fixture.store.writeMailData("SyncedRules.plist", plist: [
-            Self.saved("R1", "Compound", criteria: [["Header": "Compound", "Criteria": [["Header": "From", "Expression": "a"]]]]),
             Self.saved("R2", "Twin", criteria: [["Header": "From", "Expression": "a"]]),
             Self.saved("R3", "Twin", criteria: [["Header": "From", "Expression": "b"]]),
         ])
         h.automation.mailRuleNames = ["Unsaved"]
-        for (name, text) in [("Compound", "cannot copy"), ("Twin", "2 rules are named"), ("Unsaved", "has not saved"), ("Missing", "No rule named")] {
-            let result = await h.call("set_rule_enabled", ["name": .string(name), "enabled": true])
-            #expect(result.isError && result.text.contains(text), "\(name): \(result.text)")
+        for tool in ["set_rule_enabled", "update_rule", "delete_rule"] {
+            for (name, text) in [("Twin", "2 rules are named"), ("Unsaved", "has not saved"), ("Missing", "No rule named")] {
+                let result = await h.call(tool, ["name": .string(name), "enabled": true])
+                #expect(result.isError && result.text.contains(text), "\(tool) \(name): \(result.text)")
+            }
         }
         #expect(h.automation.calls.isEmpty)
+    }
+
+    /// Approves the next request in the menu bar app's place, returning it.
+    func approveNext() -> Task<ApprovalRequest?, Error> {
+        h.approvals.beat()
+        let approvals = h.approvals
+        return Task {
+            for _ in 0..<200 {
+                if let request = approvals.pending().first {
+                    try approvals.decide(request.id, approve: true)
+                    return request
+                }
+                try await Task.sleep(nanoseconds: 20_000_000)
+            }
+            return nil
+        }
+    }
+
+    @Test func deletesARuleAfterApproval() async throws {
+        let store = h.fixture.store
+        Self.write(store, rules: [Self.saved("R1", "Old rule", criteria: [["Header": "From", "Expression": "a@b.test"]])], active: ["R1": true])
+        h.automation.onRuleChange = { call in
+            guard case .deleteRule = call else { return }
+            Self.write(store, rules: [], active: [:])
+        }
+        let refused = await h.call("delete_rule", ["name": "Old rule"])
+        #expect(refused.isError && refused.text.contains("menu bar app"))
+
+        let agent = approveNext()
+        let json = try await h.json("delete_rule", ["name": "Old rule"])
+        let request = try #require(try await agent.value)
+        #expect(request.action == .rule && request.subject == "Delete rule \"Old rule\"" && request.bodyPreview.contains("a@b.test"))
+        #expect(json["deleted"] as? String == "Old rule" && json["saved"] as? Bool == true)
+        #expect(((json["was"] as? [String: Any])?["criteria"] as? [[String: Any]])?.first?["value"] as? String == "a@b.test")
+        #expect(h.automation.calls == [.deleteRule("Old rule")])
+    }
+
+    @Test func updatesARuleInPlace() async throws {
+        let store = h.fixture.store
+        Self.write(store, rules: [Self.saved("R1", "Shop", criteria: [["Header": "From", "Expression": "shop.test"]])], active: ["R1": true])
+        h.automation.onRuleChange = { call in
+            guard case .updateRule(_, let update) = call else { return }
+            var rule = Self.saved("R1", update.name ?? "Shop", criteria: (update.conditions ?? []).map { ["Header": $0.field == .subject ? "Subject" : "From", "Expression": $0.value] })
+            rule["MarkFlagged"] = true
+            rule["FlagColor"] = 1
+            Self.write(store, rules: [rule], active: ["R1": true])
+        }
+        let json = try await h.json("update_rule", [
+            "name": "Shop", "new_name": "Shop receipts", "conditions": [["field": "subject", "value": "receipt"]], "flag_color": "orange",
+            "move_to": "none",
+        ])
+        #expect(json["rule"] as? String == "Shop receipts" && json["renamed_from"] as? String == "Shop" && json["saved"] as? Bool == true)
+        #expect((json["actions"] as? [String])?.contains("flag orange") == true)
+        guard case .updateRule("Shop", let update)? = h.automation.calls.last else { Issue.record("no updateRule call"); return }
+        #expect(update.name == "Shop receipts" && update.conditions == [RuleCondition(field: .subject, value: "receipt")])
+        #expect(update.flag == .set(.orange) && update.moveTo == .clear && update.forwardTo == .keep && update.markRead == nil)
+
+        let nothing = await h.call("update_rule", ["name": "Shop receipts"])
+        #expect(nothing.isError && nothing.text.contains("Nothing to change"))
+        h.automation.mailRuleNames = ["Taken"]
+        let taken = await h.call("update_rule", ["name": "Shop receipts", "new_name": "Taken"])
+        #expect(taken.isError && taken.text.contains("already exists"))
+        // Adding forwarding asks first.
+        let forward = await h.call("update_rule", ["name": "Shop receipts", "forward_to": ["books@example.test"]])
+        #expect(forward.isError && forward.text.contains("menu bar app"))
+    }
+
+    @Test func remakesARuleToDropConditions() async throws {
+        let store = h.fixture.store
+        var rule = Self.saved("R1", "Two", criteria: [["Header": "From", "Expression": "a"], ["Header": "Subject", "Expression": "b"]],
+            move: "imap://\(h.fixture.icloud)/Archive")
+        rule["MarkFlagged"] = true
+        rule["FlagColor"] = 2
+        Self.write(store, rules: [rule], active: ["R1": true])
+        h.automation.onRuleChange = { call in
+            guard case .replaceRule(_, let spec) = call else { return }
+            Self.write(store, rules: [Self.saved("R9", spec.name, criteria: [["Header": "From", "Expression": "a"]])], active: ["R9": spec.enabled])
+        }
+        let json = try await h.json("update_rule", ["name": "Two", "conditions": [["field": "from", "value": "a"]]])
+        #expect(json["saved"] as? Bool == true)
+        guard case .replaceRule("Two", let spec)? = h.automation.calls.last else { Issue.record("no replaceRule call"); return }
+        // Everything else is kept: the move, the flag, on.
+        #expect(spec.conditions == [RuleCondition(field: .from, value: "a")] && spec.enabled && spec.flag == .yellow)
+        #expect(spec.moveTo == MailboxTarget(accountID: h.fixture.icloud, path: "Archive"))
+
+        // A rule with a notification cannot be made again.
+        var noisy = Self.saved("R2", "Noisy", criteria: [["Header": "From", "Expression": "a"], ["Header": "From", "Expression": "b"]])
+        noisy["NotifyUser"] = true
+        Self.write(store, rules: [noisy], active: ["R2": true])
+        let refused = await h.call("update_rule", ["name": "Noisy", "conditions": [["field": "from", "value": "a"]]])
+        #expect(refused.isError && refused.text.contains("Mail › Settings"))
     }
 
     @Test func respectsTheMailChangesSwitch() async throws {

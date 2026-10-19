@@ -18,7 +18,12 @@ final class RecordingAutomation: MailAutomating, @unchecked Sendable {
         case reply(Int64, MailboxTarget, String, Bool, DeliveryMode)
         case open(Int64)
         case createRule(RuleSpec)
-        case setRuleEnabled(String, Bool, Int)
+        case setRuleEnabled(String, Bool)
+        case deleteRule(String)
+        case updateRule(String, RuleUpdate)
+        case replaceRule(String, RuleSpec)
+        case copy([Int64], MailboxTarget, MailboxTarget)
+        case setColor([Int64], MailboxTarget, RuleColor?)
     }
 
     private let lock = NSLock()
@@ -33,7 +38,7 @@ final class RecordingAutomation: MailAutomating, @unchecked Sendable {
     var onCompose: (@Sendable (OutgoingMessage, DeliveryMode) throws -> Void)?
     /// Runs inside `trash`, e.g. to simulate Mail moving the messages to Trash (or more than that).
     var onTrash: (@Sendable ([Int64], MailboxTarget) -> Void)?
-    /// Runs inside `createRule` and `setRuleEnabled`, e.g. to write the rule files as Mail would.
+    /// Runs inside the rule calls, e.g. to write the rule files as Mail would.
     var onRuleChange: (@Sendable (Call) -> Void)?
     /// What `ruleNames` returns: the rules Mail has in memory.
     var mailRuleNames: [String] = []
@@ -105,9 +110,34 @@ final class RecordingAutomation: MailAutomating, @unchecked Sendable {
         onRuleChange?(.createRule(rule))
     }
 
-    func setRuleEnabled(named name: String, enabled: Bool, expectedConditions: Int) async throws {
-        recordChange(.setRuleEnabled(name, enabled, expectedConditions))
-        onRuleChange?(.setRuleEnabled(name, enabled, expectedConditions))
+    func setRuleEnabled(named name: String, enabled: Bool) async throws {
+        recordChange(.setRuleEnabled(name, enabled))
+        onRuleChange?(.setRuleEnabled(name, enabled))
+    }
+
+    func deleteRule(named name: String) async throws {
+        recordChange(.deleteRule(name))
+        onRuleChange?(.deleteRule(name))
+    }
+
+    func updateRule(named name: String, _ update: RuleUpdate) async throws {
+        recordChange(.updateRule(name, update))
+        onRuleChange?(.updateRule(name, update))
+    }
+
+    func replaceRule(named name: String, with spec: RuleSpec) async throws {
+        recordChange(.replaceRule(name, spec))
+        onRuleChange?(.replaceRule(name, spec))
+    }
+
+    func copy(ids: [Int64], from: MailboxTarget, to: MailboxTarget) async throws -> Int {
+        recordChange(.copy(ids, from, to))
+        return ids.count
+    }
+
+    func setColor(ids: [Int64], in mailbox: MailboxTarget, color: RuleColor?) async throws -> Int {
+        recordChange(.setColor(ids, mailbox, color))
+        return ids.count
     }
 
     func ruleNames() async throws -> [String] { mailRuleNames }

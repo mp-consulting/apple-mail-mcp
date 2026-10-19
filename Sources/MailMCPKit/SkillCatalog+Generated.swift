@@ -178,6 +178,8 @@ Present one table: sender, messages in 90 days, unread %, category, suggested ac
   offer a rule for senders the user wants to keep but not see in the inbox. Once they agree, `create_rule`
   (e.g. `conditions: [{field: "from", value: "news@example.com"}]`, `move_to: "archive"`). If it comes back
   `saved: false`, tell the user to keep Mail open until `mail_setup` no longer lists it under `pending_rules`.
+  A new rule only acts on new mail: to file what is already there, run `apply_rules` with `rules: [<name>]` and
+  the inbox as `mailbox`, show the dry run, then run it again with `dry_run: false` once the user agrees.
 - **Undo**: if the user regrets a batch, `undo_change` with `action: "list"` shows recent changes and
   `action: "undo"` puts one back (the latest by default, or its `change_id`).
 

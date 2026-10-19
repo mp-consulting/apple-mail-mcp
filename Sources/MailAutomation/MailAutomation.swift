@@ -88,8 +88,18 @@ public protocol MailAutomating: Sendable {
     func open(_ id: Int64, in mailbox: MailboxTarget) async throws
     /// Makes a rule; Mail saves it (see ``RuleSpec``).
     func createRule(_ rule: RuleSpec) async throws
-    /// Turns a rule on or off by making it again (a scripted `set` alone is never saved).
-    func setRuleEnabled(named name: String, enabled: Bool, expectedConditions: Int) async throws
+    /// Turns a rule on or off.
+    func setRuleEnabled(named name: String, enabled: Bool) async throws
+    /// Deletes a rule.
+    func deleteRule(named name: String) async throws
+    /// Changes a rule's name, conditions or actions.
+    func updateRule(named name: String, _ update: RuleUpdate) async throws
+    /// Replaces a rule with a new one (for fewer conditions, which scripting cannot remove).
+    func replaceRule(named name: String, with spec: RuleSpec) async throws
+    /// Copies messages to another mailbox (`duplicate`); returns how many Mail took.
+    func copy(ids: [Int64], from: MailboxTarget, to: MailboxTarget) async throws -> Int
+    /// Sets the background colour messages show in the list (nil: none).
+    func setColor(ids: [Int64], in mailbox: MailboxTarget, color: RuleColor?) async throws -> Int
     /// Names of the rules Mail has now, saved or not.
     func ruleNames() async throws -> [String]
     /// Runs `body` with Mail automation reserved for this caller, across processes, so a bulk change
@@ -188,6 +198,24 @@ public final class MailAutomation: MailAutomating {
                 } else if let flagged {
                     try mail.set(MailSpec.property("isfl", of: message), to: NSAppleEventDescriptor(boolean: flagged))
                 }
+            }
+        }
+    }
+
+    public func copy(ids: [Int64], from: MailboxTarget, to: MailboxTarget) async throws -> Int {
+        try await run { mail in
+            try Self.forEach(ids) { id in
+                try mail.send("core", "clon", direct: MailSpec.message(id, in: from), ["insh": MailSpec.mailbox(to)])
+            }
+        }
+    }
+
+    public func setColor(ids: [Int64], in mailbox: MailboxTarget, color: RuleColor?) async throws -> Int {
+        try await run { mail in
+            try Self.forEach(ids) { id in
+                try mail.set(
+                    MailSpec.property("mcol", of: MailSpec.message(id, in: mailbox)),
+                    to: NSAppleEventDescriptor(enumCode: fourCC(color?.code ?? "ccno")))
             }
         }
     }

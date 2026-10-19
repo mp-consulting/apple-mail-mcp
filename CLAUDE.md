@@ -62,6 +62,8 @@ swift Scripts/make-icon.swift Resources
 - Account names come from `~/Library/Accounts/Accounts4.sqlite` (description, else the parent's).
 - **Do not** delete messages that are already in Trash: Mail aborts (`deleteMessages` transfer crash).
 - **Do not** reply to or forward an unsent draft: Mail hangs.
+- **Do not** delete a rule condition with Apple Events: `-[MFMessageRule(Applescript) removeFromCriteriaAtIndex:]`
+  calls itself until Mail crashes (stack overflow). Rewrite conditions in place, or make the rule again.
 - `reply`/`forward` always open a window. `save` is asynchronous: closing or deleting the compose object
   right after it discards the draft, so the server waits for the draft row (ROWID above the
   pre-compose maximum) before closing it.
@@ -70,18 +72,22 @@ swift Scripts/make-icon.swift Resources
 - Mail keeps compose objects in memory until it quits; `delete`/`close` do not free invisible ones.
 - HTML email: set `content` to an **RTF** descriptor (HTML → `NSAttributedString` → RTF, on the main thread). Mail
   then saves and sends multipart HTML. The scripting `html content` property does nothing.
-- Rules: a scripted `make new rule` and any edit in Mail › Settings › Rules make Mail save its whole in-memory
-  rule list, usually 1.5 s later but once 56 s (log: `MFMessageRouter` "Rules written to disk"). A scripted
-  `delete rule` or property `set` (e.g. `enabled`) changes memory only: quitting Mail before the next save brings
-  the old state back. Quitting never saves. `UnsyncedRules.plist` and `RulesActiveState.plist` are written at
-  once; `SyncedRules.plist` (the definitions) only once Mail holds its iCloud Drive copy (`SyncedFileActivity`):
-  usually instant, once 27 minutes after launch. The save copies the list as it is when it runs, so changes made
-  around a `make` go in with it: `setRuleEnabled` builds a copy under a temporary name, then deletes the original
-  and renames the copy, and the copy's `make` saves all of it. `make` ignores `enabled` (set it straight after)
-  and cannot take object references (set `move message`/`copy message` afterwards). Reading a rule's `properties`
-  gives `missing value` (a `type` descriptor `msng`) and empty texts that Mail refuses to take back (-1700,
-  -10000): leave them out. Rules are addressed by name (no scripting `id`); "sender is VIP" shares code `tsig`
-  with "sender is not member of group". Probe: `RuleProbeTests` (`APPLE_MAIL_MCP_LIVE_RULES=1`).
+- Rules (read in Mail's code and checked live): Mail saves its whole rule list when a rule changes through its
+  setters (`handleDidChangeIfNeeded` → `ruleDidChange:`), which a scripted `make` and every scripted `set` do,
+  except `enabled` (`setIsActive:` only marks the rule changed) and `delete` (`-[MailApp removeFromRulesAtIndex:]`
+  → `removeRuleAtIndex:`). Those stay in memory until the next save, and quitting never saves. The save copies the
+  list as it is, usually 1.5 s later but once 56 s (log: `MFMessageRouter` "Rules written to disk"). So
+  `MailAutomation` ends every change by renaming the rule to a temporary name and back, and deletes by renaming
+  first. Setting a property to the value it has saves only when a change is already pending. `make` ignores
+  `enabled` and cannot take object references (set `move message`/`copy message` after it). With Mail › Settings ›
+  Rules open, that tab saves changes itself (`RulesPreferences saveChanges`) until Mail quits, so test with it
+  closed. `UnsyncedRules.plist` and `RulesActiveState.plist` (on/off, by `RuleId`) are written at once;
+  `SyncedRules.plist` (definitions) once Mail holds its iCloud Drive copy (`SyncedFileActivity`): usually at once,
+  once 27 minutes after launch. Saved keys are those of `-[MFMessageRule dictionaryRepresentation]`; the account
+  in a rule's `MailboxURL` is its user name or id. Rules are addressed by name; "sender is VIP" shares code `tsig`
+  with "sender is not member of group". Mail gives other apps no way to run Apply Rules (`-[MessageViewer
+  reapplySortingRules:]`; no scripting command or Shortcuts action), hence `apply_rules`. Probe: `RuleProbeTests`
+  (`APPLE_MAIL_MCP_LIVE_RULES=1`, `APPLE_MAIL_MCP_RULE_SOAK=<runs>`).
 
 ## Releases
 

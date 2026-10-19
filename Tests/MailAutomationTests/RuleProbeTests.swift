@@ -182,38 +182,84 @@ struct RuleProbeTests {
         print("probe: left \"\(name)\" (enabled, matches \"…-new\"); delete it in Mail › Settings › Rules")
     }
 
-    /// `createRule` and `setRuleEnabled` as the tools call them. Check with `mail_setup` afterwards: one probe rule,
-    /// enabled, matching "…-tools", with its move, mark read, colour and stop actions. Delete it in Mail › Settings ›
-    /// Rules (or run the probe again, which deletes it first).
+    /// The rule calls as the tools make them, `APPLE_MAIL_MCP_RULE_SOAK` times (default 3): create, turn off, turn
+    /// on, update (rename, rewrite the condition, flag, colour), add a condition, drop one (the rule is made again),
+    /// delete. Every step must make Mail write a rule file within
+    /// 60 s (latencies are printed), and Mail must end with no probe rule. Probe rules left by earlier runs are deleted
+    /// first. With Full Disk Access it also checks that the files hold no probe rule.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["APPLE_MAIL_MCP_LIVE_RULES"] == "1"))
-    func ruleCalls() async throws {
+    func soak() async throws {
         let automation = MailAutomation()
         let mail = MailEventSender(timeout: 30)
+        let runs = Int(ProcessInfo.processInfo.environment["APPLE_MAIL_MCP_RULE_SOAK"] ?? "") ?? 3
         for leftover in try await automation.ruleNames() where leftover.hasPrefix("apple-mail-mcp probe ") {
-            try mail.send("core", "delo", direct: Self.rule(named: leftover))
+            try await automation.deleteRule(named: leftover)
         }
         let account = try #require(try await automation.accounts().first { $0.enabled })
-        let tag = UUID().uuidString.prefix(8).lowercased()
-        let name = "apple-mail-mcp probe \(tag)"
-        var before = Self.fileStates()
-        try await automation.createRule(RuleSpec(
-            name: name, enabled: false, conditions: [RuleCondition(field: .subject, value: "apple-mail-mcp-probe-\(tag)-tools")],
-            moveTo: MailboxTarget(accountID: account.id, path: "INBOX"), markRead: true, color: .blue, stopEvaluating: true))
-        Self.waitForSave("createRule", since: before, synced: 90)
-        #expect(try await automation.ruleNames().filter { $0 == name }.count == 1)
-        #expect(try mail.get(MailSpec.property("rstm", of: Self.rule(named: name))).booleanValue == true)
-        try await Task.sleep(nanoseconds: 3_000_000_000)
-
-        before = Self.fileStates()
-        try await automation.setRuleEnabled(named: name, enabled: true, expectedConditions: 1)
-        Self.waitForSave("setRuleEnabled", since: before, synced: 90)
-        let rule = Self.rule(named: name)
-        #expect(try mail.get(MailSpec.property("isac", of: rule)).booleanValue == true)
-        #expect(try mail.get(MailSpec.property("rmre", of: rule)).booleanValue == true)
-        #expect(try mail.get(MailSpec.property("rcme", of: rule)).enumCodeValue == fourCC("ccbl"))
-        #expect(AEValue(try mail.get(MailSpec.property("rexp", of: MailSpec.every("rucr", of: rule)))).list.compactMap(\.string)
-            == ["apple-mail-mcp-probe-\(tag)-tools"])
-        await #expect(throws: RuleCopyError.self) { try await automation.setRuleEnabled(named: name, enabled: false, expectedConditions: 2) }
-        print("probe: left \"\(name)\" (enabled, moves to INBOX of \(account.name)); delete it in Mail › Settings › Rules")
+        var latencies: [String: [Double]] = [:]
+        var failures: [String] = []
+        for run in 1...runs {
+            let tag = UUID().uuidString.prefix(8).lowercased()
+            let name = "apple-mail-mcp probe \(tag)"
+            func step(_ label: String, _ body: () async throws -> Void) async throws {
+                let before = Self.fileStates()
+                try await body()
+                let write = Self.waitForWrite(since: before, timeout: 60)
+                if write.changed.isEmpty { failures.append("run \(run): \(label) not saved within 60 s") }
+                else { latencies[label, default: []].append(write.after) }
+                try await Task.sleep(nanoseconds: 3_000_000_000)  // let a late write land before the next step
+            }
+            let rule = Self.rule(named: name)
+            try await step("create") {
+                try await automation.createRule(RuleSpec(
+                    name: name, enabled: true, conditions: [RuleCondition(field: .subject, value: "apple-mail-mcp-probe-\(tag)")],
+                    moveTo: MailboxTarget(accountID: account.id, path: "INBOX"), markRead: true, stopEvaluating: true))
+            }
+            #expect(try mail.get(MailSpec.property("isac", of: rule)).booleanValue == true)
+            #expect(try mail.get(MailSpec.property("rstm", of: rule)).booleanValue == true)
+            try await step("off") { try await automation.setRuleEnabled(named: name, enabled: false) }
+            #expect(try mail.get(MailSpec.property("isac", of: rule)).booleanValue == false)
+            try await step("on") { try await automation.setRuleEnabled(named: name, enabled: true) }
+            #expect(try mail.get(MailSpec.property("isac", of: rule)).booleanValue == true)
+            var update = RuleUpdate()
+            update.name = "\(name) b"
+            update.conditions = [RuleCondition(field: .from, qualifier: .endsWith, value: "@probe-\(tag).test")]
+            update.flag = .set(.orange)
+            update.color = .set(.green)
+            update.markRead = false
+            try await step("update") { try await automation.updateRule(named: name, update) }
+            let renamed = Self.rule(named: "\(name) b")
+            #expect(try mail.get(MailSpec.property("rmfl", of: renamed)).booleanValue == true)
+            #expect(try mail.get(MailSpec.property("rcme", of: renamed)).enumCodeValue == fourCC("ccgr"))
+            #expect(AEValue(try mail.get(MailSpec.property("rexp", of: MailSpec.every("rucr", of: renamed)))).list.compactMap(\.string)
+                == ["@probe-\(tag).test"])
+            var grow = RuleUpdate()
+            grow.conditions = [
+                RuleCondition(field: .from, qualifier: .endsWith, value: "@probe-\(tag).test"),
+                RuleCondition(field: .subject, value: "apple-mail-mcp-probe-\(tag)"),
+            ]
+            try await step("add condition") { try await automation.updateRule(named: "\(name) b", grow) }
+            #expect(try mail.send("core", "cnte", direct: renamed, ["kocl": NSAppleEventDescriptor(typeCode: fourCC("rucr"))]).int32Value == 2)
+            // Fewer conditions: made again (scripting cannot remove one; Mail crashes).
+            try await step("drop condition") {
+                try await automation.replaceRule(named: "\(name) b", with: RuleSpec(
+                    name: "\(name) b", enabled: true, conditions: [RuleCondition(field: .subject, value: "apple-mail-mcp-probe-\(tag)")],
+                    flag: .orange, stopEvaluating: true))
+            }
+            #expect(try mail.send("core", "cnte", direct: renamed, ["kocl": NSAppleEventDescriptor(typeCode: fourCC("rucr"))]).int32Value == 1)
+            #expect(try await automation.ruleNames().filter { $0.hasPrefix(name) } == ["\(name) b"])
+            try await step("delete") { try await automation.deleteRule(named: "\(name) b") }
+            #expect(try await !automation.ruleNames().contains { $0.hasPrefix(name) })
+        }
+        for (label, values) in latencies.sorted(by: { $0.key < $1.key }) {
+            let sorted = values.sorted()
+            print("probe: \(label): \(values.count) saves, median \(String(format: "%.1f", sorted[sorted.count / 2])) s, max \(String(format: "%.1f", sorted.last!)) s")
+        }
+        for failure in failures { print("probe: \(failure)") }
+        #expect(failures.isEmpty)
+        #expect(try await !automation.ruleNames().contains { $0.hasPrefix("apple-mail-mcp probe ") })
+        if let names = Self.ruleNames(in: "SyncedRules.plist") {
+            #expect(!names.contains { $0.hasPrefix("apple-mail-mcp probe ") }, "a probe rule is still in SyncedRules.plist")
+        }
     }
 }

@@ -8,13 +8,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
-- **`create_rule` and `set_rule_enabled`.** Make a Mail rule (conditions on sender, recipients, subject, body,
-  headers, account, contacts or junk; move, copy, mark read, flag, colour, stop) and turn rules on or off. Rules
-  that forward, redirect, auto-reply or delete, or match every message, ask in the menu bar app first. Mail saves
-  rule changes made by other apps only after a new rule is made, so turning a rule on or off makes it again with
-  the same conditions and actions (rules scripting cannot copy exactly are refused). Each change waits for Mail's
-  rule files and says when Mail has not saved it yet; `mail_setup` lists those under `pending_rules` until it
-  does, or reports them lost if Mail quit first.
+- **Mail rules: `create_rule`, `update_rule`, `set_rule_enabled` and `delete_rule`.** Make a rule (conditions on
+  sender, recipients, subject, body, headers, account, contacts or junk; move, copy, mark read, flag, colour, stop),
+  change its name, conditions or actions, turn it on or off, or delete it. Rules that forward, redirect, auto-reply
+  or delete, or match every message, ask in the menu bar app first, and so does every delete. Mail saves a change
+  made by another app only when a rule's properties change through its setters, which turning a rule on or off and
+  deleting it do not do, so each change ends with one that does; then it waits for Mail's rule files, says when Mail
+  has not saved it yet, and `mail_setup` lists those under `pending_rules` (or as lost if Mail quit first).
+- **`apply_rules`** runs rules on mail already in a mailbox, as Message › Apply Rules does (Mail offers other apps
+  no way to run that): every enabled rule in Mail's order, or the ones named, matched the way Mail matches them.
+  Dry run by default. Moves, flags and trashes go through the usual tools, so they are checked and undoable; rules
+  that send mail or run AppleScripts, and conditions it cannot reproduce exactly, are skipped and listed.
 
 ## [0.4.3] - 2026-10-18
 

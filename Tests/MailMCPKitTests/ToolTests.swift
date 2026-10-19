@@ -24,6 +24,7 @@ final class ReadToolTests {
             "open_in_mail", "export_search", "get_messages", "extract_invoice_fields", "undo_change", "check_authenticity",
             "find_contact", "extract_fields", "mail_setup", "list_drafts", "send_draft", "wait_for_mail", "snooze_messages",
             "list_scheduled", "cancel_scheduled", "unsubscribe", "create_rule", "set_rule_enabled",
+            "update_rule", "delete_rule", "apply_rules",
         ]))
         #expect(tools.count == names.count)
         #expect(tools.first { $0.name == "search_messages" }?.annotations.readOnlyHint == true)

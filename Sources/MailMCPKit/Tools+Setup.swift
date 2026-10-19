@@ -30,7 +30,8 @@ extension MailToolbox {
                 How Mail is set up, read from its settings files: rules (conditions and actions), VIP senders, smart \
                 mailboxes (their conditions), and signatures (with their text when the file is on this Mac). Rules \
                 created or turned on or off here and not saved by Mail yet are listed under pending_rules. Make rules \
-                with create_rule, turn them on or off with set_rule_enabled; change the rest in Mail › Settings.
+                with create_rule, change them with update_rule, turn them on or off with set_rule_enabled, delete them \
+                with delete_rule and run them on existing mail with apply_rules.
                 """,
                 Schema.object([
                     "include": .object([

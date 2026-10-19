@@ -12,7 +12,7 @@ public struct MailCriterion: Sendable, Hashable {
     public var allMustMatch: Bool
 }
 
-/// A rule from Mail › Settings › Rules (read-only).
+/// A rule from Mail › Settings › Rules.
 public struct MailRule: Sendable, Hashable {
     public var id: String
     public var name: String
@@ -22,6 +22,42 @@ public struct MailRule: Sendable, Hashable {
     public var criteria: [MailCriterion]
     /// What the rule does, e.g. `move to Archive`, `mark as read`, `stop evaluating rules`.
     public var actions: [String]
+    /// The same actions as Mail saves them, for applying the rule.
+    public var definition: MailRuleActions = MailRuleActions()
+}
+
+/// A rule's actions, from the keys Mail saves (`-[MFMessageRule dictionaryRepresentation]`).
+public struct MailRuleActions: Sendable, Hashable {
+    /// `MailboxURL` when `ShouldTransferMessage`.
+    public var moveTo: String?
+    /// `CopyToMailboxURL` when `ShouldCopyMessage`.
+    public var copyTo: String?
+    public var markRead = false
+    /// `FlagColor` (red 0 … gray 6) when `MarkFlagged`.
+    public var flag: Int?
+    /// `Color`, an RGB value (see ``MailRuleActions/colorNames``); `HighlightTextUsingColor` colours the text instead.
+    public var color: Int?
+    public var colorsText = false
+    public var deletes = false
+    public var stopEvaluating = false
+    /// `AutoResponseType`: 1 forward, 2 reply, 3 redirect (with `ForwardRecipients`, `RedirectRecipients` and
+    /// `ResponseMessage`).
+    public var autoResponse = 0
+    public var forwardTo: [String] = []
+    public var redirectTo: [String] = []
+    public var responseText: String?
+    /// `NotifyUser` or `SendNotification`.
+    public var notifies = false
+    public var sound: String?
+    public var appleScript: String?
+
+    public init() {}
+
+    /// The RGB values Mail saves for its rule colours.
+    public static let colorNames: [Int: String] = [
+        0xFF9892: "red", 0xFFCA8B: "orange", 0xFFF19B: "yellow", 0xC9F4A9: "green", 0x9BC9FF: "blue", 0xD7B4E5: "purple",
+        0xC7D0DB: "gray",
+    ]
 }
 
 public struct SmartMailbox: Sendable, Hashable {
@@ -66,7 +102,8 @@ extension MailStore {
             return MailRule(
                 id: id, name: rule["RuleName"] as? String ?? "(unnamed)", enabled: active?[id],
                 allMustMatch: rule["AllCriteriaMustBeSatisfied"] as? Bool ?? false,
-                criteria: (rule["Criteria"] as? [[String: Any]] ?? []).map(Self.criterion), actions: ruleActions(rule))
+                criteria: (rule["Criteria"] as? [[String: Any]] ?? []).map(Self.criterion), actions: ruleActions(rule),
+                definition: Self.ruleDefinition(rule))
         }
     }
 
@@ -83,26 +120,73 @@ extension MailStore {
 
     public static let ruleFiles = ["SyncedRules.plist", "UnsyncedRules.plist", "RulesActiveState.plist"]
 
-    private func ruleActions(_ rule: [String: Any]) -> [String] {
-        var actions: [String] = []
+    static func ruleDefinition(_ rule: [String: Any]) -> MailRuleActions {
         func flag(_ key: String) -> Bool { rule[key] as? Bool ?? false }
-        if flag("ShouldTransferMessage"), let url = rule["MailboxURL"] as? String { actions.append("move to \(mailboxName(url))") }
-        if flag("ShouldCopyMessage"), let url = rule["CopyToMailboxURL"] as? String { actions.append("copy to \(mailboxName(url))") }
-        if flag("MarkRead") { actions.append("mark as read") }
-        if flag("MarkFlagged") { actions.append("flag") }
-        if flag("Deletes") { actions.append("delete") }
-        if flag("HighlightTextUsingColor") { actions.append("colour the message") }
-        if flag("NotifyUser") || flag("SendNotification") { actions.append("notify") }
-        if let response = rule["AutoResponseType"] as? Int, response != 0 { actions.append("reply, forward or redirect (type \(response))") }
-        if flag("StopEvaluatingRules") { actions.append("stop evaluating rules") }
+        var actions = MailRuleActions()
+        if flag("ShouldTransferMessage") { actions.moveTo = rule["MailboxURL"] as? String }
+        if flag("ShouldCopyMessage") { actions.copyTo = rule["CopyToMailboxURL"] as? String }
+        actions.markRead = flag("MarkRead")
+        if flag("MarkFlagged") { actions.flag = rule["FlagColor"] as? Int ?? 0 }
+        actions.color = rule["Color"] as? Int
+        actions.colorsText = flag("HighlightTextUsingColor")
+        actions.deletes = flag("Deletes")
+        actions.stopEvaluating = flag("StopEvaluatingRules")
+        actions.autoResponse = rule["AutoResponseType"] as? Int ?? 0
+        actions.forwardTo = rule["ForwardRecipients"] as? [String] ?? []
+        actions.redirectTo = rule["RedirectRecipients"] as? [String] ?? []
+        actions.responseText = (rule["ResponseMessage"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        actions.notifies = flag("NotifyUser") || flag("SendNotification")
+        actions.sound = (rule["SoundName"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        actions.appleScript = (rule["AppleScript"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        return actions
+    }
+
+    private func ruleActions(_ rule: [String: Any]) -> [String] {
+        let definition = Self.ruleDefinition(rule)
+        var actions: [String] = []
+        if let url = definition.moveTo { actions.append("move to \(mailboxName(url))") }
+        if let url = definition.copyTo { actions.append("copy to \(mailboxName(url))") }
+        if definition.markRead { actions.append("mark as read") }
+        if let index = definition.flag { actions.append(FlagColor(rawValue: index).map { "flag \($0.name)" } ?? "flag") }
+        if let color = definition.color {
+            let name = MailRuleActions.colorNames[color] ?? "a colour"
+            actions.append(definition.colorsText ? "colour the text \(name)" : "colour \(name)")
+        }
+        if definition.deletes { actions.append("delete") }
+        switch definition.autoResponse {
+        case 0: break
+        case 1: actions.append("forward to \(definition.forwardTo.joined(separator: ", "))")
+        case 2: actions.append("reply")
+        case 3: actions.append("redirect to \(definition.redirectTo.joined(separator: ", "))")
+        default: actions.append("respond (type \(definition.autoResponse))")
+        }
+        if definition.notifies { actions.append("notify") }
+        if definition.sound != nil { actions.append("play a sound") }
+        if definition.appleScript != nil { actions.append("run an AppleScript") }
+        if definition.stopEvaluating { actions.append("stop evaluating rules") }
         return actions
     }
 
     /// `imap://<account>/Archive` → `Archive (iCloud)`.
     private func mailboxName(_ url: String) -> String {
         guard let parsed = MailboxURL(url) else { return url }
-        let account = (try? accounts())?.first { $0.id == parsed.accountID }?.name
+        let account = (try? ruleAccount(parsed))?.name
         return account.map { "\(parsed.path) (\($0))" } ?? parsed.path
+    }
+
+    /// The account a rule's mailbox URL names: by id, or by the user name Mail writes there (`me%40icloud.com`).
+    private func ruleAccount(_ url: MailboxURL) throws -> MailAccount? {
+        let key = url.accountID.removingPercentEncoding ?? url.accountID
+        let all = try accounts()
+        return all.first { $0.id == key }
+            ?? all.first { $0.emailAddresses.contains { $0.caseInsensitiveCompare(key) == .orderedSame } }
+    }
+
+    /// The mailbox a rule's `MailboxURL` or `CopyToMailboxURL` names, when exactly one matches.
+    public func mailbox(ruleURL: String) throws -> Mailbox? {
+        guard let url = MailboxURL(ruleURL) else { return nil }
+        let candidates = try mailboxes(accountID: try ruleAccount(url)?.id).filter { $0.path == url.path }
+        return candidates.count == 1 ? candidates[0] : nil
     }
 
     static func criterion(_ raw: [String: Any]) -> MailCriterion {

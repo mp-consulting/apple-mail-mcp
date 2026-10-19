@@ -126,7 +126,7 @@ public final class SettingsProvider: @unchecked Sendable {
     private let lock = NSLock()
     private var base = Settings()
     private var cached = Settings()
-    private var cachedModification: Date?
+    private var cachedModification: timespec?
     private var loaded = false
 
     public init(url: URL = SharedPaths.settings, overrides: @escaping @Sendable (inout Settings) -> Void = { _ in }) {
@@ -137,8 +137,10 @@ public final class SettingsProvider: @unchecked Sendable {
     public var current: Settings {
         lock.lock()
         defer { lock.unlock() }
-        let modified = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
-        if !loaded || modified != cachedModification {
+        // One stat(2) per look (this runs several times per tool call); the file is read again only when it changed.
+        var info = stat()
+        let modified = stat(url.path, &info) == 0 ? info.st_mtimespec : nil
+        if !loaded || modified?.tv_sec != cachedModification?.tv_sec || modified?.tv_nsec != cachedModification?.tv_nsec {
             // A file caught mid-write or broken by hand keeps the last good settings; with none yet, fail closed.
             var settings = Settings.read(from: url) ?? (loaded ? base : Settings.failClosed)
             base = settings

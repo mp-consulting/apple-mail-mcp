@@ -78,6 +78,7 @@ public final class MailToolbox: @unchecked Sendable {
     }
 
     private let lock = NSLock()
+    private var _listed: (all: [ToolDefinition], byName: [String: ToolDefinition])?
     private var _clientName: String?
     private var _bodyIndex: BodyIndex?
     private var registeredSettingsAddresses: [String] = []
@@ -89,7 +90,7 @@ public final class MailToolbox: @unchecked Sendable {
         changes: ChangeJournal? = ChangeJournal(), schedule: ScheduleStore? = ScheduleStore(),
         pendingRules: PendingRuleStore? = PendingRuleStore(),
         contacts: any ContactsProviding = SystemContacts(), bodyIndexURL: URL = SharedPaths.bodyIndex,
-        bodyIndexKey: @escaping @Sendable () throws -> BodyIndexKey = BodyIndexKey.fromKeychain, readOnly: Bool = false
+        bodyIndexKey: (@Sendable () throws -> BodyIndexKey)? = nil, readOnly: Bool = false
     ) {
         self.init(
             storeProvider: { store }, automation: automation, settings: settings, approvals: approvals,
@@ -103,7 +104,7 @@ public final class MailToolbox: @unchecked Sendable {
         schedule: ScheduleStore? = ScheduleStore(), pendingRules: PendingRuleStore? = PendingRuleStore(),
         contacts: any ContactsProviding = SystemContacts(),
         bodyIndexURL: URL = SharedPaths.bodyIndex,
-        bodyIndexKey: @escaping @Sendable () throws -> BodyIndexKey = BodyIndexKey.fromKeychain, readOnly: Bool = false
+        bodyIndexKey: (@Sendable () throws -> BodyIndexKey)? = nil, readOnly: Bool = false
     ) {
         self.storeProvider = storeProvider
         self.automation = automation
@@ -115,7 +116,7 @@ public final class MailToolbox: @unchecked Sendable {
         self.pendingRules = pendingRules
         self.contacts = contacts
         self.bodyIndexURL = bodyIndexURL
-        self.bodyIndexKey = bodyIndexKey
+        self.bodyIndexKey = bodyIndexKey ?? BodyIndexKey.provider(forIndexAt: bodyIndexURL)
         self.readOnly = readOnly
     }
 
@@ -171,10 +172,12 @@ public final class MailToolbox: @unchecked Sendable {
             return !askedMailForAddresses
         }
         guard firstAsk else { return }
-        // Only ask Mail when automation is already allowed and Mail is running: never prompt for a read.
-        if let live = automation as? MailAutomation, live.permissionStatus(askIfNeeded: false) == 0,
-           let infos = try? await automation.accounts()
-        {
+        // Only ask Mail when automation is already allowed and Mail is running: never prompt for a read. In the
+        // background: the permission check and Mail's answer can take seconds (Mail busy, a system prompt open),
+        // and the addresses found in Sent mail already cover a read; Mail's list only adds aliases.
+        guard let live = automation as? MailAutomation else { return }
+        Task.detached {
+            guard live.permissionStatus(askIfNeeded: false) == 0, let infos = try? await live.accounts() else { return }
             for info in infos { store.registerOwnAddresses(info.emailAddresses, accountID: info.id) }
         }
     }
@@ -293,18 +296,42 @@ public final class MailToolbox: @unchecked Sendable {
 
     public var definitions: [ToolDefinition] { readTools + trustTools + watchTools + fileTools + changeTools + ruleTools + undoTools + scheduleTools + composeTools + draftTools }
 
-    /// Tools offered to clients (hides write tools in read-only launches).
-    public var listedDefinitions: [ToolDefinition] {
-        readOnly ? definitions.filter { $0.kind == .read || $0.kind == .fileWrite } : definitions
+    /// Tools offered to clients (hides write tools in read-only launches). Built once: every call looks its tool
+    /// up here, and building ~40 definitions with their schemas cost more than many of the calls themselves.
+    public var listedDefinitions: [ToolDefinition] { listed.all }
+
+    private var listed: (all: [ToolDefinition], byName: [String: ToolDefinition]) {
+        if let built = lock.withLock({ _listed }) { return built }
+        let all = readOnly ? definitions.filter { $0.kind == .read || $0.kind == .fileWrite } : definitions
+        let built = (all, Dictionary(all.map { ($0.tool.name, $0) }, uniquingKeysWith: { first, _ in first }))
+        lock.withLock { _listed = built }
+        return built
     }
+
+    /// Reads that take milliseconds, run on the stdio reader thread itself (no other thread to wake); while one
+    /// runs, the next request waits, so the list is explicit. A body search can scan files: it keeps its own task,
+    /// as do every other read, waiting for mail, the index, and every change.
+    public func runsOnReaderThread(_ name: String, arguments: [String: Value]?) -> Bool {
+        guard Self.quickReads.contains(name), listed.byName[name]?.kind == .read else { return false }
+        return name != "search_messages" || arguments?["body"] == nil
+    }
+
+    static let quickReads: Set<String> = [
+        "list_accounts", "list_mailboxes", "inbox_overview", "search_messages", "get_message", "get_messages", "get_thread",
+        "list_attachments", "get_message_source", "list_drafts", "mail_statistics", "top_senders", "awaiting_reply",
+        "needs_response", "list_scheduled",
+    ]
 
     /// Runs a tool and logs it. Errors come back as tool errors, never as protocol failures.
     public func call(_ name: String, arguments: [String: Value]?) async -> CallTool.Result {
         let started = Date()
-        guard let definition = listedDefinitions.first(where: { $0.tool.name == name }) else {
+        Trace.mark("start")
+        defer { Trace.flush(name) }
+        guard let definition = listed.byName[name] else {
             return .init(content: [.text(text: "Unknown tool \(name)", annotations: nil, _meta: nil)], isError: true)
         }
         await refreshOwnAddresses()
+        Trace.mark("addresses")
         Self.debug("\(name): addresses ready after \(Int(Date().timeIntervalSince(started) * 1000)) ms")
         var ok = true
         var text: String
@@ -312,7 +339,9 @@ public final class MailToolbox: @unchecked Sendable {
         var link: String?
         do {
             let reply = try await definition.run(Arguments(arguments))
+            Trace.mark("tool")
             text = reply.json.serialized()
+            Trace.mark("serialize")
             summary = reply.summary
             if let id = reply.messageID { link = (try? store.message(id: id))?.mailLink }
         } catch {

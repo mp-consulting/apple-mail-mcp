@@ -77,7 +77,8 @@ public struct EmailAddress: Codable, Sendable, Hashable {
 public enum FlagColor: Int, Codable, Sendable, CaseIterable {
     case red = 0, orange, yellow, green, blue, purple, gray
 
-    public var name: String { String(describing: self) }
+    /// The case name (a table, not `String(describing:)`: every search result asks).
+    public var name: String { ["red", "orange", "yellow", "green", "blue", "purple", "gray"][rawValue] }
 
     public init?(name: String) {
         let normalized = name.lowercased() == "grey" ? "gray" : name.lowercased()
@@ -90,7 +91,7 @@ public enum FlagColor: Int, Codable, Sendable, CaseIterable {
 public enum MailCategory: Int, Codable, Sendable, CaseIterable {
     case primary = 0, transactions, updates, promotions
 
-    public var name: String { String(describing: self) }
+    public var name: String { ["primary", "transactions", "updates", "promotions"][rawValue] }
 
     public init?(name: String) {
         guard let match = MailCategory.allCases.first(where: { $0.name == name.lowercased() }) else { return nil }
@@ -124,11 +125,16 @@ public struct MessageSummary: Codable, Sendable, Hashable {
     public var category: MailCategory?
 
     /// `message://` link that opens the message in Mail.
-    public var mailLink: String? {
-        guard let messageIDHeader, !messageIDHeader.isEmpty else { return nil }
+    /// Built once: every search result carries a link.
+    private static let linkAllowed: CharacterSet = {
         var allowed = CharacterSet.urlPathAllowed
         allowed.remove(charactersIn: "<>/?#%")
-        let encoded = messageIDHeader.addingPercentEncoding(withAllowedCharacters: allowed) ?? messageIDHeader
+        return allowed
+    }()
+
+    public var mailLink: String? {
+        guard let messageIDHeader, !messageIDHeader.isEmpty else { return nil }
+        let encoded = messageIDHeader.addingPercentEncoding(withAllowedCharacters: Self.linkAllowed) ?? messageIDHeader
         return "message://%3C\(encoded)%3E"
     }
 }
@@ -145,6 +151,8 @@ public struct MessageDetail: Sendable {
     public var attachments: [AttachmentInfo]
     /// False when Mail has not downloaded the body yet (no `.emlx` on disk).
     public var bodyAvailable: Bool
+    /// `textBody` without the quoted reply (`MessageContent.stripQuotedReply`), worked out once per message file.
+    public var textBodyWithoutQuotes: String? = nil
 }
 
 public struct AttachmentInfo: Codable, Sendable, Hashable {

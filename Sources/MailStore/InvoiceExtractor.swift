@@ -374,3 +374,12 @@ final class ResultSlots<T>: @unchecked Sendable {
         set { lock.withLock { storage[index] = newValue } }
     }
 }
+
+/// `transform` applied to every item on all cores (file reads and parsing), results in the items' order.
+public func concurrentMap<T, R>(_ items: [T], _ transform: (T) -> R?) -> [R?] {
+    let results = ResultSlots<R>(count: items.count)
+    withoutActuallyEscaping(transform) { transform in
+        DispatchQueue.concurrentPerform(iterations: items.count) { index in results[index] = transform(items[index]) }
+    }
+    return (0..<items.count).map { results[$0] }
+}

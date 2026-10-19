@@ -14,6 +14,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", exact: "0.12.1"),
+        .package(url: "https://github.com/apple/swift-log.git", from: "1.16.1"),  // the SDK's own; for `Transport`
     ],
     targets: [
         // Read side: Mail's SQLite index, .emlx files, MIME parsing, full-text index.
@@ -33,6 +34,7 @@ let package = Package(
                 "MailStore",
                 "MailAutomation",
                 .product(name: "MCP", package: "swift-sdk"),
+                .product(name: "Logging", package: "swift-log"),
             ]
         ),
         // Synthetic Mail stores for tests and the scale benchmark.

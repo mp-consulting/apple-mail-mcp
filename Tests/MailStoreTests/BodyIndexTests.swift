@@ -33,6 +33,27 @@ final class BodyIndexTests {
         #expect(BodyIndex.queryTerms(for: "  ").isEmpty)
     }
 
+    @Test func testKeyHex() {
+        let key = BodyIndexKey(bytes: Array(0..<16))
+        #expect(key.hex == "000102030405060708090a0b0c0d0e0f")
+        #expect(BodyIndexKey(hex: key.hex) == key)
+        #expect(BodyIndexKey(hex: "000102030405060708090A0B0C0D0E0F") == key)
+        #expect(BodyIndexKey(hex: "0001") == nil)
+        #expect(BodyIndexKey(hex: "zz0102030405060708090a0b0c0d0e0f") == nil)
+    }
+
+    @Test func onlyAnIndexOutsideTheRealOneTakesATestKey() {
+        let environment = ["APPLE_MAIL_MCP_TEST_INDEX_KEY": "000102030405060708090a0b0c0d0e0f"]
+        let real = BodyIndex.defaultURL()
+        #expect(BodyIndexKey.testKey(forIndexAt: real, environment: environment) == nil)
+        // The same place spelled another way is still the real index.
+        let detour = real.deletingLastPathComponent().appending(path: "../apple-mail-mcp/body-index.sqlite")
+        #expect(BodyIndexKey.testKey(forIndexAt: detour, environment: environment) == nil)
+        let elsewhere = FileManager.default.temporaryDirectory.appending(path: "bench/body-index.sqlite")
+        #expect(BodyIndexKey.testKey(forIndexAt: elsewhere, environment: environment) == BodyIndexKey(bytes: Array(0..<16)))
+        #expect(BodyIndexKey.testKey(forIndexAt: elsewhere, environment: [:]) == nil)
+    }
+
     @Test func sipHashMatchesReferenceVector() {
         // Appendix A of the SipHash paper: key 00…0f, message 00…0e.
         let hasher = SipHash24(key: Array(0..<16))

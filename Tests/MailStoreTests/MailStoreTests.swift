@@ -130,6 +130,135 @@ final class MailStoreTests {
         #expect(try store.search(query).total == all.total)
     }
 
+    @Test func indexOnlyCountMatchesTheFullQuery() throws {
+        let (mailboxes, _) = try store.lookupTables()
+        let inboxDeleted = try store.withDB { db in
+            try db.scalarInt("SELECT COUNT(*) FROM messages WHERE mailbox = ? AND deleted != 0", [.int(fixture.inbox)]) ?? 0
+        }
+        #expect(inboxDeleted > 0)  // the subtraction is exercised
+        let f = fixture
+        let cases: [(inout MessageQuery) -> Void] = [
+            { _ in },
+            { $0.includeTrashAndJunk = true },
+            { $0.mailboxIDs = [f.inbox] },
+            { $0.mailboxIDs = [f.inbox, f.archive, f.trash] },
+            { $0.accountIDs = [f.icloud] },
+            { $0.accountIDs = [f.icloud]; $0.includeTrashAndJunk = true },
+            { $0.mailboxIDs = [f.inbox]; $0.dateFrom = f.now.addingTimeInterval(-86_400 * 3) },
+            { $0.dateTo = Date(timeIntervalSince1970: 1_600_000_000) },
+            { $0.mailboxIDs = [999_999] },
+        ]
+        for configure in cases {
+            var query = MessageQuery()
+            configure(&query)
+            let fast = try #require(try store.indexOnlyCount(query, mailboxes: mailboxes))
+            #expect(Int(fast) == (try store.allMatchingIDs(query).ids.count))
+        }
+        var labels = MessageQuery()
+        labels.mailboxIDs = [fixture.gmailInbox]  // a Gmail label: membership is in `labels`, not the index
+        #expect(try store.indexOnlyCount(labels, mailboxes: mailboxes) == nil)
+        var unread = MessageQuery()
+        unread.mailboxIDs = [fixture.inbox]
+        unread.isRead = false
+        #expect(try store.indexOnlyCount(unread, mailboxes: mailboxes) == nil)
+    }
+
+    @Test func inMemoryLookupsMatchLike() throws {
+        let writer = try SQLiteConnection(path: fixture.location.envelopeIndex.path, readOnly: false)
+        try writer.execute("INSERT INTO subjects (subject) VALUES ('Café ÉTÉ report'), ('re: 100% done_now'), ('RE:Upper')")
+        try writer.execute("INSERT INTO addresses (address, comment) VALUES ('zoe@example.test', 'Zoë Zed')")
+        let tables = try #require(store.currentTextLookups())
+        func like(_ table: String, _ condition: String, _ pattern: String) throws -> [Int64] {
+            try store.withDB { db in
+                try db.all("SELECT ROWID FROM \(table) WHERE \(condition) ORDER BY ROWID", [.text(pattern)]) { $0.int(0) }
+            }
+        }
+        for term in ["invoice", "INVOICE", "kick", "é", "É", "ÉTÉ", "café", "100%", "e_n", "_", "%", "re", "x"] {
+            let pattern = SQLiteConnection.likePattern(containing: term)
+            #expect(tables.subjects.ids(containing: term)?.sorted() == (try like("subjects", "subject LIKE ? ESCAPE '\\'", pattern)))
+            #expect(
+                tables.addresses.ids(containing: term)?.sorted()
+                    == (try like("addresses", "address LIKE ?1 ESCAPE '\\' OR comment LIKE ?1 ESCAPE '\\'", pattern)))
+        }
+        for prefix in ["re:", "RE:", "fw:"] {
+            #expect(tables.subjects.ids(startingWith: prefix)?.sorted() == (try like("subjects", "subject LIKE ?", prefix + "%")))
+        }
+        #expect(tables.addresses.ids(containing: "testzo")?.isEmpty == true)  // no match across address and name
+        // The searches agree end to end, through the in-memory path and SQL alike.
+        #expect(subjects(try search { $0.subjectTerms = ["INVOICE"] }) == ["Invoice 42"])
+        #expect(subjects(try search { $0.sender = "CAROL@" }) == ["Invoice 42"])
+    }
+
+    @Test func cappedCacheReadsEachFileOnceWithinItsCap() {
+        let cache = CappedCache<String>(capacity: 10, size: \.utf8.count)
+        var loads = 0
+        #expect(cache.value(path: "1.partial.emlx", load: { () -> String? in loads += 1; return "Hello" }) == "Hello")
+        _ = cache.value(path: "1.partial.emlx", load: { () -> String? in loads += 1; return "changed" })
+        #expect(loads == 1)
+        // The full body arrives under another name: read again.
+        #expect(cache.value(path: "1.emlx", load: { () -> String? in loads += 1; return "Hi" }) == "Hi")
+        // Over the cap (5 + 2 + 7 > 10): the oldest entry makes room, the newer one stays.
+        _ = cache.value(path: "2.emlx", load: { () -> String? in loads += 1; return "World!!" })
+        _ = cache.value(path: "1.emlx", load: { () -> String? in loads += 1; return "Hi" })
+        #expect(loads == 3)
+        _ = cache.value(path: "1.partial.emlx", load: { () -> String? in loads += 1; return "Hello" })
+        #expect(loads == 4)
+        #expect(cache.value(path: "3.emlx", load: { () -> String? in nil }) == nil)
+        #expect(cache.value(path: "big", load: { () -> String? in "far more than ten bytes" }) == "far more than ten bytes")
+    }
+
+    @Test func cachedTotalsFollowMailWrites() throws {
+        var query = MessageQuery()
+        query.mailboxIDs = [fixture.inbox]
+        query.limit = 1  // a full page: the total comes from the count
+        let before = try #require(try store.search(query).total)
+        #expect(try store.search(query).total == before)  // the kept total
+        let writer = try SQLiteConnection(path: fixture.location.envelopeIndex.path, readOnly: false)
+        try writer.execute("UPDATE messages SET deleted = 1 WHERE ROWID = (SELECT MAX(ROWID) FROM messages WHERE mailbox = \(fixture.inbox) AND deleted = 0)")
+        #expect(try store.search(query).total == before - 1)
+    }
+
+    @Test func filteredPagesInOneMailboxMatchTheFullList() throws {
+        var query = MessageQuery()
+        query.mailboxIDs = [fixture.inbox]
+        query.textTerms = ["e"]  // a filter the indexes alone cannot count: the one-walk path
+        let all = try store.allMatchingIDs(query).ids
+        #expect(all.count > 2)
+        for offset in [0, 1, all.count - 1, all.count + 3] {
+            query.limit = 2
+            query.offset = offset
+            let page = try store.search(query)
+            #expect(page.messages.map(\.id) == Array(all.dropFirst(offset).prefix(2)))
+            #expect(page.total == all.count)
+            #expect(page.hasMore == (offset + page.messages.count < all.count))
+        }
+    }
+
+    @Test func keptMatchesFollowTheMailbox() throws {
+        var query = MessageQuery()
+        query.mailboxIDs = [fixture.inbox]
+        query.sender = "example.test"  // an unchanging attribute: the list of matches can be kept
+        query.limit = 1
+        let before = try #require(try store.search(query).total)
+        let writer = try SQLiteConnection(path: fixture.location.envelopeIndex.path, readOnly: false)
+        let inboxRows = "SELECT ROWID FROM messages WHERE mailbox = \(fixture.inbox) AND deleted = 0"
+        // Read state is not part of the match: same total.
+        try writer.execute("UPDATE messages SET read = 1 - read WHERE ROWID IN (\(inboxRows))")
+        #expect(try store.search(query).total == before)
+        // A new message from that sender arrives.
+        let added = try fixture.store.addMessage(FixtureMessage(
+            subject: "Fresh", from: StandardFixture.alice, to: [StandardFixture.me], date: Date(), mailbox: fixture.inbox, body: "x"))
+        #expect(try store.search(query).total == before + 1)
+        #expect(try store.search(query).messages.first?.id == added)
+        // Mail marks it deleted, then removes it.
+        try writer.execute("UPDATE messages SET deleted = 1 WHERE ROWID = \(added)")
+        #expect(try store.search(query).total == before)
+        try writer.execute("UPDATE messages SET deleted = 0 WHERE ROWID = \(added)")
+        #expect(try store.search(query).total == before + 1)
+        try writer.execute("DELETE FROM messages WHERE ROWID = \(added)")
+        #expect(try store.search(query).total == before)
+    }
+
     @Test func summaryFields() throws {
         let invoice = try store.message(id: fixture.ids["invoice"]!)
         #expect(invoice.sender == StandardFixture.carol)

@@ -17,6 +17,38 @@ public struct BodyIndexKey: Sendable, Equatable {
 
     public static func random() -> BodyIndexKey { BodyIndexKey(bytes: KeychainSecret.random(16)) }
 
+    /// The key for an index at `url`. The real index (the default location) always uses the login Keychain's. An
+    /// index elsewhere, which `mail-bench` builds on generated or throwaway data, may use a fixed key from
+    /// `APPLE_MAIL_MCP_TEST_INDEX_KEY` (32 hex digits) instead, so the server it starts reads that index without a
+    /// Keychain prompt. Where the index is decides, not the environment alone: no variable makes the real index
+    /// use a key someone else knows.
+    public static func provider(forIndexAt url: URL) -> @Sendable () throws -> BodyIndexKey {
+        if let key = testKey(forIndexAt: url, environment: ProcessInfo.processInfo.environment) { return { key } }
+        return fromKeychain
+    }
+
+    static func testKey(forIndexAt url: URL, environment: [String: String]) -> BodyIndexKey? {
+        let real = BodyIndex.defaultURL().standardizedFileURL.resolvingSymlinksInPath().path
+        guard url.standardizedFileURL.resolvingSymlinksInPath().path != real,
+            let hex = environment["APPLE_MAIL_MCP_TEST_INDEX_KEY"]
+        else { return nil }
+        return BodyIndexKey(hex: hex)
+    }
+
+    /// 32 hex digits; nil for anything else.
+    public init?(hex: String) {
+        let digits = Array(hex.utf8)
+        guard digits.count == 32 else { return nil }
+        var bytes: [UInt8] = []
+        for index in stride(from: 0, to: 32, by: 2) {
+            guard let byte = UInt8(String(decoding: digits[index..<index + 2], as: UTF8.self), radix: 16) else { return nil }
+            bytes.append(byte)
+        }
+        self.init(bytes: bytes)
+    }
+
+    public var hex: String { bytes.map { String(format: "%02x", $0) }.joined() }
+
     static let service = "apple-mail-mcp.body-index"
     static let account = "token-key"
 

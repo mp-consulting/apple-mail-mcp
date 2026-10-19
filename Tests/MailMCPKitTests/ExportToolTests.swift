@@ -99,6 +99,21 @@ final class ExportToolTests {
         #expect(Render.cleanPreview("Receipt\u{200C}\u{200C} \u{034F} \u{00AD}from\n\nStripe") == "Receipt from Stripe")
     }
 
+    @Test func shortPreviewMatchesCleaningEverything() {
+        let samples = [
+            "", "Short one", String(repeating: "word ", count: 400),
+            String(repeating: "\u{200C}", count: 3000) + "Hidden text after padding",  // the head cleans to nothing
+            String(repeating: "a\u{200C} \n", count: 900), String(repeating: "é", count: 199) + "  x",
+            String(repeating: "👨‍👩‍👧 ", count: 300), "  lead and trail \r\n\t ", "Tab\there\u{2028}line\u{00A0}nbsp\u{3000}ideographic",
+            "Café\u{200B}\u{FEFF}zero\u{2060}width", String(repeating: "x", count: 1000) + "\u{200C}",
+            String(repeating: "a", count: 200), String(repeating: "a", count: 201), String(repeating: "a ", count: 150),
+            String(repeating: "a", count: 200) + "\u{301}bbb", String(repeating: "a", count: 199) + "  \u{301}b",
+        ]
+        for text in samples {
+            #expect(Render.shortPreview(text, 200) == Render.truncate(Render.cleanPreview(text), 200))
+        }
+    }
+
     // MARK: Export
 
     @Test func exportsCSVWithoutRunnableFormulas() async throws {

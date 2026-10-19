@@ -33,11 +33,12 @@ public final class BodyIndex: BodySearchIndex, @unchecked Sendable {
 
     /// Opens (creating if needed) the index at `url`. The key is only fetched when a search or an
     /// update needs it, so reading ``status()`` never touches the Keychain.
-    public init(url: URL = BodyIndex.defaultURL(), key: @escaping @Sendable () throws -> BodyIndexKey = BodyIndexKey.fromKeychain)
+    /// `key`: nil for the one where the index is (see `BodyIndexKey.provider(forIndexAt:)`).
+    public init(url: URL = BodyIndex.defaultURL(), key: (@Sendable () throws -> BodyIndexKey)? = nil)
         throws
     {
         self.url = url
-        keyProvider = key
+        keyProvider = key ?? BodyIndexKey.provider(forIndexAt: url)
         let directory = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         // An older index holds readable text: delete the file rather than its rows, so none of it
@@ -66,7 +67,7 @@ public final class BodyIndex: BodySearchIndex, @unchecked Sendable {
 
     /// Opens the default index only if it already exists (servers never create it implicitly).
     public static func openIfPresent(
-        url: URL = BodyIndex.defaultURL(), key: @escaping @Sendable () throws -> BodyIndexKey = BodyIndexKey.fromKeychain
+        url: URL = BodyIndex.defaultURL(), key: (@Sendable () throws -> BodyIndexKey)? = nil
     ) -> BodyIndex? {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         return try? BodyIndex(url: url, key: key)
@@ -566,11 +567,11 @@ extension MailStore {
     }
 
     public func indexCandidates(ids: [Int64]) throws -> [IndexCandidate] {
-        let json = "[" + ids.map(String.init).joined(separator: ",") + "]"
+        let json = MailStore.idArray(ids)
         return try withDB { db in
             try db.all(
                 "\(Self.candidateSQL) WHERE m.ROWID IN (SELECT value FROM json_each(?)) AND m.deleted = 0",
-                [.text(json)], Self.candidate)
+                [json], Self.candidate)
         }
     }
 

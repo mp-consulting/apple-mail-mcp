@@ -342,16 +342,21 @@ extension MailToolbox {
             let maxChars = try arguments.int("max_chars", default: 3000, in: 0...Int.max)
             let strip = try arguments.bool("strip_quotes") ?? true
             let messages = try store.thread(of: id, limit: 50)
-            let items: [JSON] = messages.map { message in
+            // Each body is its own file to read and parse: all at once, not one after another.
+            // Recipients in one query first: the parallel part then reads only files.
+            let recipients = maxChars > 0 ? try store.recipients(of: messages.map(\.id)) : [:]
+            let details = maxChars > 0 ? concurrentMap(messages) { try? store.detail(of: $0, recipients: recipients[$0.id]) } : []
+            let items: [JSON] = messages.enumerated().map { index, message in
                 var entry: [(String, JSON?)] = [
                     ("id", .int(message.id)), ("date", Render.date(message.dateReceived)),
                     ("from", .string(message.sender.formatted)), ("subject", .string(message.subject)),
                     ("mailbox", .string(message.mailboxPath)),
                 ]
-                if maxChars > 0, let detail = try? store.detail(id: message.id) {
+                if maxChars > 0, let detail = details[index] {
                     entry.append(("to", Render.addresses(detail.to)))
-                    var body = detail.textBody ?? message.preview ?? ""
-                    if strip { body = MessageContent.stripQuotedReply(body) }
+                    let body = strip
+                        ? detail.textBodyWithoutQuotes ?? MessageContent.stripQuotedReply(message.preview ?? "")
+                        : detail.textBody ?? message.preview ?? ""
                     entry.append(("body", .string(Render.truncate(body, maxChars))))
                 }
                 return .obj(entry)

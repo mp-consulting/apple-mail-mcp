@@ -24,6 +24,29 @@ All notable changes to this project are documented here. The format follows
   through the usual tools, so they are checked and undoable; rules that send mail or run AppleScripts, and
   conditions it cannot reproduce exactly, are skipped and listed.
 
+### Changed
+
+- **Every call answers up to 10 ms sooner.** The server reads stdin with a blocking read instead of the MCP SDK's
+  stdio transport, which polled every 10 ms. Simple calls (accounts, mailboxes, a thread) now take under 1–4 ms.
+- **Mailbox listings count from Mail's indexes.** The total of a page limited to whole mailboxes and dates no
+  longer reads every row to skip deleted ones: the newest 20 of a 5,000-message inbox went from 13 ms to 2 ms.
+- **Subject, sender and recipient filters search in memory.** Mail's subjects and addresses are kept in memory
+  (a few MB, caught up as Mail adds rows) instead of scanned with `LIKE` in SQLite, once for the page and again
+  for its total: a subject search over 80,000 messages went from 31 ms to 3 ms. Matching is unchanged.
+- **Tool calls skip the SDK's request decoding.** `tools/call` requests are parsed and answered directly (anything
+  unusual still goes through the SDK), and quick reads run on the thread that read the request (macOS 15 and later).
+  Replies are written as UTF-8 bytes; dates and previews render in one pass.
+- **Repeated searches reuse their work.** A search's matches and total are kept until Mail's database changes, and
+  a filtered search in a mailbox of up to 20,000 messages finds its page and total in one walk; a sender or subject
+  search kept for a mailbox is checked against that mailbox only, so new mail elsewhere does not redo it. Parsed
+  messages and scanned bodies are cached (32 MB at most); `get_thread` reads recipients in one query and its
+  messages in parallel.
+- The body index's test key (`APPLE_MAIL_MCP_TEST_INDEX_KEY`) is honoured only for an index outside the default
+  location, so the real index always uses the Keychain key.
+- `mail-bench compare` runs the same questions against the other Apple Mail MCP servers in the MCP registry
+  (`Scripts/bench-servers.sh` fetches and prepares them), in turns so load hits every server alike, with
+  `--fresh-index` for a throwaway body index. We answer every question fastest or tied ([Benchmarks](README.md#benchmarks)).
+
 ## [0.4.3] - 2026-10-18
 
 ### Changed

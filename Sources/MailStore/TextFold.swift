@@ -42,9 +42,7 @@ public enum TextFold {
         public var isEmpty: Bool { bytes.isEmpty }
 
         public func matches(_ haystack: String) -> Bool {
-            guard !bytes.isEmpty else { return true }
-            let folded = TextFold.fold(haystack)
-            return TextFold.contains(folded, bytes)
+            matches(folded: TextFold.fold(haystack))
         }
     }
 
@@ -57,5 +55,12 @@ public enum TextFold {
                 memmem(h.baseAddress, n, p.baseAddress, m) != nil
             }
         }
+    }
+}
+
+extension TextFold.Pattern {
+    /// `matches` for text already folded.
+    public func matches(folded: [UInt8]) -> Bool {
+        bytes.isEmpty || TextFold.contains(folded, bytes)
     }
 }

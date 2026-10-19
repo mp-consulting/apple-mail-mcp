@@ -48,6 +48,32 @@ public struct MessageQuery: Sendable, Hashable {
     public init() {}
 }
 
+extension MessageQuery {
+    /// Filters on what Mail changes on a message in place: read and flag state, categories, attachments downloaded
+    /// later, the preview text (`text`), the user's own addresses (`direction`). Keep in step with new fields: what
+    /// matches a query free of these changes only when messages arrive, leave or are deleted.
+    var filtersOnChangingState: Bool {
+        isRead != nil || isFlagged != nil || flagColor != nil || hasAttachments != nil || !categories.isEmpty
+            || direction != .any || !Self.blank(text) || !Self.cleaned(textTerms).isEmpty
+    }
+
+    /// Filters on what a message keeps for good: its subject, sender, recipients, reply prefix, body.
+    var filtersOnFixedContent: Bool {
+        !Self.cleaned(subjectTerms).isEmpty || !Self.blank(sender) || !Self.blank(recipient)
+            || !Self.cleaned(excludeSubjectTerms).isEmpty || !Self.cleaned(excludeSenders).isEmpty
+            || !Self.cleaned(excludeSenderAddresses).isEmpty || excludeReplies || !Self.blank(bodyText)
+    }
+
+    /// Picks messages by conversation or ROWID rather than by where they are.
+    var picksMessages: Bool { conversationID != nil || !ids.isEmpty }
+
+    static func blank(_ text: String?) -> Bool { text?.trimmingCharacters(in: .whitespaces).isEmpty ?? true }
+
+    static func cleaned(_ terms: [String]) -> [String] {
+        terms.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
+}
+
 /// Which way a message went, judged by mailbox role and the user's own addresses.
 public enum MessageDirection: String, Sendable, Hashable, CaseIterable {
     /// Everything.

@@ -57,9 +57,35 @@ public enum MailMCPServer {
     /// Runs over stdio until the client disconnects.
     public static func runStdio(toolbox: MailToolbox) async throws {
         let server = await make(toolbox: toolbox)
-        try await server.start(transport: StdioTransport()) { clientInfo, _ in
+        // Tool calls skip the SDK's request decoding (see `ToolCallFastPath`); everything else goes through it.
+        let transport = LineTransport(intercept: { line, transport in
+            guard let call = ToolCallFastPath.call(in: line) else { return false }
+            let respond: @Sendable () async -> Void = {
+                let result = await toolbox.call(call.name, arguments: call.arguments)
+                if let reply = try? ToolCallFastPath.reply(to: call, result: result) { try? transport.write(line: reply) }
+            }
+            if #available(macOS 15.0, *), toolbox.runsOnReaderThread(call.name, arguments: call.arguments) {
+                // A quick read runs right here, on the thread that read the request: no other thread to wake on a
+                // busy Mac. Should it await something, it carries on wherever that resumes.
+                Task(executorPreference: InlineExecutor.shared, priority: .userInitiated) { await respond() }
+            } else {
+                Task(priority: .userInitiated) { await respond() }
+            }
+            return true
+        })
+        try await server.start(transport: transport) { clientInfo, _ in
             toolbox.clientName = clientInfo.title ?? clientInfo.name
         }
         await server.waitUntilCompleted()
+    }
+}
+
+/// Runs each job on the thread that enqueues it (see `runStdio`).
+@available(macOS 15.0, *)
+final class InlineExecutor: TaskExecutor {
+    static let shared = InlineExecutor()
+
+    func enqueue(_ job: consuming ExecutorJob) {
+        job.runSynchronously(on: asUnownedTaskExecutor())
     }
 }

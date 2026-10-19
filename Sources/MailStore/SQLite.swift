@@ -68,6 +68,11 @@ public final class SQLiteConnection {
         }
         handle = db
         sqlite3_busy_timeout(db, 3000)
+        if readOnly {
+            // Read through a memory map and keep more pages: without these every query re-reads its pages with
+            // pread(2). A mapping of the file is shared with the page cache, not a copy.
+            sqlite3_exec(db, "PRAGMA mmap_size = 1073741824; PRAGMA cache_size = -32768", nil, nil, nil)
+        }
     }
 
     deinit {

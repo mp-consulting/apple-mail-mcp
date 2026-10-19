@@ -13,7 +13,7 @@ changes go through Mail with Apple Events.
 | `apple-mail-mcp` | The server and CLI (`serve`, `doctor`, `index`, `call`, `install`, `skills`) |
 | `MailMCPBar` | The menu bar app (SwiftUI): status, approvals, Claude setup, skills, settings, updater |
 | `MailFixtures` | Synthetic Mail stores for tests and benchmarks (same schema and file layout as Mail V10) |
-| `mail-bench` | Benchmarks: `store`, `synthetic`, `compare` (vs the Python server), `demo` (screenshot data) |
+| `mail-bench` | Benchmarks: `store`, `synthetic`, `compare` (vs the other Apple Mail MCP servers; `Scripts/bench-servers.sh`), `demo` (screenshot data) |
 | `Skills/` | The Claude skills, one `SKILL.md` each; embedded into the binary |
 
 ## Commands

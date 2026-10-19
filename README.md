@@ -52,7 +52,7 @@ Apple Mail MCP reads Mail's own database and message files directly, the same da
 talks to Mail to change something (move, flag, draft, send). Searches stay fast on any mailbox size and
 never disturb Mail. See [Benchmarks](#benchmarks).
 
-- **Fast on big mailboxes**: tens of milliseconds for searches, threads and statistics over 80,000+ messages.
+- **Fast on big mailboxes**: a few milliseconds for searches, threads and statistics over 80,000+ messages, faster than every other Apple Mail MCP server we measured ([Benchmarks](#benchmarks)).
 - **Full-text search** of message bodies through a local index, built in about a minute.
 - **Safe by default**: replies and new mail are saved as drafts; with "Ask me first" nothing is sent
   without your click; bulk changes have previews and limits; nothing is ever permanently deleted.
@@ -203,30 +203,38 @@ emails waiting you review them one by one; nothing goes out without a click on *
 
 ## Benchmarks
 
-Measured on an Apple M1 (16 GB) with a real mailbox of 83,600 messages, over MCP stdio like a client sees it.
-Full tables: [Benchmarks/compare-python.md](Benchmarks/compare-python.md),
-[Benchmarks/store-real.md](Benchmarks/store-real.md).
+The same questions to every Apple Mail MCP server in the MCP registry, over MCP stdio like a client sees it, on
+an Apple M1 (16 GB) with a real mailbox (account of 80,467 messages, 1,316 in its inbox). Median of 25 warm runs
+each. The servers that read Mail's files are called in turns, one call each per round, so a change in the
+machine's load hits them all alike. Full tables, with response sizes:
+[Benchmarks/compare-mcp-servers.md](Benchmarks/compare-mcp-servers.md).
 
-| Question (iCloud account, 81,600 messages) | Apple Mail MCP | Python apple-mail-mcp (AppleScript) |
-|---|---:|---:|
-| List accounts | 23 ms | 1.2 s |
-| Unread counts per mailbox | 21 ms | 5.2 s |
-| Latest 20 inbox messages | 34 ms | 4.3 s |
-| Subject search, inbox | 48 ms | 5.0 s |
-| Subject search, all mailboxes | 173 ms | 7.4 s |
-| Sender search, inbox | 42 ms | 54 s |
-| Top senders, 30 days | 16 ms | 39 s |
-| Body text search, inbox | 45 ms | timed out (180 s) |
-| Conversation thread | 56 ms | failed (Mail timed out) |
-| Statistics · awaiting reply · needs response · overview | 38–45 ms | failed (Mail timed out) |
+| Question | Apple Mail MCP | mgcrea 1.28.0 | imdinu 0.5.0 | parasxos 1.8.0 |
+|---|---:|---:|---:|---:|
+| List accounts | 0.6 ms | 0.6 ms | 2.3 ms | – |
+| Unread counts per mailbox | 1.3 ms | 22.8 s¹ | 216 ms | 36 ms |
+| Latest 20 inbox messages | 2.1 ms | 7.54 s | 9.4 ms | 75 ms |
+| Subject search, inbox | 1.4 ms | 25 ms | 12 ms | 105 ms |
+| Subject search, all mailboxes | 2.9 ms | 4.2 ms | 17 ms | 191 ms |
+| Sender search, inbox | 1.9 ms | 2.0 ms | 15 ms | 61 ms |
+| Body text search, inbox | 1.5 ms | 971 ms | 3.0 ms | 96 ms |
+| Conversation thread | 2.1 ms | 22 ms | – | 5.8 ms |
+| Top senders, 30 days | 1.9 ms | 2.2 ms | – | – |
+| Statistics · awaiting reply · needs response · overview | 0.9–8.6 ms | – | – | – |
 
-Median of 3 warm runs (one for Python), over MCP stdio. Without the body index, a body search scans
-recent messages in parallel instead: 0.8 s for 2,000 messages. Building the index for the whole mailbox
-takes about a minute.
+– : the server has no tool for that question. ¹ Mail did not answer within mgcrea's 30 s limit.
 
-Reproduce: `swift build -c release && .build/release/mail-bench compare` (needs `uvx` for the Python
-server), `mail-bench store` for in-process timings on your mail, or `mail-bench synthetic --messages 100000`
-for a generated mailbox that involves no personal data. CI runs the synthetic benchmark on every push.
+The servers that drive Mail with AppleScript (ipsupport-llc 1.6.1, jakobfigur 0.6.2, jayvee6 0.1.0,
+kiki830621 2.0.1, the Python mcp-apple-mail) answer in 0.2 s to over a minute, or time out, and keep Mail busy
+while they do: [Benchmarks/compare-servers.md](Benchmarks/compare-servers.md) (one run each). Without the body
+index, a body search scans recent messages in parallel instead (20 ms here). Building the index for the whole
+mailbox takes about a minute.
+
+Reproduce: `Scripts/bench-servers.sh` fetches and prepares the other servers (pinned versions, release files
+checked against the registry's SHA-256), then runs `mail-bench compare`; `--fresh-index` gives our server a
+throwaway index so no Keychain prompt can hold up the run. `mail-bench store` gives in-process timings on your
+mail, and `mail-bench synthetic --messages 100000` a generated mailbox that involves no personal data. CI runs the
+synthetic benchmark on every push.
 
 ## Command line
 

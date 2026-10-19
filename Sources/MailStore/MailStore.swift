@@ -42,11 +42,34 @@ public final class MailStore: @unchecked Sendable {
 
     private var cachedDataVersion: Int64 = -1
     private var cachedMailboxes: [Int64: Mailbox] = [:]
+    private var sortedMailboxes: [Mailbox] = []
     private var cachedAccounts: [MailAccount] = []
     private var extraAddresses: [String: Set<String>] = [:]
 
+    /// Subjects and addresses in memory for text filters (see `TextLookups`).
+    private let textLookups = TextLookups()
+    /// A second read-only connection for counts (see `countInBackground`); opened on first use.
+    private let countLock = NSLock()
+    /// Lists of matches with the fingerprint of their mailboxes (see `walkMatches`); guarded by `lock`, like `db`.
+    private var keptMatches: [StatementKey: (fingerprint: String, ids: [Int64])] = [:]
+    private var countDB: SQLiteConnection?
+    private var countCache: [StatementKey: Int64] = [:]
+    private var countCacheVersion: Int64 = -1
+
+    /// Message files parsed recently, so reading a thread or a message again skips parsing MIME and HTML.
+    private let parsedMessages = CappedCache<ParsedMessage>(capacity: 32 << 20, size: \.size)
+
+    /// Folded text of messages body searches had to scan (mail the index has not reached, or no index), so the next
+    /// search reads memory instead of reopening the same files.
+    private let scannedText = CappedCache<[UInt8]>(capacity: 32 << 20, size: \.count)
+
     /// Serialises cache rebuilds; the fields below belong to it.
     private let refreshLock = NSLock()
+    private struct ParsedMailboxURL {
+        var url: MailboxURL
+        var role: MailboxRole
+    }
+    private var parsedMailboxURLs: [String: ParsedMailboxURL] = [:]
     private var accountNames: [String: String] = [:]
     private var namedAccountIDs: Set<String>?
     private var detectedAddresses: [String: Set<String>] = [:]
@@ -134,22 +157,28 @@ public final class MailStore: @unchecked Sendable {
         defer { refreshLock.unlock() }
         if isCacheFresh(version) { return }
 
+        // With Mail running this runs on nearly every call, for new counts; a mailbox's URL (and so its name, path
+        // and role) does not change, so each is parsed once.
         var mailboxes: [Int64: Mailbox] = [:]
+        var schemes: [String: String] = [:]
         try withDB { db in
             try db.query("SELECT ROWID, url, total_count, unread_count, source FROM mailboxes") { row in
                 let url = row.string(1)
-                guard let parsed = MailboxURL(url) else { return }
+                let parsed: ParsedMailboxURL
+                if let known = parsedMailboxURLs[url] {
+                    parsed = known
+                } else {
+                    guard let fresh = MailboxURL(url) else { return }
+                    parsed = ParsedMailboxURL(url: fresh, role: MailboxRoleDetector.role(for: fresh))
+                    parsedMailboxURLs[url] = parsed
+                }
                 let id = row.int(0)
                 mailboxes[id] = Mailbox(
-                    id: id, url: url, accountID: parsed.accountID, path: parsed.path, name: parsed.name,
-                    role: MailboxRoleDetector.role(for: parsed),
-                    totalCount: Int(row.int(2)), unreadCount: Int(row.int(3)),
+                    id: id, url: url, accountID: parsed.url.accountID, path: parsed.url.path, name: parsed.url.name,
+                    role: parsed.role, totalCount: Int(row.int(2)), unreadCount: Int(row.int(3)),
                     sourceMailboxID: row.optionalInt(4))
+                schemes[parsed.url.accountID] = parsed.url.scheme
             }
-        }
-        var schemes: [String: String] = [:]
-        for mailbox in mailboxes.values {
-            if let scheme = MailboxURL(mailbox.url)?.scheme { schemes[mailbox.accountID] = scheme }
         }
         let accountIDs = Set(schemes.keys)
         if accountIDs != namedAccountIDs {
@@ -173,11 +202,21 @@ public final class MailStore: @unchecked Sendable {
             return MailAccount(id: id, name: accountNames[id] ?? id, kind: schemes[id] ?? "imap", emailAddresses: addresses.sorted())
         }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 
+        // In listing order, sorted once per reload (lowercasing each path once, not in every comparison).
+        let sorted = mailboxes.values.map { ($0.accountID, $0.path.lowercased(), $0) }
+            .sorted { ($0.0, $0.1) < ($1.0, $1.1) }.map(\.2)
         lock.lock()
         cachedMailboxes = mailboxes
+        sortedMailboxes = sorted
         cachedAccounts = accounts
         cachedDataVersion = version
         lock.unlock()
+    }
+
+    /// Mail's data version as of the last `refreshCachesIfNeeded` (callers refresh first, e.g. via `lookupTables`):
+    /// one PRAGMA per call rather than one per cache. -1 when it is about to be read again.
+    func seenDataVersion() -> Int64 {
+        lock.withLock { cachedDataVersion }
     }
 
     private func isCacheFresh(_ version: Int64) -> Bool {
@@ -234,12 +273,8 @@ public final class MailStore: @unchecked Sendable {
 
     public func mailboxes(accountID: String? = nil) throws -> [Mailbox] {
         try refreshCachesIfNeeded()
-        lock.lock()
-        let all = Array(cachedMailboxes.values)
-        lock.unlock()
-        return all
-            .filter { accountID == nil || $0.accountID == accountID }
-            .sorted { ($0.accountID, $0.path.lowercased()) < ($1.accountID, $1.path.lowercased()) }
+        let all = lock.withLock { sortedMailboxes }
+        return accountID == nil ? all : all.filter { $0.accountID == accountID }
     }
 
     public func mailbox(id: Int64) throws -> Mailbox? {
@@ -352,11 +387,11 @@ public final class MailStore: @unchecked Sendable {
 
     private func messages(ids: [Int64], mailboxes: [Int64: Mailbox], accountNames names: [String: String]) throws -> [MessageSummary] {
         guard !ids.isEmpty else { return [] }
-        let json = "[" + ids.map(String.init).joined(separator: ",") + "]"
+        let json = MailStore.idArray(ids)
         let found = try withDB { db in
             try db.all(
                 "SELECT \(summaryColumns) \(Self.summaryJoins) WHERE m.ROWID IN (SELECT value FROM json_each(?))",
-                [.text(json)]
+                [json]
             ) { summary(from: $0, mailboxes: mailboxes, accountNames: names) }
         }
         let byID = Dictionary(found.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
@@ -370,7 +405,7 @@ public final class MailStore: @unchecked Sendable {
         let (mailboxes, names) = try lookupTables()
         let variants = headers.flatMap { [$0, "<\($0)>"] }
         let headerJSON = Self.jsonArray(variants)
-        let mailboxJSON = "[" + mailboxIDs.map(String.init).joined(separator: ",") + "]"
+        let mailboxJSON = MailStore.idArray(mailboxIDs)
         return try withDB { db in
             try db.all(
                 """
@@ -378,7 +413,7 @@ public final class MailStore: @unchecked Sendable {
                 WHERE m.deleted = 0 AND g.message_id_header IN (SELECT value FROM json_each(?))
                 AND (m.mailbox IN (SELECT value FROM json_each(?))
                      OR m.ROWID IN (SELECT message_id FROM labels WHERE mailbox_id IN (SELECT value FROM json_each(?))))
-                """, [.text(headerJSON), .text(mailboxJSON), .text(mailboxJSON)]
+                """, [.text(headerJSON), mailboxJSON, mailboxJSON]
             ) { summary(from: $0, mailboxes: mailboxes, accountNames: names) }
         }
     }
@@ -398,14 +433,14 @@ public final class MailStore: @unchecked Sendable {
     /// The subset of `ids` still in the mailbox (not deleted, directly or through a label).
     public func present(ids: [Int64], mailboxID: Int64) throws -> Set<Int64> {
         guard !ids.isEmpty else { return [] }
-        let json = "[" + ids.map(String.init).joined(separator: ",") + "]"
+        let json = MailStore.idArray(ids)
         return Set(
             try withDB { db in
                 try db.all(
                     """
                     SELECT m.ROWID FROM messages m WHERE m.ROWID IN (SELECT value FROM json_each(?)) AND m.deleted = 0
                     AND (m.mailbox = ? OR m.ROWID IN (SELECT message_id FROM labels WHERE mailbox_id = ?))
-                    """, [.text(json), .int(mailboxID), .int(mailboxID)]
+                    """, [json, .int(mailboxID), .int(mailboxID)]
                 ) { $0.int(0) }
             })
     }
@@ -415,24 +450,52 @@ public final class MailStore: @unchecked Sendable {
         return found
     }
 
-    /// Builds the WHERE clause shared by search and counting.
+    /// The WHERE clause for a search's page (`sql`) and for counting its matches (`countSQL`), built in one pass:
+    /// they share their bindings and the in-memory text lookups, and differ only in planner hints.
     ///
-    /// `forCount`: the clause is for COUNT(*), which reads every match. Walking the (deleted, date_received)
-    /// index only pays off for a short page in date order; a count is cheaper through the text filter's
-    /// own index (sender, recipients) or a plain table scan, so `+` takes that index and the default
-    /// mailbox list out of the planner's choice. Bindings are the same either way.
+    /// For the count: walking the (deleted, date_received) index only pays off for a short page in date order; a
+    /// count is cheaper through the text filter's own index (sender, recipients) or a plain table scan, so `+`
+    /// takes that index and the default mailbox list out of the planner's choice.
+    struct WhereClause {
+        var sql: String
+        var countSQL: String
+        var bindings: [SQLValue]
+    }
+
+    /// Mailboxes holding up to this many messages are walked, testing each row, rather than reached through a
+    /// text filter's index (see `whereClauses`).
+    static let walkScopeLimit = 20_000
+
+    /// How many messages the query's mailboxes hold; nil when it is not limited to mailboxes.
+    static func scopeSize(of query: MessageQuery, mailboxes: [Int64: Mailbox]) -> Int? {
+        query.mailboxIDs.isEmpty ? nil : query.mailboxIDs.reduce(0) { $0 + (mailboxes[$1]?.totalCount ?? 0) }
+    }
+
+    /// The page's clause alone, or the count's (see `whereClauses`).
     func whereClause(for query: MessageQuery, mailboxes: [Int64: Mailbox], forCount: Bool = false) -> (String, [SQLValue]) {
+        let clause = whereClauses(for: query, mailboxes: mailboxes)
+        return (forCount ? clause.countSQL : clause.sql, clause.bindings)
+    }
+
+    func whereClauses(for query: MessageQuery, mailboxes: [Int64: Mailbox]) -> WhereClause {
         // With a mailbox, conversation or id scope, `+` keeps SQLite off the (deleted, date_received)
         // index, which otherwise wins and walks every message instead of the scope's own index.
-        let scoped = !query.mailboxIDs.isEmpty || query.conversationID != nil || !query.ids.isEmpty
-        // A date range is what (deleted, date_received) is for: keep it available then.
-        let countHint = forCount && query.dateFrom == nil && query.dateTo == nil
-        var clauses = [scoped || countHint ? "+m.deleted = 0" : "m.deleted = 0"]
+        let scoped = !query.mailboxIDs.isEmpty || query.picksMessages
+        // A few mailboxes (an inbox) hold fewer messages than a busy sender or subject has across the account: walk
+        // the mailbox's own index and test each row, rather than gather that sender's every message and sort them.
+        // `+` keeps SQLite (and the statistics Mail keeps for it) off the sender and subject indexes then.
+        let walk = (Self.scopeSize(of: query, mailboxes: mailboxes) ?? .max) <= Self.walkScopeLimit ? "+" : ""
+        // A date range is what (deleted, date_received) is for: keep it available to the count then.
+        let countHint = query.dateFrom == nil && query.dateTo == nil
+        var clauses: [String] = []
         var bindings: [SQLValue] = []
+        // The two clauses that differ between page and count; the rest are shared.
+        let deletedClause = (page: scoped ? "+m.deleted = 0" : "m.deleted = 0", count: scoped || countHint ? "+m.deleted = 0" : "m.deleted = 0")
+        var mailboxClause: (page: String, count: String)?
 
         if !query.ids.isEmpty {
             clauses.append("m.ROWID IN (SELECT value FROM json_each(?))")
-            bindings.append(.text("[" + query.ids.map(String.init).joined(separator: ",") + "]"))
+            bindings.append(Self.idArray(query.ids))
         }
         if !query.mailboxIDs.isEmpty {
             let selected = query.mailboxIDs.compactMap { mailboxes[$0] }
@@ -452,48 +515,65 @@ public final class MailStore: @unchecked Sendable {
             if !query.accountIDs.isEmpty { allowed = allowed.filter { query.accountIDs.contains($0.accountID) } }
             if !query.includeTrashAndJunk { allowed = allowed.filter { $0.role != .trash && $0.role != .junk } }
             if !query.accountIDs.isEmpty || !query.includeTrashAndJunk {
-                clauses.append("\(countHint ? "+" : "")m.mailbox IN (\(allowed.map { String($0.id) }.joined(separator: ",")))")
+                let list = allowed.map { String($0.id) }.joined(separator: ",")
+                mailboxClause = ("m.mailbox IN (\(list))", "\(countHint ? "+" : "")m.mailbox IN (\(list))")
                 if allowed.isEmpty { clauses.append("0") }
             }
         }
-        // Text filters match the small lookup tables first, then use the messages indexes
-        // (subject, sender, recipients_address) instead of joining every message.
-        let addressesLike = "SELECT ROWID FROM addresses WHERE address LIKE ? ESCAPE '\\' OR comment LIKE ? ESCAPE '\\'"
-        let textTerms = Self.cleaned(([query.text].compactMap { $0 }) + query.textTerms)
-        if !textTerms.isEmpty {
-            // Any term in the subject, the sender or Mail's preview: one lookup per table for all terms.
-            let patterns = textTerms.map { SQLValue.text(SQLiteConnection.likePattern(containing: $0)) }
-            let subjects = Self.repeated("subject LIKE ? ESCAPE '\\'", textTerms.count)
-            let senders = Self.repeated("address LIKE ? ESCAPE '\\' OR comment LIKE ? ESCAPE '\\'", textTerms.count)
-            let summaries = Self.repeated("summary LIKE ? ESCAPE '\\'", textTerms.count)
-            clauses.append(
-                """
-                (m.subject IN (SELECT ROWID FROM subjects WHERE \(subjects)) \
-                OR m.sender IN (SELECT ROWID FROM addresses WHERE \(senders)) \
-                OR m.summary IN (SELECT ROWID FROM summaries WHERE \(summaries)))
-                """)
-            bindings += patterns + patterns.flatMap { [$0, $0] } + patterns
+        // Text filters match the small lookup tables first, then use the messages indexes (subject, sender,
+        // recipients_address) instead of joining every message. The tables are searched in memory when possible
+        // (loaded on first use), and the matching ROWIDs go in as a list; else SQLite's LIKE does it.
+        var loadedLookups: (subjects: TextLookupTable, addresses: TextLookupTable, generation: Int)??
+        func lookups() -> (subjects: TextLookupTable, addresses: TextLookupTable, generation: Int)? {
+            if loadedLookups == nil { loadedLookups = .some(currentTextLookups()) }
+            return loadedLookups!
         }
-        let excludedSubjects = Self.cleaned(query.excludeSubjectTerms)
-        if !excludedSubjects.isEmpty {
-            clauses.append(
-                "m.subject NOT IN (SELECT ROWID FROM subjects WHERE \(Self.repeated("subject LIKE ? ESCAPE '\\'", excludedSubjects.count)))")
-            bindings += excludedSubjects.map { .text(SQLiteConnection.likePattern(containing: $0)) }
-        }
-        let excludedSenders = Self.cleaned(query.excludeSenders)
-        if !excludedSenders.isEmpty {
-            // IFNULL: a message without a sender row is not excluded (NOT IN NULL would drop it).
-            clauses.append(
-                """
-                IFNULL(m.sender, 0) NOT IN (SELECT ROWID FROM addresses WHERE \
-                \(Self.repeated("address LIKE ? ESCAPE '\\' OR comment LIKE ? ESCAPE '\\'", excludedSenders.count)))
-                """)
-            bindings += excludedSenders.flatMap { term -> [SQLValue] in
-                let pattern = SQLValue.text(SQLiteConnection.likePattern(containing: term))
-                return [pattern, pattern]
+        /// `SELECT …` of the subject or address ROWIDs matching any of `terms`, and its bindings.
+        func matching(_ table: LookupTableName, _ terms: [String]) -> (sql: String, bindings: [SQLValue]) {
+            if let loaded = lookups(),
+                let ids = textLookups.matches("\(table)\u{0}" + terms.joined(separator: "\u{0}"), generation: loaded.generation, compute: {
+                    let rows = table == .subjects ? loaded.subjects : loaded.addresses
+                    return Self.union(terms.map { rows.ids(containing: $0) })
+                })
+            {
+                return ("SELECT value FROM json_each(?)", [Self.idArray(ids)])
+            }
+            let patterns = terms.map { SQLValue.text(SQLiteConnection.likePattern(containing: $0)) }
+            switch table {
+            case .subjects:
+                return ("SELECT ROWID FROM subjects WHERE \(Self.repeated("subject LIKE ? ESCAPE '\\'", terms.count))", patterns)
+            case .addresses:
+                return (
+                    "SELECT ROWID FROM addresses WHERE \(Self.repeated("address LIKE ? ESCAPE '\\' OR comment LIKE ? ESCAPE '\\'", terms.count))",
+                    patterns.flatMap { [$0, $0] })
             }
         }
-        var excludedAddresses = Set(Self.cleaned(query.excludeSenderAddresses).map { $0.lowercased() })
+        let textTerms = MessageQuery.cleaned(([query.text].compactMap { $0 }) + query.textTerms)
+        if !textTerms.isEmpty {
+            // Any term in the subject, the sender or Mail's preview snippet.
+            let subjects = matching(.subjects, textTerms)
+            let senders = matching(.addresses, textTerms)
+            clauses.append(
+                """
+                (m.subject IN (\(subjects.sql)) OR m.sender IN (\(senders.sql)) \
+                OR m.summary IN (SELECT ROWID FROM summaries WHERE \(Self.repeated("summary LIKE ? ESCAPE '\\'", textTerms.count))))
+                """)
+            bindings += subjects.bindings + senders.bindings + textTerms.map { .text(SQLiteConnection.likePattern(containing: $0)) }
+        }
+        let excludedSubjects = MessageQuery.cleaned(query.excludeSubjectTerms)
+        if !excludedSubjects.isEmpty {
+            let subjects = matching(.subjects, excludedSubjects)
+            clauses.append("m.subject NOT IN (\(subjects.sql))")
+            bindings += subjects.bindings
+        }
+        let excludedSenders = MessageQuery.cleaned(query.excludeSenders)
+        if !excludedSenders.isEmpty {
+            // IFNULL: a message without a sender row is not excluded (NOT IN NULL would drop it).
+            let senders = matching(.addresses, excludedSenders)
+            clauses.append("IFNULL(m.sender, 0) NOT IN (\(senders.sql))")
+            bindings += senders.bindings
+        }
+        var excludedAddresses = Set(MessageQuery.cleaned(query.excludeSenderAddresses).map { $0.lowercased() })
         switch query.direction {
         case .any: break
         case .received:
@@ -521,24 +601,33 @@ public final class MailStore: @unchecked Sendable {
             // Mail moves "Re: " into subject_prefix; older rows may keep it in the subject itself.
             let prefixes = Self.replyPrefixes
             let prefixGlobs = prefixes.map { "lower(ltrim(IFNULL(m.subject_prefix, ''))) GLOB '\($0):*'" }.joined(separator: " OR ")
-            let subjectLikes = prefixes.map { "subject LIKE '\($0):%'" }.joined(separator: " OR ")
-            clauses.append("NOT (\(prefixGlobs)) AND m.subject NOT IN (SELECT ROWID FROM subjects WHERE \(subjectLikes))")
+            if let table = lookups(),
+                let ids = textLookups.matches("replies", generation: table.generation, compute: {
+                    Self.union(prefixes.map { table.subjects.ids(startingWith: "\($0):") })
+                })
+            {
+                clauses.append("NOT (\(prefixGlobs)) AND m.subject NOT IN (SELECT value FROM json_each(?))")
+                bindings.append(Self.idArray(ids))
+            } else {
+                let subjectLikes = prefixes.map { "subject LIKE '\($0):%'" }.joined(separator: " OR ")
+                clauses.append("NOT (\(prefixGlobs)) AND m.subject NOT IN (SELECT ROWID FROM subjects WHERE \(subjectLikes))")
+            }
         }
-        let terms = query.subjectTerms.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        if !terms.isEmpty {
-            let likes = terms.map { _ in "subject LIKE ? ESCAPE '\\'" }.joined(separator: " OR ")
-            clauses.append("m.subject IN (SELECT ROWID FROM subjects WHERE \(likes))")
-            bindings += terms.map { .text(SQLiteConnection.likePattern(containing: $0)) }
+        let subjectTerms = MessageQuery.cleaned(query.subjectTerms)
+        if !subjectTerms.isEmpty {
+            let subjects = matching(.subjects, subjectTerms)
+            clauses.append("\(walk)m.subject IN (\(subjects.sql))")
+            bindings += subjects.bindings
         }
-        if let sender = query.sender?.trimmingCharacters(in: .whitespaces), !sender.isEmpty {
-            clauses.append("m.sender IN (\(addressesLike))")
-            let pattern = SQLiteConnection.likePattern(containing: sender)
-            bindings += [.text(pattern), .text(pattern)]
+        if !MessageQuery.blank(query.sender) {
+            let senders = matching(.addresses, MessageQuery.cleaned([query.sender ?? ""]))
+            clauses.append("\(walk)m.sender IN (\(senders.sql))")
+            bindings += senders.bindings
         }
-        if let recipient = query.recipient?.trimmingCharacters(in: .whitespaces), !recipient.isEmpty {
-            clauses.append("m.ROWID IN (SELECT message FROM recipients WHERE address IN (\(addressesLike)))")
-            let pattern = SQLiteConnection.likePattern(containing: recipient)
-            bindings += [.text(pattern), .text(pattern)]
+        if !MessageQuery.blank(query.recipient) {
+            let addresses = matching(.addresses, MessageQuery.cleaned([query.recipient ?? ""]))
+            clauses.append("m.ROWID IN (SELECT message FROM recipients WHERE address IN (\(addresses.sql)))")
+            bindings += addresses.bindings
         }
         if let from = query.dateFrom {
             clauses.append("m.date_received >= ?")
@@ -570,15 +659,50 @@ public final class MailStore: @unchecked Sendable {
             clauses.append("m.conversation_id = ?")
             bindings.append(.int(conversation))
         }
-        return (clauses.joined(separator: " AND "), bindings)
+        // The page's and the count's own clauses go first, where they always were.
+        func joined(_ deleted: String, _ mailbox: String?) -> String {
+            ([deleted] + (mailbox.map { [$0] } ?? []) + clauses).joined(separator: " AND ")
+        }
+        return WhereClause(
+            sql: joined(deletedClause.page, mailboxClause?.page), countSQL: joined(deletedClause.count, mailboxClause?.count),
+            bindings: bindings)
     }
+
+    /// Mail's lookup tables that text filters match first.
+    enum LookupTableName: CustomStringConvertible {
+        case subjects, addresses
+        var description: String { self == .subjects ? "s" : "a" }
+    }
+
+    /// The in-memory subjects and addresses, caught up with Mail; nil when they cannot be read (SQL then).
+    /// Outside `withDB`, like `whereClause`.
+    func currentTextLookups() -> (subjects: TextLookupTable, addresses: TextLookupTable, generation: Int)? {
+        try? textLookups.current(
+            dataVersion: seenDataVersion(),
+            rows: { sql, columns, add in
+                try withDB { db in try db.query(sql) { row in add(row.int(0), (1...columns).map { row.string($0) }) } }
+            },
+            counts: {
+                try withDB { db in
+                    (Int(try db.scalarInt("SELECT COUNT(*) FROM subjects") ?? 0), Int(try db.scalarInt("SELECT COUNT(*) FROM addresses") ?? 0))
+                }
+            })
+    }
+
+    /// Union of per-term matches; nil when any term could not be matched in memory.
+    static func union(_ matches: [[Int64]?]) -> [Int64]? {
+        var all = Set<Int64>()
+        for match in matches {
+            guard let match else { return nil }
+            all.formUnion(match)
+        }
+        return all.sorted()
+    }
+
+    static func idArray(_ ids: [Int64]) -> SQLValue { .text("[" + ids.map(String.init).joined(separator: ",") + "]") }
 
     /// Reply prefixes in the languages Mail users commonly see (constants, safe to inline in SQL).
     static let replyPrefixes = ["re", "aw", "sv", "vs", "antw", "rif", "r", "res", "odp", "atb"]
-
-    static func cleaned(_ terms: [String]) -> [String] {
-        terms.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-    }
 
     static func repeated(_ condition: String, _ count: Int) -> String {
         Array(repeating: "(\(condition))", count: count).joined(separator: " OR ")
@@ -618,15 +742,32 @@ public final class MailStore: @unchecked Sendable {
 
     /// Searches envelopes in SQLite; body text goes through `bodyIndex` when
     /// given, with a bounded, parallel `.emlx` scan for anything the index has not covered yet.
-    public func search(_ query: MessageQuery, bodyIndex: (any BodySearchIndex)? = nil) throws -> SearchPage {
+    /// `needsTotal` false (a thread): no count of the matches beyond the page, and `total` is then nil.
+    public func search(_ query: MessageQuery, bodyIndex: (any BodySearchIndex)? = nil, needsTotal: Bool = true) throws -> SearchPage {
         let (mailboxes, names) = try lookupTables()
-        let (whereSQL, bindings) = whereClause(for: query, mailboxes: mailboxes)
+        let clause = whereClauses(for: query, mailboxes: mailboxes)
+        let (whereSQL, bindings) = (clause.sql, clause.bindings)
+        let scopeSize = Self.scopeSize(of: query, mailboxes: mailboxes)
         let direction = query.sortAscending ? "ASC" : "DESC"
         let order = "ORDER BY m.date_received \(direction), m.ROWID \(direction)"
         let limit = max(1, min(query.limit, 500))
         let offset = max(0, query.offset)
 
         guard let bodyText = query.bodyText?.trimmingCharacters(in: .whitespaces), !bodyText.isEmpty else {
+            // A filter in a few mailboxes (a sender in the inbox): counting reads every row of those mailboxes anyway,
+            // so one walk returns all the matches, the page is a slice of them and the total is their number. A
+            // separate page query and count would read the same rows twice, on two connections, and Mail's writes
+            // make each re-read its pages.
+            if needsTotal, (scopeSize ?? .max) <= Self.walkScopeLimit, indexOnlyCountStatement(query, mailboxes: mailboxes) == nil {
+                let allIDs = try walkMatches(query, mailboxes: mailboxes, whereSQL: whereSQL, bindings: bindings, order: order)
+                let pageIDs = Array(allIDs.dropFirst(offset).prefix(limit))
+                return SearchPage(
+                    messages: try messages(ids: pageIDs, mailboxes: mailboxes, accountNames: names), total: allIDs.count,
+                    offset: offset, limit: limit, hasMore: offset + pageIDs.count < allIDs.count, bodySearchMode: nil,
+                    scanLimited: false, scannedMessages: 0)
+            }
+            // The total, on the second connection meanwhile; a short page gives it anyway (then unused).
+            let pendingTotal = needsTotal ? countInBackground(countStatement(query, mailboxes: mailboxes, clause: clause)) : nil
             // Page ids first, then envelopes for just those: when the scope spans several mailboxes
             // SQLite sorts every matching row, and sorting bare ids is far cheaper than full envelopes.
             let pageIDs = try withDB { db in
@@ -637,14 +778,21 @@ public final class MailStore: @unchecked Sendable {
             }
             let rows = try messages(ids: pageIDs, mailboxes: mailboxes, accountNames: names)
             // A short page that started inside the results already gives the total.
-            let total = !pageIDs.isEmpty && pageIDs.count < limit || offset == 0 && pageIDs.isEmpty
-                ? Int64(offset + pageIDs.count)
-                : try count(query, mailboxes: mailboxes, bindings: bindings)
+            let short = !pageIDs.isEmpty && pageIDs.count < limit || offset == 0 && pageIDs.isEmpty
+            let total = short ? Int64(offset + pageIDs.count) : try pendingTotal?.wait()
             return SearchPage(
-                messages: rows, total: Int(total), offset: offset, limit: limit,
-                hasMore: offset + pageIDs.count < Int(total), bodySearchMode: nil, scanLimited: false, scannedMessages: 0)
+                messages: rows, total: total.map(Int.init), offset: offset, limit: limit,
+                hasMore: total.map { offset + pageIDs.count < Int($0) } ?? (pageIDs.count == limit), bodySearchMode: nil,
+                scanLimited: false, scannedMessages: 0)
         }
 
+        if let bodyIndex,
+            let page = try indexedBodyPage(
+                bodyText, whereSQL: whereSQL, bindings: bindings, order: order, limit: limit, offset: offset,
+                mailboxes: mailboxes, accountNames: names, bodyIndex: bodyIndex, scopeSize: scopeSize)
+        {
+            return page
+        }
         // Body search: indexed matches, plus a scan of whatever the index has not covered yet.
         // Without an index, stop once the page is full: the total is then unknown.
         let found = try bodyMatches(
@@ -659,12 +807,149 @@ public final class MailStore: @unchecked Sendable {
             scanLimited: found.scanLimited, scannedMessages: found.scanned)
     }
 
-    /// Matches of `query`. Built outside `withDB`: `whereClause` may read the account cache under `lock`.
-    private func count(_ query: MessageQuery, mailboxes: [Int64: Mailbox], bindings: [SQLValue]) throws -> Int64 {
-        let countSQL = whereClause(for: query, mailboxes: mailboxes, forCount: true).0
-        return try withDB { db in
-            try db.scalarInt("SELECT COUNT(*) \(Self.minimalJoins(for: countSQL)) WHERE \(countSQL)", bindings) ?? 0
+    /// A body search the index fully covers (no message in scope arrived after it was last updated): the page and
+    /// its total straight from SQL, instead of loading and sorting every match. nil when part of the scope is
+    /// not indexed yet; `bodyMatches` then scans that part.
+    private func indexedBodyPage(
+        _ bodyText: String, whereSQL: String, bindings: [SQLValue], order: String, limit: Int, offset: Int,
+        mailboxes: [Int64: Mailbox], accountNames names: [String: String], bodyIndex: any BodySearchIndex, scopeSize: Int?
+    ) throws -> SearchPage? {
+        let covered = try bodyIndex.coveredThrough()
+        let joins = Self.minimalJoins(for: whereSQL)
+        let unindexed = try withDB { db in
+            try db.scalarInt("SELECT EXISTS(SELECT 1 \(joins) WHERE \(whereSQL) AND m.ROWID > ?)", bindings + [.int(covered)])
         }
+        guard unindexed == 0 else { return nil }
+        let matches = try bodyIndex.matchingIDs(for: bodyText, limit: 200_000)
+        // Few messages in scope (one mailbox) against many matches: walk the scope and check each against the
+        // matches (`+` keeps SQLite from looking up every match by ROWID instead).
+        let walkScope = scopeSize.map { $0 < matches.count } ?? false
+        let scoped = whereSQL + " AND \(walkScope ? "+" : "")m.ROWID IN (SELECT value FROM json_each(?))"
+        let scopedBindings = bindings + [Self.idArray(matches)]
+        let pageIDs = matches.isEmpty ? [] : try withDB { db in
+            try db.all(
+                "SELECT m.ROWID \(joins) WHERE \(scoped) \(order) LIMIT ? OFFSET ?",
+                scopedBindings + [.int(Int64(limit)), .int(Int64(offset))]) { $0.int(0) }
+        }
+        let total = matches.isEmpty || !pageIDs.isEmpty && pageIDs.count < limit || offset == 0 && pageIDs.isEmpty
+            ? offset + pageIDs.count
+            : Int(try withDB { db in try db.scalarInt("SELECT COUNT(*) \(joins) WHERE \(scoped)", scopedBindings) ?? 0 })
+        return SearchPage(
+            messages: try messages(ids: pageIDs, mailboxes: mailboxes, accountNames: names), total: total, offset: offset,
+            limit: limit, hasMore: offset + pageIDs.count < total, bodySearchMode: "index", scanLimited: false, scannedMessages: 0)
+    }
+
+    /// Every match of a filtered search in a few mailboxes, in order. The list is kept while those mailboxes hold
+    /// the same messages: a filter on what Mail never changes in place (which mailbox, sender, subject, recipients,
+    /// date; a moved message gets a new ROWID) gives the same matches then, whatever else Mail wrote (read and flag
+    /// state, mostly). The mailboxes' fingerprint, count and sum of ROWIDs of their rows and of their deleted rows,
+    /// comes from indexes alone. Filters on state that does change in place, and labels, always walk.
+    private func walkMatches(
+        _ query: MessageQuery, mailboxes: [Int64: Mailbox], whereSQL: String, bindings: [SQLValue], order: String
+    ) throws -> [Int64] {
+        let walk = "SELECT m.ROWID \(Self.minimalJoins(for: whereSQL)) WHERE \(whereSQL) \(order)"
+        let selected = query.mailboxIDs.compactMap { mailboxes[$0] }
+        let keepable = !query.filtersOnChangingState && !query.picksMessages
+            && !selected.isEmpty && selected.allSatisfy { $0.sourceMailboxID == nil }
+        guard keepable else { return try withDB { db in try db.all(walk, bindings) { $0.int(0) } } }
+        let list = selected.map { String($0.id) }.joined(separator: ",")
+        let key = StatementKey(sql: walk, bindings: bindings)
+        return try withDB { db in
+            let fingerprint = try db.all(
+                """
+                SELECT (SELECT COUNT(*) || ':' || TOTAL(ROWID) FROM messages WHERE mailbox IN (\(list))) || '/'
+                || (SELECT COUNT(*) || ':' || TOTAL(ROWID) FROM messages WHERE (deleted > 0 OR deleted < 0) AND +mailbox IN (\(list)))
+                """) { $0.string(0) }.first ?? ""
+            if let kept = keptMatches[key], kept.fingerprint == fingerprint { return kept.ids }
+            let ids = try db.all(walk, bindings) { $0.int(0) }
+            if keptMatches.count >= 32 { keptMatches.removeAll() }
+            keptMatches[key] = (fingerprint, ids)
+            return ids
+        }
+    }
+
+    /// The statement counting the matches of `query`, whose clauses are `clause`.
+    private func countStatement(_ query: MessageQuery, mailboxes: [Int64: Mailbox], clause: WhereClause) -> (String, [SQLValue]) {
+        if let fast = indexOnlyCountStatement(query, mailboxes: mailboxes) { return fast }
+        return ("SELECT COUNT(*) \(Self.minimalJoins(for: clause.countSQL)) WHERE \(clause.countSQL)", clause.bindings)
+    }
+
+    /// Runs `sql` on a second read-only connection, so a count can go on while the page is read on the first.
+    /// Mail's index is in WAL mode: the two readers do not block each other.
+    /// Totals are also kept until Mail next writes to its index (`PRAGMA data_version`): the next page of the
+    /// same search, or the same question again, needs no count.
+    private func countInBackground(_ statement: (sql: String, bindings: [SQLValue])) -> PendingCount {
+        let (sql, bindings) = statement
+        let pending = PendingCount()
+        let version = seenDataVersion()
+        let key = StatementKey(sql: sql, bindings: bindings)
+        if version >= 0, let known = countLock.withLock({ countCacheVersion == version ? countCache[key] : nil }) {
+            pending.finish(.success(known))
+            return pending
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            pending.finish(Result {
+                try self.countLock.withLock {
+                    if self.countDB == nil {
+                        self.countDB = try SQLiteConnection(path: self.location.envelopeIndex.path, readOnly: true)
+                    }
+                    let total = try self.countDB!.scalarInt(sql, bindings) ?? 0
+                    if version >= 0 {
+                        if self.countCacheVersion != version || self.countCache.count >= 64 { self.countCache.removeAll() }
+                        self.countCacheVersion = version
+                        self.countCache[key] = total
+                    }
+                    return total
+                }
+            })
+        }
+        return pending
+    }
+
+    /// The count of a query that only picks whole mailboxes and a date range (a mailbox listing, an overview),
+    /// from the indexes alone; nil for any other query. `deleted = 0` is not in the (mailbox, date_received)
+    /// index, so filtering on it reads every row; instead count the index, then take off the few rows Mail has
+    /// marked deleted, found through (deleted, date_received). Same number, no table reads.
+    /// (Tests check it against the full query; searches use `indexOnlyCountStatement`.)
+    func indexOnlyCount(_ query: MessageQuery, mailboxes: [Int64: Mailbox]) throws -> Int64? {
+        guard let (sql, bindings) = indexOnlyCountStatement(query, mailboxes: mailboxes) else { return nil }
+        return try withDB { try $0.scalarInt(sql, bindings) ?? 0 }
+    }
+
+    /// The statement behind `indexOnlyCount`; nil when the query is not one it can count.
+    func indexOnlyCountStatement(_ query: MessageQuery, mailboxes: [Int64: Mailbox]) -> (String, [SQLValue])? {
+        guard !query.filtersOnChangingState, !query.filtersOnFixedContent, !query.picksMessages else { return nil }
+
+        var mailboxIDs: [Int64]?  // nil: every mailbox
+        if !query.mailboxIDs.isEmpty {
+            let selected = query.mailboxIDs.compactMap { mailboxes[$0] }
+            if selected.contains(where: { $0.sourceMailboxID != nil }) { return nil }  // labels: rows in `labels`
+            mailboxIDs = selected.map(\.id)
+        } else if !query.accountIDs.isEmpty || !query.includeTrashAndJunk {
+            var allowed = mailboxes.values.filter { $0.sourceMailboxID == nil }
+            if !query.accountIDs.isEmpty { allowed = allowed.filter { query.accountIDs.contains($0.accountID) } }
+            if !query.includeTrashAndJunk { allowed = allowed.filter { $0.role != .trash && $0.role != .junk } }
+            mailboxIDs = allowed.map(\.id)
+        }
+        if mailboxIDs?.isEmpty == true { return ("SELECT 0", []) }
+
+        var dates = ""
+        var dateBindings: [SQLValue] = []
+        if let from = query.dateFrom {
+            dates += " AND date_received >= ?"
+            dateBindings.append(.int(Int64(from.timeIntervalSince1970)))
+        }
+        if let to = query.dateTo {
+            dates += " AND date_received <= ?"
+            dateBindings.append(.int(Int64(to.timeIntervalSince1970)))
+        }
+        guard let mailboxIDs else { return ("SELECT COUNT(*) FROM messages WHERE deleted = 0\(dates)", dateBindings) }
+        let list = mailboxIDs.map(String.init).joined(separator: ",")
+        return (
+            """
+            SELECT (SELECT COUNT(*) FROM messages WHERE mailbox IN (\(list))\(dates))
+            - (SELECT COUNT(*) FROM messages WHERE (deleted > 0 OR deleted < 0) AND +mailbox IN (\(list))\(dates))
+            """, dateBindings + dateBindings)
     }
 
     /// Every message matching `query`, in its sort order, up to `cap` (exports, grouping). Body text is
@@ -712,8 +997,10 @@ public final class MailStore: @unchecked Sendable {
             covered = try bodyIndex.coveredThrough()
             let matches = try bodyIndex.matchingIDs(for: bodyText, limit: 200_000)
             mode = "index"
-            whereSQL += " AND (m.ROWID IN (SELECT value FROM json_each(?)) OR m.ROWID > ?)"
-            bindings.append(.text("[" + matches.map(String.init).joined(separator: ",") + "]"))
+            // One list (the matches, then everything newer than the index) rather than `IN … OR ROWID > ?`,
+            // which no index serves: SQLite looks up just those rows instead of walking the whole scope.
+            whereSQL += " AND m.ROWID IN (SELECT value FROM json_each(?) UNION ALL SELECT ROWID FROM messages WHERE ROWID > ?)"
+            bindings.append(Self.idArray(matches))
             bindings.append(.int(covered))
         }
         let candidates = try withDB { db in
@@ -768,12 +1055,12 @@ public final class MailStore: @unchecked Sendable {
     /// Attachment names per message, from Mail's index (no message files read).
     public func attachmentNames(ids: [Int64]) throws -> [Int64: [String]] {
         guard !ids.isEmpty else { return [:] }
-        let json = "[" + ids.map(String.init).joined(separator: ",") + "]"
+        let json = MailStore.idArray(ids)
         var names: [Int64: [String]] = [:]
         try withDB { db in
             try db.query(
                 "SELECT message, name FROM attachments WHERE message IN (SELECT value FROM json_each(?)) ORDER BY message, ROWID",
-                [.text(json)]
+                [json]
             ) { row in
                 let name = row.string(1)
                 if !name.isEmpty { names[row.int(0), default: []].append(name) }
@@ -831,10 +1118,11 @@ public final class MailStore: @unchecked Sendable {
             let (id, mailboxID) = chunk[index]
             guard let mailbox = mailboxes[mailboxID], let url = MailboxURL(mailbox.url),
                   let file = files.emlxURL(rowID: id, mailbox: url),
-                  let emlx = try? EmlxFile(url: file)
+                  let folded = scannedText.value(path: file.path, load: {
+                      (try? EmlxFile(url: file)).map { TextFold.fold(MessageContent.searchableText(MIME.parse($0.message), maxCharacters: .max)) }
+                  })
             else { return }
-            let text = MessageContent.searchableText(MIME.parse(emlx.message), maxCharacters: .max)
-            results.set(index, pattern.matches(text))
+            results.set(index, pattern.matches(folded: folded))
         }
         return results.values
     }
@@ -843,8 +1131,16 @@ public final class MailStore: @unchecked Sendable {
 
     /// Locates the `.emlx` for a message (in its own mailbox).
     public func emlxURL(for summary: MessageSummary) throws -> URL? {
-        guard let mailbox = try mailbox(id: summary.mailboxID), let url = MailboxURL(mailbox.url) else { return nil }
-        return files.emlxURL(rowID: summary.id, mailbox: url)
+        try messageFile(for: summary)?.file
+    }
+
+    /// The message's mailbox and `.emlx`, if downloaded. The mailbox comes from the table already loaded when it is
+    /// there, so a thread read in parallel does not queue on the lock.
+    private func messageFile(for summary: MessageSummary) throws -> (mailbox: MailboxURL, file: URL)? {
+        guard let mailbox = try lock.withLock({ cachedMailboxes[summary.mailboxID] }) ?? mailbox(id: summary.mailboxID),
+            let url = MailboxURL(mailbox.url), let file = files.emlxURL(rowID: summary.id, mailbox: url)
+        else { return nil }
+        return (url, file)
     }
 
     /// Raw RFC 822 source of a message.
@@ -856,34 +1152,34 @@ public final class MailStore: @unchecked Sendable {
 
     /// Envelope plus parsed body, recipients and attachment list.
     public func detail(id: Int64) throws -> MessageDetail {
-        let summary = try message(id: id)
-        let (to, cc) = try recipients(of: id)
-        guard let url = try emlxURL(for: summary) else {
+        try detail(of: message(id: id))
+    }
+
+    /// `detail` for an envelope already in hand (a thread's messages, with their recipients fetched together).
+    public func detail(
+        of summary: MessageSummary, recipients known: (to: [EmailAddress], cc: [EmailAddress])? = nil
+    ) throws -> MessageDetail {
+        let id = summary.id
+        let (to, cc) = try known ?? recipients(of: id)
+        guard let (mailboxURL, url) = try messageFile(for: summary) else {
             return MessageDetail(
                 summary: summary, to: to, cc: cc, replyTo: [], headers: [], textBody: nil, htmlBody: nil,
                 attachments: try attachmentNamesFromIndex(id), bodyAvailable: false)
         }
-        let emlx = try EmlxFile(url: url)
-        let root = MIME.parse(emlx.message)
-        let bodies = MessageContent.bodies(root)
-        let mailboxURL = try mailbox(id: summary.mailboxID).flatMap { MailboxURL($0.url) }
-        let attachments = root.leaves.filter(\.isAttachment).map { part in
-            let onDisk = part.hasInlineData
-                || (mailboxURL.flatMap { files.attachmentFile(rowID: id, mailbox: $0, partID: part.partID) } != nil)
-            let size = part.appleContentLength ?? (part.hasInlineData ? part.decodedSize : nil)
-            return AttachmentInfo(
-                partID: part.partID, filename: part.filename ?? "part-\(part.partID)", mimeType: part.contentType,
-                size: size, isDownloaded: onDisk)
+        let content = try parsedMessages.value(path: url.path) { try ParsedMessage(emlx: EmlxFile(url: url)) }
+        // Whether an attachment is on disk can change (Mail downloads it later): checked each time.
+        let attachments = content.attachments.map { part in
+            AttachmentInfo(
+                partID: part.partID, filename: part.filename, mimeType: part.mimeType, size: part.size,
+                isDownloaded: part.inline || files.attachmentFile(rowID: id, mailbox: mailboxURL, partID: part.partID) != nil)
         }
-        let headerTo = MIME.parseAddressList(root.headers["To"])
-        let headerCc = MIME.parseAddressList(root.headers["Cc"])
         return MessageDetail(
             summary: summary,
-            to: headerTo.isEmpty ? to : headerTo,
-            cc: headerCc.isEmpty ? cc : headerCc,
-            replyTo: MIME.parseAddressList(root.headers["Reply-To"]),
-            headers: root.headers.fields.map { ($0.name, MIME.decodeEncodedWords($0.value)) },
-            textBody: bodies.text, htmlBody: bodies.html, attachments: attachments, bodyAvailable: true)
+            to: content.to.isEmpty ? to : content.to,
+            cc: content.cc.isEmpty ? cc : content.cc,
+            replyTo: content.replyTo, headers: content.headers,
+            textBody: content.text, htmlBody: content.html, attachments: attachments, bodyAvailable: true,
+            textBodyWithoutQuotes: content.textWithoutQuotes)
     }
 
     private func attachmentNamesFromIndex(_ id: Int64) throws -> [AttachmentInfo] {
@@ -898,20 +1194,25 @@ public final class MailStore: @unchecked Sendable {
 
     /// To and Cc recipients from the index (type 0 = To, 1 = Cc, 2 = Bcc).
     public func recipients(of id: Int64) throws -> (to: [EmailAddress], cc: [EmailAddress]) {
-        var to: [EmailAddress] = []
-        var cc: [EmailAddress] = []
+        try recipients(of: [id])[id] ?? ([], [])
+    }
+
+    /// `recipients(of:)` for several messages in one query (a thread, before its bodies are read in parallel).
+    public func recipients(of ids: [Int64]) throws -> [Int64: (to: [EmailAddress], cc: [EmailAddress])] {
+        var found: [Int64: (to: [EmailAddress], cc: [EmailAddress])] = [:]
+        for id in ids { found[id] = ([], []) }
         try withDB { db in
             try db.query(
                 """
-                SELECT r.type, a.address, a.comment FROM recipients r JOIN addresses a ON a.ROWID = r.address
-                WHERE r.message = ? ORDER BY r.type, r.position
-                """, [.int(id)]
+                SELECT r.message, r.type, a.address, a.comment FROM recipients r JOIN addresses a ON a.ROWID = r.address
+                WHERE r.message IN (SELECT value FROM json_each(?)) ORDER BY r.message, r.type, r.position
+                """, [Self.idArray(ids)]
             ) { row in
-                let address = EmailAddress(address: row.string(1), name: row.optionalString(2))
-                if row.int(0) == 0 { to.append(address) } else if row.int(0) == 1 { cc.append(address) }
+                let address = EmailAddress(address: row.string(2), name: row.optionalString(3))
+                if row.int(1) == 0 { found[row.int(0)]?.to.append(address) } else if row.int(1) == 1 { found[row.int(0)]?.cc.append(address) }
             }
         }
-        return (to, cc)
+        return found
     }
 
     /// Bytes of one attachment, by part ID or filename.
@@ -945,7 +1246,7 @@ public final class MailStore: @unchecked Sendable {
         query.includeTrashAndJunk = true
         query.sortAscending = true
         query.limit = 500
-        let page = try search(query)
+        let page = try search(query, needsTotal: false)
         var seen = Set<String>()
         var out: [MessageSummary] = []
         for message in page.messages {
@@ -974,4 +1275,69 @@ final class BoolSlots: @unchecked Sendable {
         defer { lock.unlock() }
         return storage
     }
+}
+
+/// A count running on another thread; `wait` blocks until it is done.
+final class PendingCount: @unchecked Sendable {
+    private let done = DispatchSemaphore(value: 0)
+    private var result: Result<Int64, Error>?
+
+    func finish(_ result: Result<Int64, Error>) {
+        self.result = result
+        done.signal()
+    }
+
+    func wait() throws -> Int64 {
+        done.wait()
+        done.signal()  // later waits return at once
+        return try result!.get()
+    }
+}
+
+/// What `detail` takes from a message file: everything but the envelope and whether attachments are on disk.
+struct ParsedMessage: Sendable {
+    struct Part: Sendable {
+        var partID: String
+        var filename: String
+        var mimeType: String
+        var size: Int?
+        var inline: Bool
+    }
+
+    var to: [EmailAddress]
+    var cc: [EmailAddress]
+    var replyTo: [EmailAddress]
+    var headers: [(name: String, value: String)]
+    var text: String?
+    var textWithoutQuotes: String?
+    var html: String?
+    var attachments: [Part]
+
+    init(emlx: EmlxFile) {
+        let root = MIME.parse(emlx.message)
+        let bodies = MessageContent.bodies(root)
+        to = MIME.parseAddressList(root.headers["To"])
+        cc = MIME.parseAddressList(root.headers["Cc"])
+        replyTo = MIME.parseAddressList(root.headers["Reply-To"])
+        headers = root.headers.fields.map { ($0.name, MIME.decodeEncodedWords($0.value)) }
+        text = bodies.text
+        textWithoutQuotes = bodies.text.map(MessageContent.stripQuotedReply)
+        html = bodies.html
+        attachments = root.leaves.filter(\.isAttachment).map { part in
+            Part(
+                partID: part.partID, filename: part.filename ?? "part-\(part.partID)", mimeType: part.contentType,
+                size: part.appleContentLength ?? (part.hasInlineData ? part.decodedSize : nil), inline: part.hasInlineData)
+        }
+    }
+
+    var size: Int {
+        [text, textWithoutQuotes, html].reduce(0) { $0 + ($1?.utf8.count ?? 0) } + headers.reduce(0) { $0 + $1.value.utf8.count }
+    }
+}
+
+
+/// A statement and its bindings, as a cache key.
+struct StatementKey: Hashable {
+    var sql: String
+    var bindings: [SQLValue]
 }

@@ -344,3 +344,93 @@ struct FullDiskAccessNoticeTests {
         #expect(ActivityEntry.appName(inFullDiskAccessMessage: "macOS hasn't given Full Disk Access to apple-mail-mcp, this server") == "apple-mail-mcp")
     }
 }
+
+@Suite("Tool call fast path")
+struct ToolCallFastPathTests {
+    func line(_ json: String) -> Data { Data(json.utf8) }
+
+    @Test func readsArgumentsAsTheSDKDoes() throws {
+        let call = try #require(ToolCallFastPath.call(in: line(
+            #"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"search_messages","arguments":{"#
+                + #""subject":"invoice","limit":20,"days":1.5,"unread":true,"ids":[1,2],"opts":{"a":null}}}}"#)))
+        #expect(call.name == "search_messages")
+        #expect(String(decoding: call.id, as: UTF8.self) == "7")
+        // The SDK's own decoding of the same arguments.
+        let viaSDK = try JSONDecoder().decode(
+            [String: Value].self, from: line(#"{"subject":"invoice","limit":20,"days":1.5,"unread":true,"ids":[1,2],"opts":{"a":null}}"#))
+        #expect(call.arguments == viaSDK)
+        let noArguments = try #require(ToolCallFastPath.call(in: line(
+            #"{"jsonrpc":"2.0","id":"abc","method":"tools/call","params":{"name":"list_accounts"}}"#)))
+        #expect(noArguments.arguments == nil && String(decoding: noArguments.id, as: UTF8.self) == #""abc""#)
+    }
+
+    @Test func leavesEverythingElseToTheSDK() {
+        for json in [
+            #"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+            #"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":3,"reason":"tools/call"}}"#,
+            #"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"x","arguments":{"file":"data:text/plain;base64,aGk="}}}"#,
+            #"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"x","arguments":[1]}}"#,
+            #"{"jsonrpc":"2.0","method":"tools/call","params":{"name":"x"}}"#,
+            "not json tools/call",
+        ] {
+            #expect(ToolCallFastPath.call(in: line(json)) == nil, "\(json)")
+        }
+    }
+
+    @Test func replyIsWhatTheSDKSends() throws {
+        let call = try #require(ToolCallFastPath.call(in: line(
+            #"{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"list_accounts"}}"#)))
+        let result = CallTool.Result(content: [.text(text: #"{"accounts":["Work"]}"#, annotations: nil, _meta: nil)], isError: true)
+        let reply = try ToolCallFastPath.reply(to: call, result: result)
+        let decoded = try JSONDecoder().decode(Response<CallTool>.self, from: reply)
+        #expect(decoded.id == .number(42))
+        let value = try decoded.result.get()
+        #expect(value.isError == true)
+        guard case .text(let text, _, _) = value.content.first else { Issue.record("no text"); return }
+        #expect(text == #"{"accounts":["Work"]}"#)
+    }
+
+    @Test func transportPassesOtherLinesOn() async throws {
+        let input = Pipe()
+        let output = Pipe()
+        let transport = LineTransport(
+            input: input.fileHandleForReading.fileDescriptor, output: output.fileHandleForWriting.fileDescriptor,
+            intercept: { line, _ in ToolCallFastPath.call(in: line) != nil })
+        try await transport.connect()
+        input.fileHandleForWriting.write(Data(
+            (#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_accounts"}}"# + "\n"
+                + #"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"# + "\n").utf8))
+        try input.fileHandleForWriting.close()
+        var received: [String] = []
+        for try await message in transport.receive() { received.append(String(decoding: message, as: UTF8.self)) }
+        #expect(received == [#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#])
+    }
+}
+
+@Suite("Fast rendering")
+struct FastRenderingTests {
+    @Test func compactJSONMatchesTheReferenceWriter() {
+        let strings = [
+            "", "plain", "quote \" and backslash \\", "new\nline\r\ttab", "\u{0}\u{1}\u{1F}control", "é 👨‍👩‍👧 中文",
+            "\u{2028}\u{2029}", String(repeating: "x\"", count: 300),
+        ]
+        let value = JSON.obj([
+            ("strings", .array(strings.map { .string($0) })),
+            ("numbers", .array([.int(0), .int(-42), .int(Int64.max), .double(1.5), .double(.infinity)])),
+            ("flags", .array([.bool(true), .bool(false), .null])),
+            ("empty", .array([])), ("nothing", .object([])),
+            ("nested", .obj([("a \"key\"", .obj([("b", .string("c"))]))])),
+        ])
+        #expect(value.serialized() == value.reference(pretty: false))
+        #expect(value.serialized(pretty: true) == value.reference(pretty: true))
+    }
+
+    @Test func datesMatchTheFormatter() {
+        var date = Date(timeIntervalSince1970: -86_400 * 400)
+        for _ in 0..<2_000 {
+            #expect(Render.isoDate(date) == Render.dateFormatter.string(from: date))
+            // Weeks apart, all times of day, across summer-time changes; whole seconds, as Mail stores them.
+            date.addTimeInterval(86_400 * 7 + 3_217)
+        }
+    }
+}

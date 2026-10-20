@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-20
+
 ### Fixed
 
 - **Bulk trash could take the wrong message.** On busy IMAP mailboxes, `trash_messages` sometimes trashed the
@@ -340,7 +342,8 @@ First release.
   and a reply or forward waiting for approval links to the original.
 - Skills in the Claude tab are listed by their Claude Code slash command (`/mail-triage`…); click to copy.
 
-[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.4.3...v0.5.0

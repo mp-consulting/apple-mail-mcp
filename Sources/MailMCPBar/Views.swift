@@ -186,7 +186,16 @@ struct MailTab: View {
     @Bindable var model: AgentModel
 
     var body: some View {
-        if let release = model.updater.availableRelease {
+        if let release = model.updater.installingRelease {
+            let progress = model.updater.installProgress
+            Row(
+                systemImage: "arrow.down.circle.fill", iconColor: .accentColor,
+                title: "Updating to version \(release.version.description)", detail: progress?.step ?? "Starting…")
+            {
+                ProgressView(value: progress?.fraction ?? 0).frame(width: 110)
+                    .accessibilityLabel("Update progress")
+            }
+        } else if let release = model.updater.availableRelease {
             Row(
                 systemImage: "arrow.down.circle.fill", iconColor: .accentColor,
                 title: "Version \(release.version.description) is available",
@@ -722,7 +731,9 @@ struct SettingsView: View {
                     case .checking: ProgressView().controlSize(.small)
                     case .upToDate: Text("Up to date").foregroundStyle(.secondary)
                     case .available(let release): Text("\(release.version.description) available").foregroundStyle(.tint)
-                    case .installing: Text("Installing…").foregroundStyle(.secondary)
+                    case .installing:
+                        ProgressView(value: model.updater.installProgress?.fraction ?? 0).frame(width: 120)
+                            .help(model.updater.installProgress?.step ?? "Installing…")
                     case .failed(let message): Text(message).foregroundStyle(.red).lineLimit(2)
                     case .idle: EmptyView()
                     }

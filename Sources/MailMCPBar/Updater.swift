@@ -19,7 +19,15 @@ import Security
         case failed(String)
     }
 
+    /// Where an install is, for the progress bar: a step and how far along the whole install is (0…1).
+    struct InstallProgress: Equatable, Sendable {
+        var step: String
+        var fraction: Double
+    }
+
     private(set) var state: State = .idle
+    /// Set while `state` is `.installing`.
+    private(set) var installProgress: InstallProgress?
     /// Off for development builds: without the team's signature there is no safe way to replace them.
     let isEnabled: Bool
     let currentVersion: AppVersion?
@@ -41,6 +49,10 @@ import Security
 
     var availableRelease: Release? {
         if case let .available(release) = state { release } else { nil }
+    }
+
+    var installingRelease: Release? {
+        if case let .installing(release) = state { release } else { nil }
     }
 
     /// Checks now if a day has passed, then looks again every hour (a Mac that slept through the
@@ -114,10 +126,20 @@ import Security
     func install(_ release: Release) async {
         guard installBlocker == nil else { return }
         state = .installing(release)
+        installProgress = InstallProgress(step: "Starting the download…", fraction: 0)
+        // Reports arrive from the download's threads; a late one never moves the bar back.
+        let report: @Sendable (InstallProgress) -> Void = { [weak self] progress in
+            Task { @MainActor in
+                guard let self, let current = self.installProgress, progress.fraction >= current.fraction else { return }
+                self.installProgress = progress
+            }
+        }
         do {
-            try await Self.installUpdate(release, over: Bundle.main.bundleURL)
+            try await Self.installUpdate(release, over: Bundle.main.bundleURL, report: report)
+            installProgress = InstallProgress(step: "Relaunching…", fraction: 1)
             relaunch()
         } catch {
+            installProgress = nil
             state = .failed("Couldn't install Apple Mail MCP \(release.version): \(error.localizedDescription)")
         }
     }
@@ -129,29 +151,44 @@ import Security
         init(_ message: String) { errorDescription = message }
     }
 
-    private nonisolated static func installUpdate(_ release: Release, over app: URL) async throws {
+    /// The download is most of the time an install takes: it fills the bar up to here, the checks and the copy the rest.
+    private nonisolated static let downloadShare = 0.8
+
+    private nonisolated static func installUpdate(
+        _ release: Release, over app: URL, report: @escaping @Sendable (InstallProgress) -> Void
+    ) async throws {
         let files = FileManager.default
         // On the app's volume, so the final swap is a rename rather than a copy. Resolved, because
         // diskutil only knows a mount point by its real path (/private/var/…, not /var/…).
         let work = realPath(try files.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: app, create: true))
         defer { try? files.removeItem(at: work) }
 
-        let (download, response) = try await URLSession.shared.download(from: release.diskImageURL)
+        let observer = DownloadObserver { received, expected in
+            let sizes = ByteCountFormatter.string(fromByteCount: received, countStyle: .file)
+                + (expected > 0 ? " of " + ByteCountFormatter.string(fromByteCount: expected, countStyle: .file) : "")
+            let share = expected > 0 ? Double(received) / Double(expected) : 0
+            report(InstallProgress(step: "Downloading \(sizes)…", fraction: downloadShare * min(share, 1)))
+        }
+        let (download, response) = try await URLSession.shared.download(from: release.diskImageURL, delegate: observer)
         try expectOK(response)
         let image = work.appending(path: "AppleMailMCP.dmg")
         try files.moveItem(at: download, to: image)
+        report(InstallProgress(step: "Checking the download's signature…", fraction: 0.82))
         guard satisfies(image, diskImageRequirement) else {
             throw InstallError("the download isn't a notarized disk image signed by Apple Mail MCP's developer.")
         }
 
         let mountPoint = work.appending(path: "image")
+        report(InstallProgress(step: "Opening the disk image…", fraction: 0.86))
         try run("/usr/sbin/diskutil", "image", "attach", "--mountOptions", "nobrowse", "--readOnly",
                 "--mountPoint", mountPoint.path, image.path)
         defer { eject(mountPoint) }
 
         // Checked after the copy: what gets installed is this copy, not what was on the image.
         let staged = work.appending(path: appName)
+        report(InstallProgress(step: "Copying the new version…", fraction: 0.88))
         try files.copyItem(at: mountPoint.appending(path: appName), to: staged)
+        report(InstallProgress(step: "Checking the app's signature…", fraction: 0.93))
         guard satisfies(staged, appRequirement, flags: [.checkNestedCode]) else {
             throw InstallError("the app in the download isn't signed by Apple Mail MCP's developer.")
         }
@@ -160,6 +197,7 @@ import Security
               version == release.version
         else { throw InstallError("the download holds a different version than the release.") }
 
+        report(InstallProgress(step: "Installing…", fraction: 0.97))
         _ = try files.replaceItemAt(app, withItemAt: staged)
     }
 
@@ -216,6 +254,35 @@ import Security
         else { return false }
         let checks = flags.union([.checkAllArchitectures, .strictValidate])
         return SecStaticCodeCheckValidity(code, checks, compiled) == errSecSuccess
+    }
+}
+
+/// Bytes received by the update's download, from the task the async `download` creates. Reports only when the
+/// percentage moves, not for every chunk.
+private final class DownloadObserver: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let report: @Sendable (Int64, Int64) -> Void
+    private let lock = NSLock()
+    private var observation: NSKeyValueObservation?
+    private var reportedPercent = -1
+
+    init(report: @escaping @Sendable (Int64, Int64) -> Void) {
+        self.report = report
+    }
+
+    func urlSession(_ session: URLSession, didCreateTask task: URLSessionTask) {
+        let observation = task.observe(\.countOfBytesReceived) { [weak self] task, _ in
+            self?.received(task.countOfBytesReceived, of: task.countOfBytesExpectedToReceive)
+        }
+        lock.withLock { self.observation = observation }
+    }
+
+    private func received(_ bytes: Int64, of expected: Int64) {
+        let percent = expected > 0 ? Int(bytes * 100 / expected) : Int(bytes >> 20)
+        let changed = lock.withLock {
+            defer { reportedPercent = max(reportedPercent, percent) }
+            return percent > reportedPercent
+        }
+        if changed { report(bytes, expected) }
     }
 }
 

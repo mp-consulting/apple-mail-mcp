@@ -76,7 +76,7 @@ func machineDescription() -> String {
     sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0)
     var buffer = [CChar](repeating: 0, count: max(size, 1))
     sysctlbyname("machdep.cpu.brand_string", &buffer, &size, nil, 0)
-    let cpu = String(cString: buffer)
+    let cpu = String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
     let memory = ProcessInfo.processInfo.physicalMemory / 1_073_741_824
     let os = ProcessInfo.processInfo.operatingSystemVersionString
     var load = [Double](repeating: 0, count: 3)

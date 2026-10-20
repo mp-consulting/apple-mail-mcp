@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-20
+
 ### Changed
 
 - **The server moved into its own bundle**, `Apple Mail MCP.app/Contents/Helpers/Apple Mail MCP Server.app`.
@@ -305,7 +307,8 @@ First release.
   and a reply or forward waiting for approval links to the original.
 - Skills in the Claude tab are listed by their Claude Code slash command (`/mail-triage`…); click to copy.
 
-[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.4.2...v0.4.3

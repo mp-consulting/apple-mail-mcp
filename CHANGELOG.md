@@ -6,6 +6,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **The server moved into its own bundle**, `Apple Mail MCP.app/Contents/Helpers/Apple Mail MCP Server.app`.
+  The menu bar app moves Claude Code's and the Claude app's settings to the new path (keeping arguments such as
+  `--read-only`); other MCP clients set up with `…/Contents/MacOS/apple-mail-mcp` need the new path.
+- **Keys in the data protection Keychain.** The body index key and the approval signing key now live under the
+  team's Keychain access group, shared by the app and its server through a provisioning profile, instead of the
+  login Keychain with an access list built by deprecated APIs. Existing keys are copied over on first use, so
+  the index and pending approvals carry on. The Claude extension and development builds keep using the login
+  Keychain.
+- The update install shows a progress bar: the download, then each check and step.
+
+### Fixed
+
+- Build warnings: `concurrentMap` takes a `@Sendable` transform; `mail-bench` reads the CPU name without the
+  deprecated `String(cString:)` on an array.
+
 ## [0.5.1] - 2026-10-20
 
 ### Changed

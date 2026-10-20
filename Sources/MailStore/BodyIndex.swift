@@ -129,6 +129,13 @@ public final class BodyIndex: BodySearchIndex, @unchecked Sendable {
         return tokens
     }
 
+    /// Whether the index was built with the key the Keychain holds now; nil when the key is unavailable or nothing
+    /// was indexed yet. Unlike a search, it never clears an index built with another key.
+    public func builtWithCurrentKey() -> Bool? {
+        guard let key = try? keyProvider(), let stored = try? metaInt("key_check") else { return nil }
+        return stored == Int64(bitPattern: Tokens(key: key).check)
+    }
+
     /// Whether the key is available, so searches can use the index (otherwise they scan).
     public var isUnlocked: Bool { (try? tokens()) != nil }
 

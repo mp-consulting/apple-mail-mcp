@@ -4,7 +4,7 @@ import MailStore
 
 /// Signs what the user approved, so a decision or a scheduled send counts only when the menu bar app or a
 /// server of this bundle wrote it. Approvals and schedules are plain files that any process running as the
-/// user can edit; without the key, from the login Keychain, it cannot produce a valid signature.
+/// user can edit; without the key, from the Keychain, it cannot produce a valid signature.
 public struct SigningKey: Sendable {
     let key: SymmetricKey
 
@@ -13,10 +13,10 @@ public struct SigningKey: Sendable {
         key = SymmetricKey(data: bytes)
     }
 
-    static let service = "apple-mail-mcp.approvals"
-    static let account = "signing-key"
+    public static let service = "apple-mail-mcp.approvals"
+    public static let account = "signing-key"
 
-    /// Reads the key from the login Keychain, creating it on first use (trusting the menu bar app and the server).
+    /// Reads the key from the Keychain, creating it on first use (see `KeychainSecret`).
     public static func fromKeychain() throws -> SigningKey {
         do {
             return SigningKey(bytes: try KeychainSecret.load(

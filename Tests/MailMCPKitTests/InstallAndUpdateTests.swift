@@ -59,8 +59,11 @@ struct ClientInstallerTests {
 
     func installer() -> ClientInstaller {
         // A non-existent CLI path forces the JSON route for Claude Code.
-        ClientInstaller(serverPath: "/Applications/Apple Mail MCP.app/Contents/MacOS/apple-mail-mcp", home: home, claudeCLI: "/nonexistent/claude")
+        ClientInstaller(serverPath: Self.serverPath, home: home, claudeCLI: "/nonexistent/claude")
     }
+
+    static let serverPath = "/Applications/Apple Mail MCP.app/Contents/Helpers/Apple Mail MCP Server.app/Contents/MacOS/apple-mail-mcp"
+    static let formerPath = "/Applications/Apple Mail MCP.app/Contents/MacOS/apple-mail-mcp"
 
     var desktopConfig: URL { home.appending(path: "Library/Application Support/Claude/claude_desktop_config.json") }
 
@@ -73,6 +76,26 @@ struct ClientInstallerTests {
         if let enabled {
             try Data(#"{"isEnabled":\#(enabled)}"#.utf8).write(to: support.appending(path: "Claude Extensions Settings/\(id).json"))
         }
+    }
+
+    @Test func repointsClientsSetUpWithTheFormerServerPath() throws {
+        defer { try? FileManager.default.removeItem(at: home) }
+        try FileManager.default.createDirectory(at: desktopConfig.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let desktop = #"{"mcpServers":{"apple-mail":{"command":"\#(Self.formerPath)","args":["--read-only"]},"other":{"command":"x"}}}"#
+        try Data(desktop.utf8).write(to: desktopConfig)
+        let code = #"{"mcpServers":{"apple-mail":{"type":"stdio","command":"/opt/homebrew/bin/apple-mail-mcp"}}}"#
+        try Data(code.utf8).write(to: home.appending(path: ".claude.json"))
+
+        #expect(installer().repointFormerServerPath() == [.claudeDesktop])
+        let root = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: desktopConfig)) as? [String: Any])
+        let servers = try #require(root["mcpServers"] as? [String: Any])
+        let entry = try #require(servers["apple-mail"] as? [String: Any])
+        #expect(entry["command"] as? String == Self.serverPath)
+        #expect(entry["args"] as? [String] == ["--read-only"])
+        #expect((servers["other"] as? [String: Any])?["command"] as? String == "x")
+        // A command the user chose (Homebrew's link) is left alone; so is a path that is already current.
+        #expect(installer().repointFormerServerPath().isEmpty)
+        #expect(ClientInstaller(serverPath: "/usr/local/bin/apple-mail-mcp", home: home).repointFormerServerPath().isEmpty)
     }
 
     @Test func noticesTheServerSetUpTwiceInTheClaudeApp() throws {
@@ -135,7 +158,7 @@ struct ClientInstallerTests {
         let cli = home.appending(path: "claude")
         try Data([0, 1, 2, 3]).write(to: cli)  // "executable", but not a program
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: cli.path)
-        let installer = ClientInstaller(serverPath: "/Applications/Apple Mail MCP.app/Contents/MacOS/apple-mail-mcp", home: home, claudeCLI: cli.path)
+        let installer = ClientInstaller(serverPath: Self.serverPath, home: home, claudeCLI: cli.path)
         #expect(installer.locateClaudeCLI() == cli.path)
         try installer.install(.claudeCode)
         #expect(installer.status(.claudeCode) == .installed)

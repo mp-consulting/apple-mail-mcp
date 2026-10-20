@@ -93,11 +93,14 @@ Then:
 From a terminal, the same setup is:
 
 ```sh
-"/Applications/Apple Mail MCP.app/Contents/MacOS/apple-mail-mcp" install        # Claude Code and the Claude app
-"/Applications/Apple Mail MCP.app/Contents/MacOS/apple-mail-mcp" skills install # skills for Claude Code
+SERVER="/Applications/Apple Mail MCP.app/Contents/Helpers/Apple Mail MCP Server.app/Contents/MacOS/apple-mail-mcp"
+"$SERVER" install        # Claude Code and the Claude app
+"$SERVER" skills install # skills for Claude Code
 ```
 
-Any other MCP client: run `/Applications/Apple Mail MCP.app/Contents/MacOS/apple-mail-mcp` as a stdio server.
+Any other MCP client: run `/Applications/Apple Mail MCP.app/Contents/Helpers/Apple Mail MCP Server.app/Contents/MacOS/apple-mail-mcp` as a stdio server (Homebrew also links it as
+`apple-mail-mcp`). Before 0.6 the server was at `Apple Mail MCP.app/Contents/MacOS/apple-mail-mcp`; the menu bar
+app moves Claude Code's and the Claude app's settings to the new path, other clients need it by hand.
 
 ### Permissions
 
@@ -181,8 +184,8 @@ emails waiting you review them one by one; nothing goes out without a click on *
 - **Send policy** (Settings): *Ask me first* (the default) shows each outgoing email (recipients, subject,
   text, attachments) for **Send** or **Don't Send**, and refuses to send while the menu bar app is not
   running; *Send right away*; or *Never send* (drafts only).
-- **Signed approvals**: your answers and scheduled sends are signed with a key in your login Keychain, so
-  another program cannot approve a send by writing a file.
+- **Signed approvals**: your answers and scheduled sends are signed with a key in your Keychain, so another
+  program cannot approve a send by writing a file.
 - **Drafts by default**: compose, reply and forward save to Drafts unless Claude is asked to send.
 - **Batch limits**: at most 50 messages per change by default; `dry_run` previews moves and trash. Optionally,
   moves and trashes above a size you choose wait for your OK in the menu bar app.
@@ -197,8 +200,9 @@ emails waiting you review them one by one; nothing goes out without a click on *
 - **Activity**: every tool call is listed in the Mail tab (never with message content).
 - **Search index without text**: Mail's data is behind Full Disk Access; the body index in
   `~/Library/Application Support/apple-mail-mcp` is not, so it stores no words, only keyed hashes (no order,
-  no positions). The key is in your login Keychain ("Apple Mail MCP search index key"), so another app has to
-  ask you before it can use the index, and even then it can only test guessed words. The file is owner-only
+  no positions). The key ("Apple Mail MCP search index key") is in your Keychain, in an access group only the
+  app and its server can claim (the Claude extension, which runs the server on its own, keeps its key in the
+  login Keychain), so another app cannot use the index, and even with the key it could only test guessed words. The file is owner-only
   and kept out of Time Machine. If the key is missing or refused, body searches scan messages instead.
 
 ## Benchmarks

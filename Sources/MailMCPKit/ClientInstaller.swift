@@ -78,6 +78,32 @@ public struct ClientInstaller: Sendable {
         return command == serverPath ? .installed : .otherCommand(([command] + (entry["args"] as? [String] ?? [])).joined(separator: " "))
     }
 
+    /// Where this app's server was before 0.6, next to the menu bar app in Contents/MacOS; nil when `serverPath` is not
+    /// the server of an app bundle.
+    var formerServerPath: String? {
+        let helper = "/Contents/Helpers/\(Self.helperName)/Contents/MacOS/apple-mail-mcp"
+        guard serverPath.hasSuffix(helper) else { return nil }
+        return serverPath.dropLast(helper.count) + "/Contents/MacOS/apple-mail-mcp"
+    }
+
+    /// The server's bundle inside the app (see `Scripts/build-app.sh`).
+    public static let helperName = "Apple Mail MCP Server.app"
+
+    /// Points the clients set up with this app's former server path at the current one, keeping their arguments.
+    /// Returns the clients changed.
+    @discardableResult
+    public func repointFormerServerPath() -> [Client] {
+        guard let former = formerServerPath else { return [] }
+        return Client.allCases.filter { client in
+            let url = client == .claudeCode ? claudeCodeConfig : desktopConfig
+            guard var entry = (readJSON(url)?["mcpServers"] as? [String: Any])?[Self.serverName] as? [String: Any],
+                entry["command"] as? String == former
+            else { return false }
+            entry["command"] = serverPath
+            return (try? setServerEntry(entry, in: url)) != nil
+        }
+    }
+
     /// The Apple Mail extension (`.mcpb`) as the Claude app recorded it.
     public struct DesktopExtension: Equatable, Sendable {
         public var id: String

@@ -65,10 +65,11 @@ final class AgentModel {
     var openApprovalWindow: (() -> Void)?
     var closeApprovalWindow: (() -> Void)?
 
-    /// Path of the MCP server binary that ships next to this app's executable.
+    /// Path of the MCP server binary that ships in this app (its own bundle in Contents/Helpers).
     var serverPath: String {
-        let sibling = Bundle.main.bundleURL.appending(path: "Contents/MacOS/apple-mail-mcp").path
-        if FileManager.default.isExecutableFile(atPath: sibling) { return sibling }
+        let helper = Bundle.main.bundleURL
+            .appending(path: "Contents/Helpers/\(ClientInstaller.helperName)/Contents/MacOS/apple-mail-mcp").path
+        if FileManager.default.isExecutableFile(atPath: helper) { return helper }
         let besideExecutable = (CommandLine.arguments[0] as NSString).deletingLastPathComponent + "/apple-mail-mcp"
         return FileManager.default.isExecutableFile(atPath: besideExecutable) ? besideExecutable : "apple-mail-mcp"
     }
@@ -92,6 +93,12 @@ final class AgentModel {
     func start() {
         guard tasks.isEmpty else { return }
         requestNotificationPermission()
+        // Clients set up before 0.6 start the server where it no longer is.
+        let repointed = clientInstaller.repointFormerServerPath()
+        if !repointed.isEmpty {
+            clientMessage = "Updated the server's location for \(repointed.map(\.displayName).joined(separator: " and ")). "
+                + "Restart it to use the new version."
+        }
         refreshClients()
         updater.automaticChecks = { [weak self] in self?.settings.checkForUpdates ?? true }
         updater.start()

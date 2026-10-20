@@ -2,7 +2,8 @@
 # Packs the server into a Claude app extension (.mcpb): double-click to install in Claude.
 #   Scripts/make-mcpb.sh [app] [output]
 #   defaults: ~/Library/Caches/AppleMailMCP/dist/Apple Mail MCP.app -> …/dist/AppleMailMCP.mcpb
-# Run Scripts/build-app.sh first: the bundled server is the app's signed, universal binary.
+# Run Scripts/build-app.sh first: the bundled server is its signed, universal standalone copy (dist/apple-mail-mcp),
+# which claims no Keychain access group: outside the app's bundle macOS would not start one that does.
 # Needs Node (npx) for the official packer, @anthropic-ai/mcpb.
 set -eu
 cd "$(dirname "$0")/.."
@@ -11,7 +12,7 @@ CACHE="$HOME/Library/Caches/AppleMailMCP"
 APP="${1:-$CACHE/dist/Apple Mail MCP.app}"
 OUT="${2:-$CACHE/dist/AppleMailMCP.mcpb}"
 STAGE="$CACHE/mcpb"
-SERVER="$APP/Contents/MacOS/apple-mail-mcp"
+SERVER="$(dirname "$APP")/apple-mail-mcp"
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
 
 rm -rf "$STAGE" "$OUT"

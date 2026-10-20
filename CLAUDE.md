@@ -45,9 +45,15 @@ swift Scripts/make-icon.swift Resources
 - **No Claude attribution in git.** Commit messages and pull request descriptions carry no `Co-Authored-By: Claude`
   trailer and no "Generated with Claude Code" line.
 - **The body index stores no text.** It sits outside Full Disk Access, so `BodyIndex` keeps only SipHash tokens
-  (words, bigrams, and a prefix → word `vocab`), keyed by `BodyIndexKey` from the login Keychain. Contentless FTS5
+  (words, bigrams, and a prefix → word `vocab`), keyed by `BodyIndexKey` from the Keychain. Contentless FTS5
   alone is not enough: `fts5vocab` reads every word and position back. Tests pass a fixed key and never touch
   the Keychain; `fileHoldsNoReadableText` checks the file.
+- **Keychain secrets** (`KeychainSecret`: body index key, approval signing key) live in the data protection Keychain
+  under the access group `4HWBUF2R8D.com.mpconsulting.AppleMailMCP`, which only a team Developer ID build claims,
+  through `Resources/AppleMailMCP.provisionprofile` (renew it with the Developer ID certificate, which expires
+  2027-02-01). macOS kills a binary that claims it outside a bundle with the profile, so the server is its own
+  bundle in `Contents/Helpers/Apple Mail MCP Server.app`, and the `.mcpb` ships a standalone copy that claims
+  nothing. Without the group (`errSecMissingEntitlement`: dev builds, the `.mcpb`) the login Keychain is used.
 
 ## Mail facts this code depends on (macOS 26–27, Mail V10)
 

@@ -1,6 +1,7 @@
 #!/bin/sh
-# Builds "Apple Mail MCP.app" (arm64, release): the menu bar app plus the apple-mail-mcp server
-# binary next to it in Contents/MacOS, so MCP clients and the app share one signed location.
+# Builds "Apple Mail MCP.app" (release): the menu bar app, with the apple-mail-mcp server in its own bundle at
+# Contents/Helpers/Apple Mail MCP Server.app (the path MCP clients start), so both share one signed location.
+# Also dist/apple-mail-mcp: the same server alone, for the Claude extension (Scripts/make-mcpb.sh).
 #   Scripts/build-app.sh            -> ~/Library/Caches/AppleMailMCP/dist/Apple Mail MCP.app
 #   Scripts/build-app.sh --install  -> also copies it to ~/Applications and relaunches it
 # Build output lives outside the repo: files in Documents carry Finder metadata, which codesign
@@ -30,12 +31,20 @@ BIN="$(swift build -c release $ARCH_FLAGS --scratch-path "$BUILD" --show-bin-pat
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 ditto --norsrc --noextattr "$BIN/MailMCPBar" "$APP/Contents/MacOS/Apple Mail MCP"
-ditto --norsrc --noextattr "$BIN/apple-mail-mcp" "$APP/Contents/MacOS/apple-mail-mcp"
 ditto --norsrc --noextattr Resources/Info.plist "$APP/Contents/Info.plist"
 ditto --norsrc --noextattr Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 VERSION="${VERSION:-$(sed -n 's/.*"\([0-9][0-9.]*\)".*/\1/p' Sources/MailMCPKit/MailMCPServer.swift | head -n 1)}"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_NUMBER:-$VERSION}" "$APP/Contents/Info.plist"
+# The server's bundle shares the app's identifier, version and usage descriptions (Contacts, Automation).
+HELPER="$APP/Contents/Helpers/Apple Mail MCP Server.app"
+mkdir -p "$HELPER/Contents/MacOS"
+ditto --norsrc --noextattr "$BIN/apple-mail-mcp" "$HELPER/Contents/MacOS/apple-mail-mcp"
+cp "$APP/Contents/Info.plist" "$HELPER/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleExecutable apple-mail-mcp" -c "Set :CFBundleName Apple Mail MCP Server" \
+    -c "Set :CFBundleDisplayName Apple Mail MCP Server" -c "Delete :CFBundleIconFile" "$HELPER/Contents/Info.plist"
+STANDALONE="$(dirname "$APP")/apple-mail-mcp"
+ditto --norsrc --noextattr "$BIN/apple-mail-mcp" "$STANDALONE"
 xattr -cr "$APP"
 
 if [ -z "${SIGN_IDENTITY:-}" ]; then
@@ -45,11 +54,34 @@ if [ -z "${SIGN_IDENTITY:-}" ]; then
     SIGN_IDENTITY="$(security find-certificate -c "Apple Mail MCP Local Signing" -Z 2>/dev/null | awk '/SHA-1/ {print $3}')"
 fi
 case "${SIGN_IDENTITY:-}" in "Developer ID"*) TIMESTAMP=--timestamp ;; *) TIMESTAMP= ;; esac
-# The server binary is nested code: sign it first, then the app around it.
-for target in "$APP/Contents/MacOS/apple-mail-mcp" "$APP"; do
-    codesign --force --options runtime $TIMESTAMP --entitlements Resources/entitlements.plist \
-        --sign "${SIGN_IDENTITY:--}" "$target"
+
+# The team's Developer ID with its provisioning profile: the app and the server claim the Keychain access group
+# (KeychainSecret). macOS honours a profile only for a bundle's main executable, hence the server's own bundle, each
+# with the profile embedded. The standalone copy claims nothing, so it runs outside the app; it and builds with other
+# signatures fall back to the login Keychain.
+PROFILE=Resources/AppleMailMCP.provisionprofile
+ENTITLEMENTS=Resources/entitlements.plist
+case "${SIGN_IDENTITY:-}" in
+"Developer ID"*"(4HWBUF2R8D)")
+    [ -f "$PROFILE" ] || { echo "missing $PROFILE" >&2; exit 1; }
+    ENTITLEMENTS="$CACHE/entitlements-keychain.plist"
+    cp Resources/entitlements.plist "$ENTITLEMENTS"
+    /usr/libexec/PlistBuddy \
+        -c "Add :com.apple.application-identifier string 4HWBUF2R8D.com.mpconsulting.AppleMailMCP" \
+        -c "Add :com.apple.developer.team-identifier string 4HWBUF2R8D" \
+        -c "Add :keychain-access-groups array" \
+        -c "Add :keychain-access-groups:0 string 4HWBUF2R8D.com.mpconsulting.AppleMailMCP" "$ENTITLEMENTS"
+    cp "$PROFILE" "$HELPER/Contents/embedded.provisionprofile"
+    cp "$PROFILE" "$APP/Contents/embedded.provisionprofile"
+    ;;
+esac
+
+# Nested code first, then the app around it.
+for target in "$HELPER" "$APP"; do
+    codesign --force --options runtime $TIMESTAMP --entitlements "$ENTITLEMENTS" --sign "${SIGN_IDENTITY:--}" "$target"
 done
+codesign --force --options runtime $TIMESTAMP --entitlements Resources/entitlements.plist \
+    --sign "${SIGN_IDENTITY:--}" "$STANDALONE"
 codesign --verify --strict --deep "$APP"
 echo "Built $APP $VERSION ($(lipo -archs "$APP/Contents/MacOS/Apple Mail MCP"), signed by ${SIGN_IDENTITY:--})"
 

@@ -5,8 +5,7 @@ import Security
 ///
 /// Mail's own store is behind Full Disk Access; the index file is not. Without this key the
 /// index holds no text, only keyed hashes, so a process that can read the file still cannot
-/// read mail. The key lives in the login Keychain, where macOS asks before handing it to any
-/// app other than the ones that created it.
+/// read mail. The key lives in the Keychain, out of reach of other apps (see ``KeychainSecret``).
 public struct BodyIndexKey: Sendable, Equatable {
     public let bytes: [UInt8]
 
@@ -17,7 +16,7 @@ public struct BodyIndexKey: Sendable, Equatable {
 
     public static func random() -> BodyIndexKey { BodyIndexKey(bytes: KeychainSecret.random(16)) }
 
-    /// The key for an index at `url`. The real index (the default location) always uses the login Keychain's. An
+    /// The key for an index at `url`. The real index (the default location) always uses the Keychain's. An
     /// index elsewhere, which `mail-bench` builds on generated or throwaway data, may use a fixed key from
     /// `APPLE_MAIL_MCP_TEST_INDEX_KEY` (32 hex digits) instead, so the server it starts reads that index without a
     /// Keychain prompt. Where the index is decides, not the environment alone: no variable makes the real index
@@ -49,13 +48,10 @@ public struct BodyIndexKey: Sendable, Equatable {
 
     public var hex: String { bytes.map { String(format: "%02x", $0) }.joined() }
 
-    static let service = "apple-mail-mcp.body-index"
-    static let account = "token-key"
+    public static let service = "apple-mail-mcp.body-index"
+    public static let account = "token-key"
 
-    /// Reads the key from the login Keychain, creating it on first use.
-    ///
-    /// When this runs from the app bundle, the item trusts both the menu bar app and the server
-    /// next to it, so neither is prompted for a key the other created.
+    /// Reads the key from the Keychain, creating it on first use (see ``KeychainSecret``).
     public static func fromKeychain() throws -> BodyIndexKey {
         do {
             return BodyIndexKey(bytes: try KeychainSecret.load(
@@ -69,11 +65,38 @@ public struct BodyIndexKey: Sendable, Equatable {
     }
 }
 
-/// A random secret in the login Keychain, created on first use and shared by the executables of this app bundle.
+/// A random secret in the Keychain, created on first use and shared by the menu bar app and the server.
+///
+/// Release builds keep it in the data protection Keychain under the team's access group, which both executables
+/// claim (their provisioning profile allows it), so neither is ever asked for a key the other made. A key from an
+/// earlier version, in the login Keychain, is copied over the first time and left in place. Builds without the
+/// access group (development builds, the Claude extension's lone binary) use the login Keychain, where macOS asks
+/// before another program reads the item.
 public enum KeychainSecret {
     public enum Failure: Error, Sendable {
         case keychain(OSStatus)
         case malformed
+    }
+
+    static let accessGroup = "4HWBUF2R8D.com.mpconsulting.AppleMailMCP"
+
+    /// Whether this build claims the team's access group (a release build with its provisioning profile), so its
+    /// secrets are the ones the app and the server share. Reads nothing.
+    public static var claimsSharedGroup: Bool {
+        let probe: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "apple-mail-mcp.probe",
+            kSecUseDataProtectionKeychain as String: true, kSecAttrAccessGroup as String: accessGroup,
+        ]
+        return SecItemCopyMatching(probe as CFDictionary, nil) != errSecMissingEntitlement
+    }
+
+    /// Whether the login Keychain holds the item; reads its attributes only, which macOS never asks about.
+    public static func inLoginKeychain(service: String, account: String) -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+            kSecAttrAccount as String: account, kSecReturnAttributes as String: true,
+        ]
+        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
     }
 
     public static func random(_ length: Int) -> [UInt8] {
@@ -84,56 +107,64 @@ public enum KeychainSecret {
     }
 
     public static func load(service: String, account: String, length: Int, label: String, description: String) throws -> [UInt8] {
-        if let existing = try read(service: service, account: account, length: length) { return existing }
-        let bytes = random(length)
-        var item: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecAttrLabel as String: label,
-            kSecAttrDescription as String: description,
-            kSecValueData as String: Data(bytes),
-        ]
-        if let access = bundleAccess(label) { item[kSecAttrAccess as String] = access }
-        let status = SecItemAdd(item as CFDictionary, nil)
-        if status == errSecDuplicateItem, let raced = try read(service: service, account: account, length: length) { return raced }
-        guard status == errSecSuccess else { throw Failure.keychain(status) }
-        return bytes
-    }
-
-    private static func read(service: String, account: String, length: Int) throws -> [UInt8]? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess else { throw Failure.keychain(status) }
-        guard let data = result as? Data, data.count == length else { throw Failure.malformed }
-        return [UInt8](data)
-    }
-
-    /// An access list naming every executable in this app bundle's Contents/MacOS, or nil
-    /// outside a bundle (the creating program alone is then trusted, the Keychain default).
-    private static func bundleAccess(_ label: String) -> SecAccess? {
-        guard let executable = Bundle.main.executableURL?.resolvingSymlinksInPath() else { return nil }
-        let directory = executable.deletingLastPathComponent()
-        guard directory.lastPathComponent == "MacOS", directory.deletingLastPathComponent().lastPathComponent == "Contents",
-              let names = try? FileManager.default.contentsOfDirectory(atPath: directory.path)
-        else { return nil }
-        let trusted: [SecTrustedApplication] = names.compactMap { name in
-            var app: SecTrustedApplication?
-            let path = directory.appending(path: name).path
-            return SecTrustedApplicationCreateFromPath(path, &app) == errSecSuccess ? app : nil
+        let item = Item(service: service, account: account, length: length, label: label, description: description)
+        do {
+            if let bytes = try item.read(protected: true) { return bytes }
+            // First run of a version with the access group: keep the key an earlier version made.
+            let bytes = try item.read(protected: false) ?? random(length)
+            return try item.add(bytes, protected: true)
+        } catch Failure.keychain(errSecMissingEntitlement) {
+            if let bytes = try item.read(protected: false) { return bytes }
+            return try item.add(random(length), protected: false)
         }
-        guard !trusted.isEmpty else { return nil }
-        var access: SecAccess?
-        let status = SecAccessCreate(label as CFString, trusted as CFArray, &access)
-        return status == errSecSuccess ? access : nil
+    }
+
+    private struct Item {
+        let service: String
+        let account: String
+        let length: Int
+        let label: String
+        let description: String
+
+        /// The data protection Keychain in the team's group, or the login Keychain.
+        private func query(protected: Bool) -> [String: Any] {
+            var query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: account,
+            ]
+            if protected {
+                query[kSecUseDataProtectionKeychain as String] = true
+                query[kSecAttrAccessGroup as String] = KeychainSecret.accessGroup
+            }
+            return query
+        }
+
+        func read(protected: Bool) throws -> [UInt8]? {
+            var query = query(protected: protected)
+            query[kSecReturnData as String] = true
+            query[kSecMatchLimit as String] = kSecMatchLimitOne
+            var result: AnyObject?
+            let status = SecItemCopyMatching(query as CFDictionary, &result)
+            if status == errSecItemNotFound { return nil }
+            guard status == errSecSuccess else { throw Failure.keychain(status) }
+            guard let data = result as? Data, data.count == length else { throw Failure.malformed }
+            return [UInt8](data)
+        }
+
+        /// Adds `bytes`; when another process added the item first, returns what it stored instead.
+        func add(_ bytes: [UInt8], protected: Bool) throws -> [UInt8] {
+            var item = query(protected: protected)
+            item[kSecAttrLabel as String] = label
+            item[kSecAttrDescription as String] = description
+            item[kSecValueData as String] = Data(bytes)
+            // The server runs while the screen is locked (MCP clients, indexing), never on another Mac.
+            if protected { item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly }
+            let status = SecItemAdd(item as CFDictionary, nil)
+            if status == errSecDuplicateItem, let raced = try read(protected: protected) { return raced }
+            guard status == errSecSuccess else { throw Failure.keychain(status) }
+            return bytes
+        }
     }
 }
 

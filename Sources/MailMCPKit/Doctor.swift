@@ -49,12 +49,17 @@ public enum Doctor {
 
         if let index = BodyIndex.openIfPresent(url: SharedPaths.bodyIndex), let status = try? index.status() {
             let behind = (try? store?.countMessages(after: status.coveredThrough)) ?? 0
+            // Only where the key is read without a prompt (see `keychainCheck`).
+            let otherKey = KeychainSecret.claimsSharedGroup && index.builtWithCurrentKey() == false
             checks.append(Check(
-                name: "Body index", state: behind > 500 ? .warning : .ok,
-                detail: "\(status.indexedMessages) messages, \(status.sizeBytes / 1_048_576) MB, \(behind) not yet indexed"))
+                name: "Body index", state: behind > 500 || otherKey ? .warning : .ok,
+                detail: "\(status.indexedMessages) messages, \(status.sizeBytes / 1_048_576) MB, \(behind) not yet indexed"
+                    + (otherKey ? "; built with another key, so the next search rebuilds it" : "")))
         } else {
             checks.append(Check(name: "Body index", state: .warning, detail: "not built; body searches scan files (run `apple-mail-mcp index`)"))
         }
+
+        checks.append(keychainCheck())
 
         let agent = ApprovalCenter().isAgentRunning()
         checks.append(Check(
@@ -64,6 +69,25 @@ public enum Doctor {
             name: "Settings", state: .ok,
             detail: "send policy \(settings.sendPolicy.rawValue), mail changes \(settings.allowMailChanges ? "allowed" : "off"), batch limit \(settings.maxBatchSize)"))
         return checks
+    }
+
+    /// Where the index and approval keys are. A release build loads them (copying keys of an earlier version into
+    /// the shared group); other builds only look, so a check never brings up a Keychain prompt.
+    static func keychainCheck() -> Check {
+        guard KeychainSecret.claimsSharedGroup else {
+            let present = [("index key", BodyIndexKey.service, BodyIndexKey.account), ("approval key", SigningKey.service, SigningKey.account)]
+                .filter { KeychainSecret.inLoginKeychain(service: $0.1, account: $0.2) }.map(\.0)
+            return Check(
+                name: "Keychain", state: .ok,
+                detail: "login Keychain (this build is not the app's), " + (present.isEmpty ? "no keys yet" : present.joined(separator: " and ") + " present"))
+        }
+        do {
+            _ = try BodyIndexKey.fromKeychain()
+            _ = try SigningKey.fromKeychain()
+            return Check(name: "Keychain", state: .ok, detail: "index and approval keys in the app's shared Keychain group")
+        } catch {
+            return Check(name: "Keychain", state: .failed, detail: "\(error)")
+        }
     }
 
     public static func report(settings: Settings) async throws -> String {

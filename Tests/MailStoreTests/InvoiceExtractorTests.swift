@@ -49,7 +49,9 @@ struct InvoiceExtractorTests {
         let text = String(repeating: "total\n", count: 30_000) + "Total 5,00 €"
         let start = ContinuousClock.now
         #expect(fields(text).total == "5.00")
-        #expect(ContinuousClock.now - start < .seconds(3))
+        // About a second in a debug build; rescanning the rest of the mail for every keyword line took minutes.
+        // The margin is for a loaded CI runner.
+        #expect(ContinuousClock.now - start < .seconds(10))
     }
 
     @Test func appleReceiptsChargeOnTheCardLine() {

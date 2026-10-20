@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-10-20
+
 ### Fixed
 
 - **Trash is a move to Trash.** After 0.6.1, `trash_messages` still took the date-neighbour of some messages on a

@@ -91,8 +91,8 @@ extension MailToolbox {
             let trash = try store.mailboxes(accountID: mailbox.accountID).filter { $0.role == .trash }
             let report = try? await self.applyVerified([
                 ChangeStep(source: mailbox, destination: trash.count == 1 ? trash[0] : nil, messages: [draft.summary], mustArrive: false)
-            ]) { step in
-                _ = try await automation.trash(ids: step.messages.map(\.id), in: MailboxTarget(step.source))
+            ], tool: "send_draft") { step, message in
+                try await automation.trash([message], in: MailboxTarget(step.source)) > 0
             }
             let removed = report?.done.contains(id) ?? false
             return ToolReply(

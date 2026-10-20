@@ -18,8 +18,7 @@ enum ToolCallFastPath {
     static func call(in line: Data) -> Call? {
         guard let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any],
             object["jsonrpc"] as? String == "2.0", object["method"] as? String == "tools/call",
-            let id = object["id"], id is String || id is NSNumber,
-            let idJSON = try? JSONSerialization.data(withJSONObject: id, options: .fragmentsAllowed),
+            let idJSON = idJSON(object["id"]),
             let params = object["params"] as? [String: Any], let name = params["name"] as? String
         else { return nil }
         guard let raw = params["arguments"], !(raw is NSNull) else { return Call(id: idJSON, name: name, arguments: nil) }
@@ -30,6 +29,26 @@ enum ToolCallFastPath {
             arguments[key] = value
         }
         return Call(id: idJSON, name: name, arguments: arguments)
+    }
+
+    /// A request id (a string or a number) as JSON, the way replies and cancellations name it.
+    private static func idJSON(_ id: Any?) -> Data? {
+        guard let id, id is String || id is NSNumber else { return nil }
+        return try? JSONSerialization.data(withJSONObject: id, options: .fragmentsAllowed)
+    }
+
+    /// Foundation's `JSONEncoder` (any Swift client) writes the slash escaped.
+    private static let cancelledMethods = [Data("notifications/cancelled".utf8), Data(#"notifications\/cancelled"#.utf8)]
+
+    /// The request id (as JSON, like ``Call/id``) of a `notifications/cancelled` line; nil for anything else.
+    static func cancelledRequest(in line: Data) -> Data? {
+        // Every line that is not a tool call comes here: parse only the rare one that can be a cancellation.
+        guard cancelledMethods.contains(where: { line.range(of: $0) != nil }),
+            let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any],
+            object["method"] as? String == "notifications/cancelled",
+            let params = object["params"] as? [String: Any]
+        else { return nil }
+        return idJSON(params["requestId"])
     }
 
     /// The SDK's `Value` for a parsed JSON value; nil where the SDK might decode it differently (a data URL).

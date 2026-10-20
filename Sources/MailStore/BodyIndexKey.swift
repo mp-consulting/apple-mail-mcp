@@ -83,20 +83,29 @@ public enum KeychainSecret {
     /// Whether this build claims the team's access group (a release build with its provisioning profile), so its
     /// secrets are the ones the app and the server share. Reads nothing.
     public static var claimsSharedGroup: Bool {
-        let probe: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "apple-mail-mcp.probe",
-            kSecUseDataProtectionKeychain as String: true, kSecAttrAccessGroup as String: accessGroup,
-        ]
-        return SecItemCopyMatching(probe as CFDictionary, nil) != errSecMissingEntitlement
+        SecItemCopyMatching(query(service: "apple-mail-mcp.probe", account: "probe", protected: true) as CFDictionary, nil)
+            != errSecMissingEntitlement
     }
 
     /// Whether the login Keychain holds the item; reads its attributes only, which macOS never asks about.
     public static func inLoginKeychain(service: String, account: String) -> Bool {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
-            kSecAttrAccount as String: account, kSecReturnAttributes as String: true,
-        ]
+        var query = query(service: service, account: account, protected: false)
+        query[kSecReturnAttributes as String] = true
         return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
+    }
+
+    /// The item in the data protection Keychain in the team's group, or in the login Keychain.
+    static func query(service: String, account: String, protected: Bool) -> [String: Any] {
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+        if protected {
+            query[kSecUseDataProtectionKeychain as String] = true
+            query[kSecAttrAccessGroup as String] = accessGroup
+        }
+        return query
     }
 
     public static func random(_ length: Int) -> [UInt8] {
@@ -126,18 +135,8 @@ public enum KeychainSecret {
         let label: String
         let description: String
 
-        /// The data protection Keychain in the team's group, or the login Keychain.
         private func query(protected: Bool) -> [String: Any] {
-            var query: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: service,
-                kSecAttrAccount as String: account,
-            ]
-            if protected {
-                query[kSecUseDataProtectionKeychain as String] = true
-                query[kSecAttrAccessGroup as String] = KeychainSecret.accessGroup
-            }
-            return query
+            KeychainSecret.query(service: service, account: account, protected: protected)
         }
 
         func read(protected: Bool) throws -> [UInt8]? {

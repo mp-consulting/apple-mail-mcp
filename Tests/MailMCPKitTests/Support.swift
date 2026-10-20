@@ -28,7 +28,10 @@ final class RecordingAutomation: MailAutomating, @unchecked Sendable {
 
     private let lock = NSLock()
     private var _calls: [Call] = []
+    private var _refs: [MessageRef] = []
     var calls: [Call] { lock.withLock { _calls } }
+    /// How each message of a move, trash, copy or state change was addressed, in order.
+    var refs: [MessageRef] { lock.withLock { _refs } }
     var lastReplyHTML: String?
     /// Runs inside `move`, e.g. to simulate Mail re-inserting the message under a new id.
     var onMove: (@Sendable ([Int64], MailboxTarget) -> Void)?
@@ -48,6 +51,10 @@ final class RecordingAutomation: MailAutomating, @unchecked Sendable {
     var unguardedChanges: Int { lock.withLock { _unguardedChanges } }
 
     private func record(_ call: Call) { lock.withLock { _calls.append(call) } }
+    private func record(_ refs: [MessageRef]) -> [Int64] {
+        lock.withLock { _refs += refs }
+        return refs.map(\.id)
+    }
     private func recordChange(_ call: Call) {
         lock.withLock {
             _calls.append(call)
@@ -64,18 +71,21 @@ final class RecordingAutomation: MailAutomating, @unchecked Sendable {
 
     func accounts() async throws -> [AutomationAccount] { [] }
 
-    func move(ids: [Int64], from: MailboxTarget, to: MailboxTarget) async throws -> Int {
+    func move(_ messages: [MessageRef], from: MailboxTarget, to: MailboxTarget) async throws -> Int {
+        let ids = record(messages)
         recordChange(.move(ids, from, to))
         onMove?(ids, to)
         return ids.count
     }
 
-    func setState(ids: [Int64], in mailbox: MailboxTarget, read: Bool?, flagged: Bool?, flagColor: FlagColor?) async throws -> Int {
+    func setState(_ messages: [MessageRef], in mailbox: MailboxTarget, read: Bool?, flagged: Bool?, flagColor: FlagColor?) async throws -> Int {
+        let ids = record(messages)
         record(.setState(ids, mailbox, read, flagged, flagColor))
         return ids.count
     }
 
-    func trash(ids: [Int64], in mailbox: MailboxTarget) async throws -> Int {
+    func trash(_ messages: [MessageRef], in mailbox: MailboxTarget) async throws -> Int {
+        let ids = record(messages)
         recordChange(.trash(ids, mailbox))
         onTrash?(ids, mailbox)
         return ids.count
@@ -130,12 +140,14 @@ final class RecordingAutomation: MailAutomating, @unchecked Sendable {
         onRuleChange?(.replaceRule(name, spec))
     }
 
-    func copy(ids: [Int64], from: MailboxTarget, to: MailboxTarget) async throws -> Int {
+    func copy(_ messages: [MessageRef], from: MailboxTarget, to: MailboxTarget) async throws -> Int {
+        let ids = record(messages)
         recordChange(.copy(ids, from, to))
         return ids.count
     }
 
-    func setColor(ids: [Int64], in mailbox: MailboxTarget, color: RuleColor?) async throws -> Int {
+    func setColor(_ messages: [MessageRef], in mailbox: MailboxTarget, color: RuleColor?) async throws -> Int {
+        let ids = record(messages)
         recordChange(.setColor(ids, mailbox, color))
         return ids.count
     }
@@ -189,7 +201,7 @@ struct Harness {
             contacts: FixedContacts(),
             bodyIndexURL: support.appending(path: "body-index.sqlite"), bodyIndexKey: { Self.indexKey }, readOnly: readOnly)
         // The fake changes the fixture synchronously, so a short wait shows everything.
-        toolbox.verification = ChangeVerification(timeout: 0.3, interval: 0.02, settle: 0)
+        toolbox.verification = ChangeVerification(timeout: 0.3, interval: 0.02, settle: 0, recheck: 0)
         toolbox.mailboxSettle = 0.05
         // Tests never reach the network.
         toolbox.unsubscribePoster = { url in throw ToolError("network request to \(url) in a test") }

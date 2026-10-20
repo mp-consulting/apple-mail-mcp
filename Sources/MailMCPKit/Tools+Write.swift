@@ -140,52 +140,6 @@ extension MailToolbox {
 
     // MARK: Mail changes
 
-    /// Applies `steps` one source mailbox at a time, holding the automation lock for the whole call, and
-    /// checks each against Mail's database: Apple Events can report success for messages that never moved,
-    /// and Mail has moved messages nobody asked for. Stops at the first stray change or automation error.
-    func applyVerified(_ steps: [ChangeStep], send: (ChangeStep) async throws -> Void) async throws -> ChangeReport {
-        let store = try self.store
-        let timing = verification
-        let report = try await automation.exclusive { () async throws -> ChangeReport in
-            var report = ChangeReport()
-            for step in steps {
-                guard report.collateral == nil, report.error == nil else {
-                    report.notAttempted += step.messages.map(\.id)
-                    continue
-                }
-                let check = try ChangeCheck(step, store: store)
-                report.gone += check.gone
-                guard !check.step.messages.isEmpty else { continue }
-                do {
-                    try await send(check.step)
-                } catch {
-                    report.error = error
-                }
-                // After an error (a timeout, say) Mail may still have acted: look once, without waiting.
-                let deadline = Date().addingTimeInterval(report.error == nil ? timing.timeout : 0)
-                while try !check.outcome().complete, Date() < deadline {
-                    try await Task.sleep(nanoseconds: UInt64(timing.interval * 1_000_000_000))
-                }
-                try await Task.sleep(nanoseconds: UInt64(timing.settle * 1_000_000_000))
-                let (outcome, collateral) = try check.verdict()
-                report.done += check.step.messages.map(\.id).filter { outcome.done.contains($0) }
-                report.unverified += check.step.messages.map(\.id).filter { !outcome.done.contains($0) }
-                for id in outcome.done { if let new = outcome.arrived[id] { report.newIDs[id] = new } }
-                report.collateral = collateral.map { evidence in
-                    let account = (try? store.accounts())?.first { $0.id == evidence.mailbox.accountID }?.name
-                    return .obj([
-                        ("mailbox", .string(evidence.mailbox.path)), ("account", account.map(JSON.string)),
-                        (evidence.drop ? "expected_drop" : "expected_gain", .int(Int64(evidence.expected))),
-                        (evidence.drop ? "actual_drop" : "actual_gain", .int(Int64(evidence.actual))),
-                    ])
-                }
-            }
-            return report
-        }
-        if let error = report.error, report.done.isEmpty, report.collateral == nil { throw error }
-        return report
-    }
-
     var moveMessages: ToolDefinition {
         ToolDefinition(
             tool: Self.tool(
@@ -193,7 +147,8 @@ extension MailToolbox {
                 """
                 Move messages to another mailbox (e.g. archive them). Returns the messages' new ids, since Mail \
                 assigns new ids on move. Use dry_run to preview. "moved" counts only messages Mail's database shows \
-                in the destination; stop if the reply has "unverified" or "collateral_suspected".
+                in the destination; stop if the reply has "unverified" or "collateral_suspected". Send "resume_ids" \
+                in a new call, and each id in "retry_one_by_one" in a call of its own.
                 """,
                 Schema.object(
                     [
@@ -240,9 +195,9 @@ extension MailToolbox {
             try await self.authorizeChange(
                 tool: "move_messages", summary: "Move \(moving.count) messages to \(plan.first?.target.path ?? destinationName)", messages: moving)
             let steps = plan.map { ChangeStep(source: $0.source, destination: $0.target, messages: $0.messages, mustArrive: true) }
-            let report = try await self.applyVerified(steps) { step in
-                guard let target = step.destination else { return }
-                _ = try await automation.move(ids: step.messages.map(\.id), from: MailboxTarget(step.source), to: MailboxTarget(target))
+            let report = try await self.applyVerified(steps, tool: "move_messages") { step, message in
+                guard let target = step.destination else { return false }
+                return try await automation.move([message], from: MailboxTarget(step.source), to: MailboxTarget(target)) > 0
             }
             let changeID = self.journalMove(.move, tool: "move_messages", steps: steps, done: report.done)
             let mapping = report.newIDs.sorted { $0.key < $1.key }
@@ -287,7 +242,7 @@ extension MailToolbox {
             var updated = 0
             for (mailbox, messages) in groups {
                 updated += try await automation.setState(
-                    ids: messages.map(\.id), in: MailboxTarget(mailbox), read: read, flagged: flagged, flagColor: color)
+                    try self.messageRefs(messages, in: mailbox), in: MailboxTarget(mailbox), read: read, flagged: flagged, flagColor: color)
             }
             var changes: [String] = []
             if let read { changes.append(read ? "read" : "unread") }
@@ -308,7 +263,8 @@ extension MailToolbox {
                 """
                 Move messages to their account's Trash (recoverable). Messages already in Trash or Junk are left alone. \
                 "trashed" counts only messages Mail's database shows gone from their mailbox; stop if the reply has \
-                "unverified" or "collateral_suspected".
+                "unverified" or "collateral_suspected". Send "resume_ids" in a new call, and each id in \
+                "retry_one_by_one" in a call of its own.
                 """,
                 Schema.object(
                     [
@@ -341,8 +297,8 @@ extension MailToolbox {
                 let trash = try store.mailboxes(accountID: mailbox.accountID).filter { $0.role == .trash }
                 return ChangeStep(source: mailbox, destination: trash.count == 1 ? trash[0] : nil, messages: messages, mustArrive: false)
             }
-            let report = try await self.applyVerified(steps) { step in
-                _ = try await automation.trash(ids: step.messages.map(\.id), in: MailboxTarget(step.source))
+            let report = try await self.applyVerified(steps, tool: "trash_messages") { step, message in
+                try await automation.trash([message], in: MailboxTarget(step.source)) > 0
             }
             let changeID = self.journalMove(.trash, tool: "trash_messages", steps: steps, done: report.done)
             return ToolReply(
@@ -395,174 +351,5 @@ extension MailToolbox {
             try await automation.checkForNewMail(accountID: accountID)
             return ToolReply(json: .obj([("checking", .bool(true))]), summary: "checked mail")
         }
-    }
-}
-
-// MARK: Verified changes
-
-/// How long a move or trash waits for Mail's database to show what happened.
-public struct ChangeVerification: Sendable {
-    public var timeout: TimeInterval
-    public var interval: TimeInterval
-    /// A pause before the mailbox counts are compared, so stray changes Mail makes late still show up.
-    public var settle: TimeInterval
-
-    public init(timeout: TimeInterval = 25, interval: TimeInterval = 0.25, settle: TimeInterval = 1) {
-        self.timeout = timeout
-        self.interval = interval
-        self.settle = settle
-    }
-}
-
-/// One source mailbox's share of a move or trash.
-struct ChangeStep {
-    var source: Mailbox
-    /// Where the messages should land; nil when unknown (an account without a single Trash).
-    var destination: Mailbox?
-    var messages: [MessageSummary]
-    /// A move only counts once the message shows up in `destination`.
-    var mustArrive: Bool
-}
-
-/// What a move or trash really did, according to Mail's database rather than the Apple Event replies.
-struct ChangeReport {
-    var done: [Int64] = []
-    var newIDs: [Int64: Int64] = [:]
-    /// Requested, but not seen leaving the source mailbox before the wait ran out.
-    var unverified: [Int64] = []
-    /// Already gone from their mailbox when the change started.
-    var gone: [Int64] = []
-    /// Left alone because an earlier mailbox went wrong.
-    var notAttempted: [Int64] = []
-    var collateral: JSON?
-    var error: (any Error)?
-
-    static let collateralWarning = """
-        Mail changed more messages than requested. Stop all bulk changes and ask the user to check Trash and \
-        the mailbox named in collateral_suspected (another device or a Mail rule can also cause this).
-        """
-    static let unverifiedWarning = """
-        Some messages had not left their mailbox when the wait ran out (Mail may be busy). Do not resend them; \
-        search again later to see where they are.
-        """
-
-    /// The reply fields shared by move and trash, after each tool's own.
-    func fields(notFound: [Int64]) -> [(String, JSON?)] {
-        let list = { (ids: [Int64]) -> JSON? in ids.isEmpty ? nil : .array(ids.map { .int($0) }) }
-        let warning = collateral != nil ? Self.collateralWarning : unverified.isEmpty ? nil : Self.unverifiedWarning
-        return [
-            ("unverified", list(unverified)),
-            ("not_found", list(notFound + gone)),
-            ("collateral_suspected", collateral),
-            ("not_attempted", list(notAttempted)),
-            ("error", error.map { .string("\($0)") }),
-            ("warning", warning.map(JSON.string)),
-        ]
-    }
-
-    func summary(_ verb: String) -> String {
-        var text = "\(verb) \(done.count)"
-        if !unverified.isEmpty { text += ", \(unverified.count) unverified" }
-        return collateral == nil ? text : "stopped, unexpected changes in Mail: " + text
-    }
-}
-
-/// Mail's database just before one step of a change, compared with what it shows afterwards.
-struct ChangeCheck {
-    struct Outcome {
-        /// Requested messages that left the source mailbox.
-        var left: [Int64] = []
-        /// Old id → new id of requested messages that showed up in the destination.
-        var arrived: [Int64: Int64] = [:]
-        /// Left the source and, for a move, reached the destination.
-        var done: Set<Int64> = []
-        var complete = false
-    }
-
-    /// A mailbox count that moved more than the requested messages explain.
-    struct Collateral {
-        var mailbox: Mailbox
-        var drop: Bool
-        var expected: Int
-        var actual: Int
-    }
-
-    let store: MailStore
-    /// The step, narrowed to the messages still in the source mailbox.
-    let step: ChangeStep
-    let gone: [Int64]
-    let sourceCount: Int
-    let destinationCount: Int?
-    /// Source rows per Message-ID, and destination rows that already carried one of them.
-    let sourceRows: [String: Int]
-    let destinationRows: Set<Int64>
-    let headerless: Set<Int64>
-
-    init(_ step: ChangeStep, store: MailStore) throws {
-        self.store = store
-        sourceCount = try store.liveCount(mailboxID: step.source.id)
-        destinationCount = try step.destination.map { try store.liveCount(mailboxID: $0.id) }
-        let present = try store.present(ids: step.messages.map(\.id), mailboxID: step.source.id)
-        var narrowed = step
-        narrowed.messages = step.messages.filter { present.contains($0.id) }
-        self.step = narrowed
-        gone = step.messages.map(\.id).filter { !present.contains($0) }
-        headerless = Set(narrowed.messages.filter { $0.messageIDHeader == nil }.map(\.id))
-        sourceRows = try Self.rows(narrowed.messages, in: step.source, store: store).mapValues(\.count)
-        destinationRows = Set(try step.destination.map { try Self.rows(narrowed.messages, in: $0, store: store).values.flatMap { $0 } } ?? [])
-    }
-
-    /// Rows in `mailbox` carrying the Message-ID of one of `messages`, by Message-ID.
-    static func rows(_ messages: [MessageSummary], in mailbox: Mailbox, store: MailStore) throws -> [String: [Int64]] {
-        let found = try store.messages(messageIDHeaders: messages.compactMap(\.messageIDHeader), mailboxIDs: [mailbox.id])
-        return found.reduce(into: [:]) { rows, message in
-            if let header = message.messageIDHeader { rows[header, default: []].append(message.id) }
-        }
-    }
-
-    func outcome() throws -> Outcome {
-        var outcome = Outcome()
-        let stillThere = try store.present(ids: step.messages.map(\.id), mailboxID: step.source.id)
-        // Mail can put a message back under a new ROWID: per Message-ID, count only as many as the source lost.
-        let now = try Self.rows(step.messages, in: step.source, store: store)
-        var lost = sourceRows.reduce(into: [String: Int]()) { $0[$1.key] = $1.value - (now[$1.key]?.count ?? 0) }
-        for message in step.messages where !stillThere.contains(message.id) {
-            if let header = message.messageIDHeader {
-                guard lost[header, default: 0] > 0 else { continue }
-                lost[header, default: 0] -= 1
-            }
-            outcome.left.append(message.id)
-        }
-        if let destination = step.destination {
-            let newest = try Self.rows(step.messages, in: destination, store: store)
-                .compactMapValues { $0.filter { !destinationRows.contains($0) }.max() }
-            for message in step.messages {
-                if let header = message.messageIDHeader, let new = newest[header] { outcome.arrived[message.id] = new }
-            }
-        }
-        // A message without a Message-ID cannot be found again: leaving the source has to do.
-        outcome.done = Set(outcome.left.filter { !step.mustArrive || outcome.arrived[$0] != nil || headerless.contains($0) })
-        outcome.complete = outcome.done.count == step.messages.count
-        return outcome
-    }
-
-    /// The final outcome, and the evidence when a mailbox count moved more than it explains. Counts are
-    /// read before the outcome, so changes landing in between can only excuse, never accuse.
-    func verdict() throws -> (Outcome, Collateral?) {
-        let sourceNow = try store.liveCount(mailboxID: step.source.id)
-        let destinationNow = try step.destination.map { try store.liveCount(mailboxID: $0.id) }
-        let outcome = try outcome()
-        // New mail only raises the source count, so a bigger drop than the messages that left means strays.
-        let drop = sourceCount - sourceNow
-        if drop > outcome.left.count {
-            return (outcome, Collateral(mailbox: step.source, drop: true, expected: outcome.left.count, actual: drop))
-        }
-        if let destination = step.destination, let before = destinationCount, let after = destinationNow {
-            let expected = outcome.arrived.count + outcome.left.filter(headerless.contains).count
-            if after - before > expected {
-                return (outcome, Collateral(mailbox: destination, drop: false, expected: expected, actual: after - before))
-            }
-        }
-        return (outcome, nil)
     }
 }

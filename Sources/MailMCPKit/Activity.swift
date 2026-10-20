@@ -14,11 +14,24 @@ public struct ActivityEntry: Codable, Sendable, Hashable, Identifiable {
     public var isWrite: Bool
     /// `message://` link of the message the call was about, when there is one.
     public var link: String?
+    /// True on the line written when the call starts; the line written when it finishes has the same `id` and
+    /// replaces it. A call that hangs (or a server that died) leaves only this one.
+    public var running: Bool?
+    /// Where a call that talked to Mail spent its time: waiting for the automation lock (another call held it),
+    /// in Apple Events (`events` of them, the longest `eventMaxMs`), and waiting for Mail's database to show the
+    /// outcome.
+    public var lockWaitMs: Int?
+    public var events: Int?
+    public var eventMs: Int?
+    public var eventMaxMs: Int?
+    public var verifyMs: Int?
 
     public init(
-        date: Date, pid: Int32, client: String?, tool: String, ok: Bool, milliseconds: Int, summary: String, isWrite: Bool,
-        link: String? = nil
+        id: UUID = UUID(), date: Date, pid: Int32, client: String?, tool: String, ok: Bool, milliseconds: Int, summary: String,
+        isWrite: Bool, link: String? = nil, running: Bool? = nil
     ) {
+        self.id = id
+        self.running = running
         self.link = link
         self.date = date
         self.pid = pid
@@ -83,19 +96,28 @@ public final class ActivityLog: @unchecked Sendable {
         close(fd)
     }
 
-    /// Most recent entries first. Reads only the end of the log, growing the window until it holds `limit` lines.
+    /// Most recent entries first, one per call: a finished call's line hides its `running` line. Reads only the end
+    /// of the log, growing the window until it holds enough lines.
     public func recent(limit: Int = 50) -> [ActivityEntry] {
         flush()
         var entries: [ActivityEntry] = []
-        // The current file, then the rotated one if more entries are needed.
+        var seen: Set<UUID> = []
+        // The current file, then the rotated one if more entries are needed. Each call can take two lines.
         for file in [url, url.appendingPathExtension("1")] {
             guard entries.count < limit else { break }
-            for line in Self.lastLines(of: file, count: limit - entries.count) {
-                if let entry = try? Self.decoder.decode(ActivityEntry.self, from: line) { entries.append(entry) }
+            for line in Self.lastLines(of: file, count: 2 * (limit - entries.count)) {
+                guard let entry = try? Self.decoder.decode(ActivityEntry.self, from: line), seen.insert(entry.id).inserted else { continue }
+                entries.append(entry)
                 if entries.count >= limit { break }
             }
         }
         return entries
+    }
+
+    /// Calls started more than `age` ago that never wrote their finished line: still running, or lost with their
+    /// server.
+    public func stuck(olderThan age: TimeInterval = 120, now: Date = Date(), window: Int = 400) -> [ActivityEntry] {
+        recent(limit: window).filter { $0.running == true && now.timeIntervalSince($0.date) > age }
     }
 
     /// Size and modification date of the log and its rotated copy: when equal, `recent` returns the same entries.

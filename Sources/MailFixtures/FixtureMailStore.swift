@@ -299,6 +299,13 @@ public final class FixtureMailStore: @unchecked Sendable {
     }
 
     /// Writes (or rewrites) the `.emlx` for an existing message, e.g. once it has "downloaded".
+    /// Gives a message another `Message-ID` header (nil: none), as Mail records one it could not read or a duplicate.
+    public func setMessageIDHeader(_ rowID: Int64, to header: String?) throws {
+        try db.run(
+            "UPDATE message_global_data SET message_id_header = ? WHERE ROWID = (SELECT global_message_id FROM messages WHERE ROWID = ?)",
+            [header.map { .text("<\($0)>") } ?? .null, .int(rowID)])
+    }
+
     public func writeEmlx(rowID: Int64, mailbox: Int64, message: FixtureMessage) throws {
         let (rfc822, partIDs) = Self.rfc822(message, messageID: message.messageID ?? "late-\(rowID)@fixture.test", stripAttachments: message.partial)
         try writeFiles(rowID: rowID, mailbox: mailbox, rfc822: rfc822, message: message, partIDs: partIDs)

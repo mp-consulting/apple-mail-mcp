@@ -61,7 +61,7 @@ extension AgentModel {
         case .checking: " · checking…"
         case .upToDate: " · up to date"
         case .available(let release): " · \(release.version.description) available"
-        case .installing: " · installing (\(Int((updater.installProgress?.fraction ?? 0) * 100))%)"
+        case .installing(_, let progress): " · installing (\(Int(progress.fraction * 100))%)"
         case .failed(let message): " · \(message)"
         case .idle: ""
         }

@@ -124,9 +124,14 @@ outcome of a mistake is a message in Archive or Trash that can be moved back.
 3. Preview with `move_messages` / `trash_messages` and `dry_run: true`.
 4. Apply only after the user agrees. Respect the server's per-call limit (default 50): split larger sets,
    and send the calls one after another, never in parallel or alongside another cleanup agent.
-5. Check the reply: counts only include messages Mail really moved. If it lists `unverified` ids or has
-   `collateral_suspected`, stop all batches, tell the user and ask them to check Trash (and the mailbox it
-   names). Do not retry the same ids.
+5. Check the reply: counts only include messages Mail really moved.
+   - `collateral_suspected` (Mail moved messages nobody asked for): stop all batches and tell the user. When
+     `strays_restored` covers every stray listed there, they are already back; otherwise ask the user to check
+     Trash (and the mailbox it names), and offer `undo_change` with the reply's `stray_change_id`.
+   - `unverified` ids: stop, tell the user, and do not retry them; search again in a few minutes.
+   - `resume_ids`: the call ran out of time; send those ids in the next call.
+   - `retry_one_by_one`: send each of those ids in a call of its own.
+   A mailbox where a batch went wrong refuses moves and trashes for up to two minutes: wait, don't work around it.
 6. Report the outcome and the new totals.
 
 ## Rules
@@ -167,9 +172,11 @@ Present one table: sender, messages in 90 days, unread %, category, suggested ac
   with `dry_run: true`, then `move_messages` (`to_mailbox: "archive"`) or `trash_messages`. Repeat per page;
   the server limits each call (default 50). Make the calls one after another, never in parallel, and never
   run two cleanups (two agents or chats) at the same time.
-- **Check every reply**: the counts only include messages Mail really moved. If a reply lists `unverified`
-  ids or has `collateral_suspected`, stop at once, tell the user what it says and ask them to check Trash
-  (and the mailbox it names) before doing anything else. Do not retry the same ids.
+- **Check every reply**: the counts only include messages Mail really moved. If a reply has
+  `collateral_suspected`, stop at once and tell the user what it says: when `strays_restored` covers every
+  stray it lists, they are already back; otherwise ask the user to check Trash (and the mailbox it names) and
+  offer `undo_change` with `stray_change_id`. If it lists `unverified` ids, stop and do not retry them. Send
+  `resume_ids` (out of time) in the next call, and each id in `retry_one_by_one` in a call of its own.
 - **Unsubscribe**: pass one recent message per sender to `unsubscribe` with `dry_run: true` to see how
   each list unsubscribes (`one_click`, `email`, `link` or `none`), then, once the user agrees, call it without
   `dry_run`. One-click is used only for senders whose signature verified; for a `link`, give the user the

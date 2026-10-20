@@ -143,6 +143,9 @@ public final class MailStore: @unchecked Sendable {
         try withDB { try $0.scalarInt("SELECT IFNULL(MAX(ROWID), 0) FROM messages") ?? 0 }
     }
 
+    /// A Message-ID header without its angle brackets, as messages and lookups by Message-ID carry it.
+    static func bareMessageID(_ header: String) -> String { header.trimmingCharacters(in: CharacterSet(charactersIn: "<> ")) }
+
     public func messageCount() throws -> Int {
         Int(try withDB { try $0.scalarInt("SELECT COUNT(*) FROM messages WHERE deleted = 0") ?? 0 })
     }
@@ -381,7 +384,7 @@ public final class MailStore: @unchecked Sendable {
         let mailbox = mailboxes[mailboxID]
         let accountID = mailbox?.accountID ?? ""
         var messageID = row.optionalString(13)
-        if let id = messageID { messageID = id.trimmingCharacters(in: CharacterSet(charactersIn: "<> ")) }
+        if let id = messageID { messageID = Self.bareMessageID(id) }
         let preview = row.optionalString(12).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         return MessageSummary(
             id: row.int(0),
@@ -460,6 +463,21 @@ public final class MailStore: @unchecked Sendable {
                     AND (m.mailbox = ? OR m.ROWID IN (SELECT message_id FROM labels WHERE mailbox_id = ?))
                     """, [.int(mailboxID), .int(mailboxID)]) ?? 0
             })
+    }
+
+    /// Every message in a mailbox now (directly or through a label), with its Message-ID header without brackets
+    /// ("" when it has none). One pass over the mailbox index, for telling which messages a change took.
+    public func headerRows(mailboxID: Int64) throws -> [Int64: String] {
+        let rows = try withDB { db in
+            try db.all(
+                """
+                SELECT m.ROWID, g.message_id_header FROM messages m
+                LEFT JOIN message_global_data g ON g.ROWID = m.global_message_id
+                WHERE m.deleted = 0 AND (m.mailbox = ? OR m.ROWID IN (SELECT message_id FROM labels WHERE mailbox_id = ?))
+                """, [.int(mailboxID), .int(mailboxID)]
+            ) { ($0.int(0), $0.optionalString(1) ?? "") }
+        }
+        return Dictionary(rows.map { ($0.0, Self.bareMessageID($0.1)) }, uniquingKeysWith: { a, _ in a })
     }
 
     /// The subset of `ids` still in the mailbox (not deleted, directly or through a label).

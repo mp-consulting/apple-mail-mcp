@@ -37,7 +37,7 @@ struct SkillTests {
         // Parameters come from the tools' own schemas; output keys skills may mention are listed by hand.
         var parameters: Set<String> = [
             "new_ids", "has_more", "body_search", "not_found", "collateral_suspected", "with_amount", "amount_confidence",
-            "remaining_ids", "one_click", "pending_rules",
+            "remaining_ids", "one_click", "pending_rules", "strays_restored", "stray_change_id", "resume_ids", "retry_one_by_one",
         ]
         for definition in h.toolbox.definitions {
             if case .object(let schema) = definition.tool.inputSchema, case .object(let properties)? = schema["properties"] {

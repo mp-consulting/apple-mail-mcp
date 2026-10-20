@@ -240,13 +240,15 @@ final class ChangeToolTests {
     }
 
     @Test func moveCountsOnlyMessagesThatArrived() async throws {
-        // Mail answers OK for both, but only the invoice really moves.
+        // Mail answers OK for every message, but only the invoice really moves; the call stops at the digest.
         let fixture = h.fixture
-        let invoice = h.id("invoice"), digest = h.id("digest")
-        h.automation.onMove = { _, _ in _ = try? fixture.store.moveMessage(invoice, to: fixture.archive) }
-        let json = try await h.json("move_messages", ["ids": [.int(Int(invoice)), .int(Int(digest))], "to_mailbox": "archive"])
+        let invoice = h.id("invoice"), digest = h.id("digest"), receipt = h.id("receipt")
+        h.automation.onMove = { ids, _ in if ids == [invoice] { _ = try? fixture.store.moveMessage(invoice, to: fixture.archive) } }
+        let json = try await h.json(
+            "move_messages", ["ids": [.int(Int(invoice)), .int(Int(digest)), .int(Int(receipt))], "to_mailbox": "archive"])
         #expect(json["moved"] as? Int == 1)
         #expect(json["unverified"] as? [Int] == [Int(digest)])
+        #expect(json["not_attempted"] as? [Int] == [Int(receipt)])
         #expect((json["new_ids"] as? [String: Int])?.keys.sorted() == [String(invoice)])
         #expect(json["warning"] as? String != nil && json["collateral_suspected"] == nil)
     }
@@ -298,13 +300,16 @@ final class ChangeToolTests {
     }
 
     @Test func trashCountsOnlyMessagesThatLeft() async throws {
-        // Mail answers OK for all three, but only the receipt leaves the inbox.
+        // Mail answers OK for all three, but only the receipt leaves the inbox. The digest that stays stops the
+        // call: the invoice is never sent into a backlog.
         let fixture = h.fixture
         let receipt = h.id("receipt"), digest = h.id("digest"), invoice = h.id("invoice")
-        h.automation.onTrash = { _, _ in _ = try? fixture.store.moveMessage(receipt, to: fixture.trash) }
+        h.automation.onTrash = { ids, _ in if ids == [receipt] { _ = try? fixture.store.moveMessage(receipt, to: fixture.trash) } }
         let json = try await h.json("trash_messages", ["ids": [.int(Int(receipt)), .int(Int(digest)), .int(Int(invoice))]])
         #expect(json["trashed"] as? Int == 1)
-        #expect(json["unverified"] as? [Int] == [Int(digest), Int(invoice)])
+        #expect(json["unverified"] as? [Int] == [Int(digest)])
+        #expect(json["not_attempted"] as? [Int] == [Int(invoice)])
+        #expect(h.automation.calls == [.trash([receipt], icloudInbox), .trash([digest], icloudInbox)])
         #expect(json["collateral_suspected"] == nil)
         #expect((json["warning"] as? String)?.contains("Do not resend") == true)
     }
@@ -324,7 +329,13 @@ final class ChangeToolTests {
         #expect(collateral?["expected_drop"] as? Int == 1 && collateral?["actual_drop"] as? Int == 2)
         // The second mailbox (Archive/2020) is not touched.
         #expect(json["not_attempted"] as? [Int] == [Int(archived)])
-        #expect(h.automation.calls == [.trash([receipt], icloudInbox)])
+        #expect(h.automation.calls.first == .trash([receipt], icloudInbox))
+        #expect(h.automation.calls.filter { if case .trash = $0 { true } else { false } }.count == 1)
+        // The stray is named; putting it back did nothing here (this fake Mail ignores moves).
+        let strays = collateral?["strays"] as? [[String: Any]]
+        #expect(strays?.map { $0["old_id"] as? Int } == [Int(kickoff)])
+        #expect(strays?.first?["now_in"] as? String == "Deleted Messages" && strays?.first?["restored_id"] == nil)
+        #expect(json["strays_restored"] == nil && json["stray_change_id"] as? String != nil)
         #expect((json["warning"] as? String)?.contains("Stop all bulk changes") == true)
     }
 

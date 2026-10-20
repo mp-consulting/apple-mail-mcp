@@ -58,9 +58,15 @@ public enum MailMCPServer {
     public static func runStdio(toolbox: MailToolbox) async throws {
         let server = await make(toolbox: toolbox)
         // Tool calls skip the SDK's request decoding (see `ToolCallFastPath`); everything else goes through it.
+        let running = RunningCalls()
         let transport = LineTransport(intercept: { line, transport in
-            guard let call = ToolCallFastPath.call(in: line) else { return false }
+            guard let call = ToolCallFastPath.call(in: line) else {
+                // A call the client gave up on stops between messages and lets go of Mail and the lock.
+                if let id = ToolCallFastPath.cancelledRequest(in: line) { running.cancel(id) }
+                return false
+            }
             let respond: @Sendable () async -> Void = {
+                defer { running.remove(call.id) }
                 let result = await toolbox.call(call.name, arguments: call.arguments)
                 if let reply = try? ToolCallFastPath.reply(to: call, result: result) { try? transport.write(line: reply) }
             }
@@ -69,7 +75,7 @@ public enum MailMCPServer {
                 // busy Mac. Should it await something, it carries on wherever that resumes.
                 Task(executorPreference: InlineExecutor.shared, priority: .userInitiated) { await respond() }
             } else {
-                Task(priority: .userInitiated) { await respond() }
+                running.start(call.id) { Task(priority: .userInitiated) { await respond() } }
             }
             return true
         })
@@ -78,6 +84,36 @@ public enum MailMCPServer {
         }
         await server.waitUntilCompleted()
         toolbox.activity?.flush()
+    }
+}
+
+/// Tool calls in progress by request id (as JSON), so a `notifications/cancelled` can cancel their task.
+final class RunningCalls: @unchecked Sendable {
+    private let lock = NSLock()
+    private var tasks: [Data: Task<Void, Never>] = [:]
+    private var cancelled: Set<Data> = []
+
+    /// Starts the call's task under the lock, so its `remove` cannot come first.
+    func start(_ id: Data, _ make: () -> Task<Void, Never>) {
+        lock.withLock {
+            let task = make()
+            if cancelled.remove(id) != nil { task.cancel() }
+            tasks[id] = task
+        }
+    }
+
+    func remove(_ id: Data) { _ = lock.withLock { tasks.removeValue(forKey: id) } }
+
+    func cancel(_ id: Data) {
+        lock.withLock {
+            if let task = tasks.removeValue(forKey: id) {
+                task.cancel()
+            } else {
+                // Not started yet, or a quick read (not tracked); keep only a few.
+                if cancelled.count > 100 { cancelled.removeAll() }
+                cancelled.insert(id)
+            }
+        }
     }
 }
 

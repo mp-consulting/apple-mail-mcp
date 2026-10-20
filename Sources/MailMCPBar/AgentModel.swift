@@ -67,8 +67,7 @@ final class AgentModel {
 
     /// Path of the MCP server binary that ships in this app (its own bundle in Contents/Helpers).
     var serverPath: String {
-        let helper = Bundle.main.bundleURL
-            .appending(path: "Contents/Helpers/\(ClientInstaller.helperName)/Contents/MacOS/apple-mail-mcp").path
+        let helper = Bundle.main.bundleURL.appending(path: ClientInstaller.helperExecutable).path
         if FileManager.default.isExecutableFile(atPath: helper) { return helper }
         let besideExecutable = (CommandLine.arguments[0] as NSString).deletingLastPathComponent + "/apple-mail-mcp"
         return FileManager.default.isExecutableFile(atPath: besideExecutable) ? besideExecutable : "apple-mail-mcp"

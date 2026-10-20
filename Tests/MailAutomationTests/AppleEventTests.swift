@@ -37,6 +37,38 @@ struct AppleEventTests {
         #expect(field(account, "from")?.descriptorType == fourCC("null"))
     }
 
+    /// Same shape AppleScript produces for `every message of mailbox "Archive/2005" of account id "X" whose
+    /// message id = "abc@example.test"`: Mail tests the header itself, no id-to-index lookup.
+    @Test func messageByHeaderSpecifier() throws {
+        let spec = MailSpec.message(header: "abc@example.test", in: MailboxTarget(accountID: "ACCOUNT", path: "Archive/2005"))
+        #expect(spec.descriptorType == fourCC("obj "))
+        #expect(code(field(spec, "want")) == "mssg")
+        #expect(code(field(spec, "form")) == "test")
+        #expect(field(try #require(field(spec, "from")), "seld")?.stringValue == "Archive/2005")
+        let test = try #require(field(spec, "seld"))
+        #expect(test.descriptorType == fourCC("cmpd"))
+        #expect(code(field(test, "relo")) == "=   ")
+        #expect(field(test, "obj2")?.stringValue == "abc@example.test")
+        let property = try #require(field(test, "obj1"))
+        #expect(code(field(property, "want")) == "prop")
+        #expect(code(field(property, "seld")) == "meid")  // `message id` in Mail's sdef
+        #expect(field(property, "from")?.descriptorType == fourCC("exmn"))
+    }
+
+    /// A message without a Message-ID is changed by id only when Mail shows the subject and date the store has.
+    @Test func idIsCheckedAgainstSubjectAndDate() {
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let message = MessageRef(id: 7, header: nil, subject: "Re: Invoice 42", dateReceived: date)
+        #expect(MailAutomation.matches(message, subject: "Re: Invoice 42 ", received: date.addingTimeInterval(0.6)))
+        #expect(!MailAutomation.matches(message, subject: "Invoice 43", received: date))
+        #expect(!MailAutomation.matches(message, subject: "Re: Invoice 42", received: date.addingTimeInterval(-86_400)))
+        #expect(!MailAutomation.matches(message, subject: "Re: Invoice 42", received: nil))
+    }
+
+    @Test func alertsFailFast() {
+        #expect(AppleEventError(number: -1713, message: "").description.contains("alert"))
+    }
+
     @Test func localMailboxesHaveNoAccount() {
         let spec = MailSpec.mailbox(MailboxTarget(accountID: "", path: "Outbox"))
         #expect(field(spec, "from")?.descriptorType == fourCC("null"))

@@ -30,9 +30,14 @@ outcome of a mistake is a message in Archive or Trash that can be moved back.
 3. Preview with `move_messages` / `trash_messages` and `dry_run: true`.
 4. Apply only after the user agrees. Respect the server's per-call limit (default 50): split larger sets,
    and send the calls one after another, never in parallel or alongside another cleanup agent.
-5. Check the reply: counts only include messages Mail really moved. If it lists `unverified` ids or has
-   `collateral_suspected`, stop all batches, tell the user and ask them to check Trash (and the mailbox it
-   names). Do not retry the same ids.
+5. Check the reply: counts only include messages Mail really moved.
+   - `collateral_suspected` (Mail moved messages nobody asked for): stop all batches and tell the user. When
+     `strays_restored` covers every stray listed there, they are already back; otherwise ask the user to check
+     Trash (and the mailbox it names), and offer `undo_change` with the reply's `stray_change_id`.
+   - `unverified` ids: stop, tell the user, and do not retry them; search again in a few minutes.
+   - `resume_ids`: the call ran out of time; send those ids in the next call.
+   - `retry_one_by_one`: send each of those ids in a call of its own.
+   A mailbox where a batch went wrong refuses moves and trashes for up to two minutes: wait, don't work around it.
 6. Report the outcome and the new totals.
 
 ## Rules

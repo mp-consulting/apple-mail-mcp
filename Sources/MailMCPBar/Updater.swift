@@ -15,7 +15,7 @@ import Security
         case checking
         case upToDate
         case available(Release)
-        case installing(Release)
+        case installing(Release, InstallProgress)
         case failed(String)
     }
 
@@ -26,8 +26,6 @@ import Security
     }
 
     private(set) var state: State = .idle
-    /// Set while `state` is `.installing`.
-    private(set) var installProgress: InstallProgress?
     /// Off for development builds: without the team's signature there is no safe way to replace them.
     let isEnabled: Bool
     let currentVersion: AppVersion?
@@ -51,8 +49,8 @@ import Security
         if case let .available(release) = state { release } else { nil }
     }
 
-    var installingRelease: Release? {
-        if case let .installing(release) = state { release } else { nil }
+    var installing: (release: Release, progress: InstallProgress)? {
+        if case let .installing(release, progress) = state { (release, progress) } else { nil }
     }
 
     /// Checks now if a day has passed, then looks again every hour (a Mac that slept through the
@@ -125,21 +123,19 @@ import Security
 
     func install(_ release: Release) async {
         guard installBlocker == nil else { return }
-        state = .installing(release)
-        installProgress = InstallProgress(step: "Starting the download…", fraction: 0)
+        state = .installing(release, InstallProgress(step: "Starting the download…", fraction: 0))
         // Reports arrive from the download's threads; a late one never moves the bar back.
         let report: @Sendable (InstallProgress) -> Void = { [weak self] progress in
             Task { @MainActor in
-                guard let self, let current = self.installProgress, progress.fraction >= current.fraction else { return }
-                self.installProgress = progress
+                guard let self, let current = self.installing, progress.fraction >= current.progress.fraction else { return }
+                self.state = .installing(current.release, progress)
             }
         }
         do {
             try await Self.installUpdate(release, over: Bundle.main.bundleURL, report: report)
-            installProgress = InstallProgress(step: "Relaunching…", fraction: 1)
+            state = .installing(release, InstallProgress(step: "Relaunching…", fraction: 1))
             relaunch()
         } catch {
-            installProgress = nil
             state = .failed("Couldn't install Apple Mail MCP \(release.version): \(error.localizedDescription)")
         }
     }

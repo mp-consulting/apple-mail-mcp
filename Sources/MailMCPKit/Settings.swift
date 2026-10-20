@@ -15,6 +15,8 @@ public enum SharedPaths {
     public static var agentHeartbeat: URL { supportDirectory.appending(path: "agent.heartbeat") }
     public static var bodyIndex: URL { supportDirectory.appending(path: "body-index.sqlite") }
     public static var changeJournal: URL { supportDirectory.appending(path: "changes.json") }
+    /// Mailboxes where a change went wrong, next to the change journal (see ``ChangeBreaker``).
+    public static var changeBreaker: URL { supportDirectory.appending(path: ChangeBreaker.fileName) }
     public static var schedule: URL { supportDirectory.appending(path: "scheduled.json") }
     public static var scheduledFiles: URL { supportDirectory.appending(path: "scheduled-files", directoryHint: .isDirectory) }
 
@@ -63,6 +65,11 @@ public struct Settings: Codable, Sendable, Equatable {
     public var notifyNeedsReply = false
     /// Moves and trashes of more messages than this wait for the user's OK in the menu bar app (0 = never ask).
     public var approveChangesAbove = 0
+    /// Seconds a move or trash may run before it stops and returns the rest as `resume_ids`; below the ~2 minutes
+    /// after which clients give up on a call (0 = no limit).
+    public var callBudget: Double = 90
+    /// Put back at once the messages Mail moved or trashed although nobody asked it to.
+    public var restoreStrays = true
 
     public init() {}
 
@@ -97,6 +104,8 @@ public struct Settings: Codable, Sendable, Equatable {
         updateInstalledSkills = field(.updateInstalledSkills, defaults.updateInstalledSkills)
         notifyNeedsReply = field(.notifyNeedsReply, defaults.notifyNeedsReply)
         approveChangesAbove = field(.approveChangesAbove, defaults.approveChangesAbove)
+        callBudget = field(.callBudget, defaults.callBudget)
+        restoreStrays = field(.restoreStrays, defaults.restoreStrays)
     }
 
     /// The defaults when there is no file; `failClosed` when the file exists but is not valid settings JSON.

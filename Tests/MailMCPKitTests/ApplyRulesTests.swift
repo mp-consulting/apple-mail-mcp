@@ -84,12 +84,26 @@ final class ApplyRulesTests {
         #expect(calls.contains(.setState([h.id("receipt")], inbox, true, nil, nil)))
         #expect(calls.contains(.setState([h.id("digest")], inbox, nil, nil, .orange)))
         #expect(calls.contains(.setColor([h.id("digest")], inbox, .blue)))
-        #expect(calls.contains { if case .move(let ids, inbox, archive) = $0 { Set(ids) == [h.id("invoice"), h.id("receipt")] } else { false } })
+        let moved = calls.flatMap { call -> [Int64] in if case .move(let ids, inbox, archive) = call { ids } else { [] } }
+        #expect(Set(moved) == [h.id("invoice"), h.id("receipt")])
         #expect(!calls.contains { if case .trash = $0 { true } else { false } })
         #expect(h.automation.unguardedChanges == 0)
         // The moves went through move_messages: undo_change knows them.
         let changes = try await h.json("undo_change", ["action": "list"])
         #expect((changes["changes"] as? [Any])?.isEmpty == false)
+    }
+
+    @Test func waitsWhileAMailboxIsPaused() async throws {
+        // A trash in the inbox just left a message Mail never confirmed.
+        let digest = h.id("digest")
+        let live = try h.toolbox.store.liveCount(mailboxID: h.fixture.inbox)
+        h.toolbox.breaker?.trip(ChangeBreaker.Entry(
+            mailboxID: h.fixture.inbox, accountID: h.fixture.icloud, mailbox: "INBOX", tripped: Date(), pending: [digest], count: live,
+            collateral: false))
+        let result = await h.call("apply_rules", ["mailbox": "inbox", "account": "iCloud", "dry_run": false])
+        #expect(result.isError && result.text.contains("has not settled"))
+        // Nothing at all happened, not even the marks and flags that come first.
+        #expect(h.automation.calls.isEmpty)
     }
 
     @Test func asksOnceForTheWholeRun() async throws {

@@ -68,6 +68,10 @@ swift Scripts/make-icon.swift Resources
 - Account names come from `~/Library/Accounts/Accounts4.sqlite` (description, else the parent's).
 - **Do not** delete messages that are already in Trash: Mail aborts (`deleteMessages` transfer crash).
 - **Do not** reply to or forward an unsent draft: Mail hangs.
+- **Do not** address messages by `id` for delete or move during bulk changes on IMAP: scripting resolves the id to an
+  index (`_scriptingRemoveObjectsAtIndexes:fromValueForKey:`) and, with removals in flight, can remove the neighbour.
+  Use `whose message id` (`MailSpec.message(header:in:)`, property `meid`), one message at a time, waiting for each
+  to leave the database. Probe: `TrashProbeTests` (`APPLE_MAIL_MCP_LIVE_TRASH=1`).
 - **Do not** delete a rule condition with Apple Events: `-[MFMessageRule(Applescript) removeFromCriteriaAtIndex:]`
   calls itself until Mail crashes (stack overflow). Rewrite conditions in place, or make the rule again.
 - `reply`/`forward` always open a window. `save` is asynchronous: closing or deleting the compose object

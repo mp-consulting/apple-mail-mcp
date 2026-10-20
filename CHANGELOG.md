@@ -6,6 +6,39 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Bulk trash could take the wrong message.** On busy IMAP mailboxes, `trash_messages` sometimes trashed the
+  next-older message instead of the one asked for: Mail's scripting turns a message `id` into a position in the
+  mailbox, and positions shift while earlier removals are still in flight. Messages are now addressed by their
+  Message-ID (`whose message id`). A message without one of its own in its mailbox is changed by id only when it
+  is alone in its call, after Mail confirms its subject and date; in a batch it comes back in `retry_one_by_one`.
+  Applies to move, trash, copy, mark, flag and colour.
+- **One message at a time.** Moves and trashes wait for each message to leave the database before sending the
+  next, and stop at the first one that does not: the rest come back in `not_attempted` instead of piling up in
+  Mail.
+- **Strays are named, put back and journalled.** When Mail moves messages nobody asked for,
+  `collateral_suspected.strays` lists each one (old id, Message-ID, where it went, its new id), they are moved
+  back at once (setting `restoreStrays`, on by default; `strays_restored`), and `stray_change_id` undoes them with
+  `undo_change`. A second look 5 s later catches strays that land late.
+- **A mailbox where a change went wrong is paused.** Further moves, trashes and `apply_rules` there are refused
+  until Mail settles (the unconfirmed messages leave or stay put, and nothing else goes missing), two minutes at
+  most, across server processes.
+- **Calls stay within the client's timeout.** A move or trash stops before 90 s (setting `callBudget`) and returns
+  the rest as `resume_ids`. Message events time out after 20 s instead of 60 s, and no Apple Event waits on a Mail
+  alert any more (it fails at once with a message saying so), except for compose windows left open for the user.
+- **Cancelled calls stop.** A `notifications/cancelled` from the client cancels the tool call, which stops between
+  messages and releases Mail and the automation lock.
+
+### Added
+
+- The activity log writes a line when a call starts, replaced by its result, so a call that hangs still shows
+  (grey in the menu bar app). Calls that reach Mail log where the time went: lock wait, Apple Events (count, total,
+  longest) and database checks. `doctor` lists calls of the last day that started over 2 minutes ago and never
+  finished.
+- `TrashProbeTests`: an opt-in live probe (`APPLE_MAIL_MCP_LIVE_TRASH=1`) that compares trashing by id, paced,
+  by moving to Trash and by Message-ID on throwaway copies.
+
 ## [0.6.0] - 2026-10-20
 
 ### Changed

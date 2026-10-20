@@ -26,6 +26,7 @@ public struct AppleEventError: Error, CustomStringConvertible, Sendable {
             """
         case -1744: "Mail automation needs your consent; approve the macOS prompt and retry."
         case -1712: "Mail did not answer in time; it may be busy syncing. Try again."
+        case -1713: "Mail is showing an alert or a dialog and waits for someone to answer it. Look at Mail, close it, and try again."
         case -600, -609: "Mail is not running or quit unexpectedly."
         case -1728: "Mail could not find that item (\(message)). It may have been moved; search again for its new id."
         default: "Mail returned error \(number)\(message.isEmpty ? "" : ": \(message)")"
@@ -67,9 +68,27 @@ enum MailSpec {
             from: target.accountID.isEmpty ? nil : account(id: target.accountID))
     }
 
-    /// `message id <rowid> of mailbox …`: direct lookup, no `whose` scan.
+    /// `message id <rowid> of mailbox …`: direct lookup, no `whose` scan. For a delete or a move, Cocoa scripting
+    /// turns the id into an index into the mailbox's messages, which can land on the neighbour while other removals
+    /// are in flight (see ``message(header:in:)``).
     static func message(_ id: Int64, in target: MailboxTarget) -> NSAppleEventDescriptor {
         object(want: "mssg", form: "ID  ", seld: NSAppleEventDescriptor(int32: Int32(truncatingIfNeeded: id)), from: mailbox(target))
+    }
+
+    /// `every message of mailbox … whose message id = "<header>"` (`message id` is the Message-ID header without
+    /// brackets). Mail tests each message itself, so no index is involved; every message carrying the header matches.
+    static func message(header: String, in target: MailboxTarget) -> NSAppleEventDescriptor {
+        object(want: "mssg", form: "test", seld: comparison("meid", equals: NSAppleEventDescriptor(string: header)), from: mailbox(target))
+    }
+
+    /// `its <property> = value`, the test of a `whose` clause.
+    static func comparison(_ code: String, equals value: NSAppleEventDescriptor) -> NSAppleEventDescriptor {
+        let examined = NSAppleEventDescriptor(descriptorType: fourCC("exmn"), bytes: nil, length: 0) ?? NSAppleEventDescriptor.null()
+        let record = NSAppleEventDescriptor.record()
+        record.setDescriptor(NSAppleEventDescriptor(enumCode: fourCC("=   ")), forKeyword: fourCC("relo"))
+        record.setDescriptor(property(code, of: examined), forKeyword: fourCC("obj1"))
+        record.setDescriptor(value, forKeyword: fourCC("obj2"))
+        return record.coerce(toDescriptorType: fourCC("cmpd")) ?? record
     }
 
     /// Insertion location such as `end of to recipients of m`.
@@ -165,10 +184,13 @@ final class MailEventSender: @unchecked Sendable {
         return Int(AEDeterminePermissionToAutomateTarget(desc, typeWildCard, typeWildCard, askIfNeeded))
     }
 
+    /// `interact`: let Mail bring up an alert and wait for the user (only for compose windows left open for
+    /// them). Otherwise an event that needs an answer fails at once (-1713) instead of blocking until someone
+    /// dismisses, say, an IMAP "couldn't move" sheet.
     @discardableResult
     func send(
         _ eventClass: String, _ eventID: String, direct: NSAppleEventDescriptor? = nil,
-        _ parameters: [String: NSAppleEventDescriptor] = [:]
+        _ parameters: [String: NSAppleEventDescriptor] = [:], interact: Bool = false
     ) throws -> NSAppleEventDescriptor {
         lock.lock()
         defer { lock.unlock() }
@@ -180,7 +202,7 @@ final class MailEventSender: @unchecked Sendable {
         for (key, value) in parameters { event.setParam(value, forKeyword: fourCC(key)) }
         let reply: NSAppleEventDescriptor
         do {
-            reply = try event.sendEvent(options: [.waitForReply, .canInteract], timeout: timeout)
+            reply = try event.sendEvent(options: [.waitForReply, interact ? .canInteract : .neverInteract], timeout: timeout)
         } catch let error as NSError {
             throw AppleEventError(number: error.code, message: error.localizedDescription)
         }
@@ -196,8 +218,8 @@ final class MailEventSender: @unchecked Sendable {
         try send("core", "getd", direct: specifier)
     }
 
-    func set(_ specifier: NSAppleEventDescriptor, to value: NSAppleEventDescriptor) throws {
-        try send("core", "setd", direct: specifier, ["data": value])
+    func set(_ specifier: NSAppleEventDescriptor, to value: NSAppleEventDescriptor, interact: Bool = false) throws {
+        try send("core", "setd", direct: specifier, ["data": value], interact: interact)
     }
 
     func make(_ cls: String, at location: NSAppleEventDescriptor? = nil, properties: [String: NSAppleEventDescriptor]) throws

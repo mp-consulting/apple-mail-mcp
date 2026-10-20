@@ -61,6 +61,18 @@ public enum Doctor {
 
         checks.append(keychainCheck())
 
+        // The last day only: a server that died long ago is history, not a problem to fix.
+        let stuck = ActivityLog().stuck().filter { Date().timeIntervalSince($0.date) < 86_400 }
+        if !stuck.isEmpty {
+            let lines = stuck.prefix(5).map { entry in
+                let alive = kill(entry.pid, 0) == 0 ? "still running" : "server gone"
+                return "\(entry.tool) since \(Render.isoDate(entry.date)) (pid \(entry.pid), \(alive))"
+            }
+            checks.append(Check(
+                name: "Unfinished calls", state: .warning,
+                detail: "\(stuck.count) started over 2 minutes ago and never finished: " + lines.joined(separator: "; ")))
+        }
+
         let agent = ApprovalCenter().isAgentRunning()
         checks.append(Check(
             name: "Menu bar app", state: agent || settings.sendPolicy != .confirm ? .ok : .failed,

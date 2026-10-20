@@ -213,7 +213,9 @@ extension MailToolbox {
             }
         }
         let byID = Dictionary(uniqueKeysWithValues: messages.map { ($0.id, $0) })
-        func target(_ id: Int64) -> MailboxTarget? { byID[id].flatMap { boxes[$0.mailboxID] }.map(MailboxTarget.init) }
+        func mailbox(_ id: Int64) -> Mailbox? { byID[id].flatMap { boxes[$0.mailboxID] } }
+        // A mailbox where a move or trash just went wrong is left alone as a whole, before anything changes.
+        try checkBreaker(Array(Set(order.compactMap { mailbox($0)?.id })).sorted().compactMap { boxes[$0] })
 
         let read = order.filter { plans[$0]!.markRead }
         if !read.isEmpty { try await run("update_messages", read, ["read": .bool(true)]) }
@@ -223,31 +225,38 @@ extension MailToolbox {
         }
         for color in RuleColor.allCases {
             let ids = order.filter { plans[$0]!.color == color }
-            for (mailbox, group) in Dictionary(grouping: ids, by: { target($0) }) {
-                guard let mailbox else { continue }
-                let count = try await automation.exclusive { try await automation.setColor(ids: group, in: mailbox, color: color) }
+            for (box, group) in Dictionary(grouping: ids, by: { mailbox($0) }) {
+                guard let box else { continue }
+                let refs = try messageRefs(group.compactMap { byID[$0] }, in: box)
+                let count = try await automation.exclusive { try await automation.setColor(refs, in: MailboxTarget(box), color: color) }
                 done.append(.obj([("action", .string("colour \(color.rawValue)")), ("count", .int(Int64(count)))]))
             }
         }
-        var copies: [String: (source: MailboxTarget, destination: Mailbox, ids: [Int64])] = [:]
+        var copies: [String: (source: Mailbox, destination: Mailbox, ids: [Int64])] = [:]
         for id in order {
-            guard let source = target(id) else { continue }
+            guard let source = mailbox(id) else { continue }
             for destination in plans[id]!.copyTo {
-                copies["\(source)→\(destination.id)", default: (source, destination, [])].ids.append(id)
+                copies["\(source.id)→\(destination.id)", default: (source, destination, [])].ids.append(id)
             }
         }
         for (_, copy) in copies.sorted(by: { $0.key < $1.key }) {
+            let refs = try messageRefs(copy.ids.compactMap { byID[$0] }, in: copy.source)
             let count = try await automation.exclusive {
-                try await automation.copy(ids: copy.ids, from: copy.source, to: MailboxTarget(copy.destination))
+                try await automation.copy(refs, from: MailboxTarget(copy.source), to: MailboxTarget(copy.destination))
             }
             done.append(.obj([("action", .string("copy to \(copy.destination.path)")), ("count", .int(Int64(count)))]))
         }
-        for (_, group) in Dictionary(grouping: order.filter { plans[$0]!.moveTo != nil && !plans[$0]!.trash }, by: { plans[$0]!.moveTo!.id }).sorted(by: { $0.key < $1.key }) {
-            let destination = plans[group[0]]!.moveTo!
-            try await run("move_messages", group, ["to_mailbox": .string(destination.path), "to_account": .string(destination.accountID)])
+        do {
+            for (_, group) in Dictionary(grouping: order.filter { plans[$0]!.moveTo != nil && !plans[$0]!.trash }, by: { plans[$0]!.moveTo!.id }).sorted(by: { $0.key < $1.key }) {
+                let destination = plans[group[0]]!.moveTo!
+                try await run("move_messages", group, ["to_mailbox": .string(destination.path), "to_account": .string(destination.accountID)])
+            }
+            let trash = order.filter { plans[$0]!.trash }
+            if !trash.isEmpty { try await run("trash_messages", trash, [:]) }
+        } catch where !done.isEmpty {
+            // A batch that went wrong pauses its mailbox (see `ChangeBreaker`): report what was done up to there.
+            done.append(.obj([("stopped", .string("\(error)"))]))
         }
-        let trash = order.filter { plans[$0]!.trash }
-        if !trash.isEmpty { try await run("trash_messages", trash, [:]) }
         return done
     }
 

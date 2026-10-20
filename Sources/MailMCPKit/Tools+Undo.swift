@@ -63,11 +63,15 @@ public struct ChangeRecord: Codable, Sendable, Hashable, Identifiable {
     /// Messages the change touched that had no Message-ID: they cannot be found again, so not undone.
     public var untracked: Int
     public var undone: Date?
+    /// Messages Mail moved during `tool` although nobody asked for them (`kind` move: from their mailbox to where
+    /// they went). Undoing puts them back.
+    public var stray: Bool?
 
     public init(
         id: String = ChangeRecord.newID(), date: Date = Date(), client: String?, tool: String, kind: Kind, items: [Item],
-        rule: Rule? = nil, untracked: Int = 0, undone: Date? = nil
+        rule: Rule? = nil, untracked: Int = 0, undone: Date? = nil, stray: Bool? = nil
     ) {
+        self.stray = stray
         self.rule = rule
         self.id = id
         self.date = date
@@ -135,6 +139,20 @@ extension MailToolbox {
         return record(ChangeRecord(client: clientName, tool: tool, kind: kind, items: items, untracked: untracked))
     }
 
+    /// Records the messages Mail moved although nobody asked for them; returns the change id that puts them back.
+    /// Those already put back are recorded too (as undone once all are), so the journal shows what happened.
+    func journalStrays(_ strays: [Stray], tool: String) -> String? {
+        var items: [ChangeRecord.Item] = []
+        for stray in strays {
+            guard let header = stray.header, let now = stray.nowIn else { continue }
+            items.append(.init(messageID: header, accountID: stray.source.accountID, from: stray.source.path, to: now.path))
+        }
+        let untracked = strays.count - items.count
+        let restored = strays.allSatisfy { $0.restoredID != nil }
+        return record(ChangeRecord(
+            client: clientName, tool: tool, kind: .move, items: items, untracked: untracked, undone: restored ? Date() : nil, stray: true))
+    }
+
     private func record(_ record: ChangeRecord) -> String? {
         guard let changes, !record.items.isEmpty || record.rule != nil else { return nil }
         changes.record(record)
@@ -189,6 +207,7 @@ extension MailToolbox {
             ("date", Render.date(record.date)),
             ("tool", .string(record.tool)),
             ("kind", .string(record.kind.rawValue)),
+            ("stray", record.stray == true ? .bool(true) : nil),
             ("messages", .int(Int64(record.items.count))),
             ("from", .array(sources.map { .string($0) })),
             ("to", destinations.isEmpty ? nil : .array(destinations.map { .string($0) })),
@@ -282,9 +301,8 @@ extension MailToolbox {
             guard !steps.isEmpty else {
                 throw ToolError("None of the \(record.items.count) messages of \(record.id) are where that change left them (moved again or deleted).")
             }
-            let report = try await applyVerified(steps) { step in
-                _ = try await self.automation.move(
-                    ids: step.messages.map(\.id), from: MailboxTarget(step.source), to: MailboxTarget(step.destination!))
+            let report = try await applyVerified(steps, tool: "undo_change") { step, message in
+                try await self.automation.move([message], from: MailboxTarget(step.source), to: MailboxTarget(step.destination!)) > 0
             }
             if !report.done.isEmpty { changes?.markUndone(record.id) }
             let mapping = report.newIDs.sorted { $0.key < $1.key }
@@ -327,7 +345,7 @@ extension MailToolbox {
             for (box, messages, previous) in plan {
                 let color = previous.flagged == true ? previous.flagColor.flatMap(FlagColor.init(rawValue:)) : nil
                 restored += try await automation.setState(
-                    ids: messages.map(\.id), in: MailboxTarget(box), read: previous.read,
+                    try messageRefs(messages, in: box), in: MailboxTarget(box), read: previous.read,
                     flagged: color == nil ? previous.flagged : nil, flagColor: color)
             }
             changes?.markUndone(record.id)

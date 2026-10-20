@@ -244,8 +244,8 @@ extension MailToolbox {
             try await self.authorizeChange(
                 tool: "snooze_messages", summary: "Snooze \(steps.reduce(0) { $0 + $1.messages.count }) messages",
                 messages: steps.flatMap(\.messages))
-            let report = try await self.applyVerified(steps) { step in
-                _ = try await automation.move(ids: step.messages.map(\.id), from: MailboxTarget(step.source), to: MailboxTarget(step.destination!))
+            let report = try await self.applyVerified(steps, tool: "snooze_messages") { step, message in
+                try await automation.move([message], from: MailboxTarget(step.source), to: MailboxTarget(step.destination!)) > 0
             }
             // Unverified moves may still land: they are recorded too, so nothing stays snoozed with nothing to
             // bring it back (a message that never left is simply let go when the snooze ends).
@@ -417,11 +417,15 @@ extension MailToolbox {
             return 0
         }
         do {
-            let report = try await applyVerified([ChangeStep(source: waiting, destination: home, messages: found, mustArrive: true)]) { step in
-                _ = try await self.automation.move(ids: step.messages.map(\.id), from: MailboxTarget(waiting), to: MailboxTarget(home))
+            let report = try await applyVerified(
+                [ChangeStep(source: waiting, destination: home, messages: found, mustArrive: true)], tool: "snooze"
+            ) { _, message in
+                try await self.automation.move([message], from: MailboxTarget(waiting), to: MailboxTarget(home)) > 0
             }
-            let back = Array(report.newIDs.values)
-            if !back.isEmpty { _ = try? await automation.setState(ids: back, in: MailboxTarget(home), read: false, flagged: nil, flagColor: nil) }
+            let back = try store.messages(ids: Array(report.newIDs.values))
+            if !back.isEmpty {
+                _ = try? await automation.setState(try messageRefs(back, in: home), in: MailboxTarget(home), read: false, flagged: nil, flagColor: nil)
+            }
             let returned = Set(found.filter { report.done.contains($0.id) }.compactMap(\.messageIDHeader))
             schedule.updateSnooze(snooze.id) { item in
                 item?.messageIDs.removeAll { returned.contains($0) }

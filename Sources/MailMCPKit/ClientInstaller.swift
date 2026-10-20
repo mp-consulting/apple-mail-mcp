@@ -81,13 +81,12 @@ public struct ClientInstaller: Sendable {
     /// Where this app's server was before 0.6, next to the menu bar app in Contents/MacOS; nil when `serverPath` is not
     /// the server of an app bundle.
     var formerServerPath: String? {
-        let helper = "/Contents/Helpers/\(Self.helperName)/Contents/MacOS/apple-mail-mcp"
-        guard serverPath.hasSuffix(helper) else { return nil }
-        return serverPath.dropLast(helper.count) + "/Contents/MacOS/apple-mail-mcp"
+        guard serverPath.hasSuffix("/" + Self.helperExecutable) else { return nil }
+        return serverPath.dropLast(Self.helperExecutable.count) + "Contents/MacOS/apple-mail-mcp"
     }
 
-    /// The server's bundle inside the app (see `Scripts/build-app.sh`).
-    public static let helperName = "Apple Mail MCP Server.app"
+    /// The server inside the app: its own bundle, so it can claim the Keychain group (see `Scripts/build-app.sh`).
+    public static let helperExecutable = "Contents/Helpers/Apple Mail MCP Server.app/Contents/MacOS/apple-mail-mcp"
 
     /// Points the clients set up with this app's former server path at the current one, keeping their arguments.
     /// Returns the clients changed.

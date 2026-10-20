@@ -186,13 +186,12 @@ struct MailTab: View {
     @Bindable var model: AgentModel
 
     var body: some View {
-        if let release = model.updater.installingRelease {
-            let progress = model.updater.installProgress
+        if let (release, progress) = model.updater.installing {
             Row(
                 systemImage: "arrow.down.circle.fill", iconColor: .accentColor,
-                title: "Updating to version \(release.version.description)", detail: progress?.step ?? "Starting…")
+                title: "Updating to version \(release.version.description)", detail: progress.step)
             {
-                ProgressView(value: progress?.fraction ?? 0).frame(width: 110)
+                ProgressView(value: progress.fraction).frame(width: 110)
                     .accessibilityLabel("Update progress")
             }
         } else if let release = model.updater.availableRelease {
@@ -418,7 +417,7 @@ struct ActivityRow: View {
     var body: some View {
         HStack(spacing: 8) {
             Circle()
-                .fill(entry.ok ? (entry.isWrite ? Color.orange : Color.green) : Color.red)
+                .fill(entry.running == true ? Color.gray : entry.ok ? (entry.isWrite ? Color.orange : Color.green) : Color.red)
                 .frame(width: 6, height: 6)
             Text(entry.tool).font(.caption.monospaced()).frame(width: 120, alignment: .leading)
             Text(entry.summary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -731,9 +730,8 @@ struct SettingsView: View {
                     case .checking: ProgressView().controlSize(.small)
                     case .upToDate: Text("Up to date").foregroundStyle(.secondary)
                     case .available(let release): Text("\(release.version.description) available").foregroundStyle(.tint)
-                    case .installing:
-                        ProgressView(value: model.updater.installProgress?.fraction ?? 0).frame(width: 120)
-                            .help(model.updater.installProgress?.step ?? "Installing…")
+                    case .installing(_, let progress):
+                        ProgressView(value: progress.fraction).frame(width: 120).help(progress.step)
                     case .failed(let message): Text(message).foregroundStyle(.red).lineLimit(2)
                     case .idle: EmptyView()
                     }

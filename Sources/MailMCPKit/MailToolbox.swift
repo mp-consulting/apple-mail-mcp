@@ -55,6 +55,8 @@ public final class MailToolbox: @unchecked Sendable {
     public let schedule: ScheduleStore?
     /// Rule changes Mail had not saved when their tool returned; `mail_setup` reports them until it does.
     public let pendingRules: PendingRuleStore?
+    /// Mailboxes where a change just went wrong, next to the change journal; nil with undo off.
+    public let breaker: ChangeBreaker?
     /// The user's address book, for `find_contact`.
     public let contacts: any ContactsProviding
     public let bodyIndexURL: URL
@@ -114,6 +116,8 @@ public final class MailToolbox: @unchecked Sendable {
         self.changes = changes
         self.schedule = schedule
         self.pendingRules = pendingRules
+        // Next to the journal, so a toolbox with its own support folder (tests) has its own.
+        breaker = changes.map { ChangeBreaker(url: $0.url.deletingLastPathComponent().appending(path: ChangeBreaker.fileName)) }
         self.contacts = contacts
         self.bodyIndexURL = bodyIndexURL
         self.bodyIndexKey = bodyIndexKey ?? BodyIndexKey.provider(forIndexAt: bodyIndexURL)
@@ -330,15 +334,28 @@ public final class MailToolbox: @unchecked Sendable {
         guard let definition = listed.byName[name] else {
             return .init(content: [.text(text: "Unknown tool \(name)", annotations: nil, _meta: nil)], isError: true)
         }
+        // A line now, so a call that hangs (or a server that dies) still shows up, and with which tool.
+        let entryID = UUID()
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let isWrite = definition.kind != .read
+        activity?.append(ActivityEntry(
+            id: entryID, date: started, pid: pid, client: clientName, tool: name, ok: true, milliseconds: 0, summary: "running",
+            isWrite: isWrite, running: true))
         await refreshOwnAddresses()
         Trace.mark("addresses")
         Self.debug("\(name): addresses ready after \(Int(Date().timeIntervalSince(started) * 1000)) ms")
+        let metrics = AutomationMetrics()  // filled by calls that reach Mail
         var ok = true
         var text: String
         var summary: String
         var link: String?
         do {
-            let reply = try await definition.run(Arguments(arguments))
+            // Reads never reach Mail: they run as before, without the bookkeeping.
+            let reply = isWrite
+                ? try await AutomationMetrics.$current.withValue(metrics) {
+                    try await Self.$callStart.withValue(started) { try await definition.run(Arguments(arguments)) }
+                }
+                : try await definition.run(Arguments(arguments))
             Trace.mark("tool")
             text = reply.json.serialized()
             Trace.mark("serialize")
@@ -347,14 +364,24 @@ public final class MailToolbox: @unchecked Sendable {
         } catch {
             ok = false
             text = "Error: \(error)"
-            summary = String(describing: error).components(separatedBy: "\n").first ?? "error"
+            summary = error is CancellationError ? "cancelled by the client" : String(describing: error).components(separatedBy: "\n").first ?? "error"
         }
         Self.debug("\(name): finished after \(Int(Date().timeIntervalSince(started) * 1000)) ms")
-        activity?.append(
-            ActivityEntry(
-                date: started, pid: ProcessInfo.processInfo.processIdentifier, client: clientName, tool: name, ok: ok,
-                milliseconds: Int(Date().timeIntervalSince(started) * 1000), summary: Render.truncate(summary, 160),
-                isWrite: definition.kind != .read, link: link))
+        if let activity {
+            var entry = ActivityEntry(
+                id: entryID, date: started, pid: pid, client: clientName, tool: name, ok: ok,
+                milliseconds: Int(Date().timeIntervalSince(started) * 1000), summary: Render.truncate(summary, 160), isWrite: isWrite,
+                link: link)
+            let ms = { (seconds: TimeInterval) in Int(seconds * 1000) }
+            if metrics.events > 0 || metrics.lockWait > 0.001 {
+                entry.lockWaitMs = ms(metrics.lockWait)
+                entry.events = metrics.events
+                entry.eventMs = ms(metrics.eventTotal)
+                entry.eventMaxMs = ms(metrics.eventMax)
+                entry.verifyMs = metrics.verify > 0 ? ms(metrics.verify) : nil
+            }
+            activity.append(entry)
+        }
         return .init(content: [.text(text: text, annotations: nil, _meta: nil)], isError: ok ? nil : true)
     }
 

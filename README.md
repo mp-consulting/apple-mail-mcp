@@ -228,11 +228,15 @@ machine's load hits them all alike. Full tables, with response sizes:
 
 – : the server has no tool for that question.
 
-The servers that drive Mail with AppleScript answer in 0.3 s to over 20 s, or time out, and keep Mail busy
-while they do (one run each, [Benchmarks/compare-servers.md](Benchmarks/compare-servers.md)): the Python
-mcp-apple-mail took 0.3–5 s for what it answered, ipsupport-llc 1.6.1 4–23 s; jakobfigur 0.6.2 and
-kiki830621 2.0.1 timed out and jayvee6 0.1.0 failed on this mailbox. Without the body index, a body search scans
-recent messages in parallel instead (27 ms here). Building the index for the whole mailbox takes about a minute.
+The servers that drive Mail with AppleScript, measured the same way (0.6.0, one call per question for every
+server, [Benchmarks/compare-servers.md](Benchmarks/compare-servers.md)), take seconds where Apple Mail MCP takes
+milliseconds, and keep Mail busy while they do: ipsupport-llc 1.6.1 answered in 0.17–11 s, the Python
+mcp-apple-mail in 8–84 s; on this mailbox jakobfigur 0.6.2 and jayvee6 0.1.0 failed, kiki830621 2.0.1 timed out
+after 3 minutes, and the questions the others could not answer timed out or errored inside Mail. Apple Mail MCP
+answered all 13 in 0.8–17 ms.
+
+Without the body index, a body search scans recent messages in parallel instead (27 ms here). Building the index
+for the whole mailbox takes about a minute.
 
 Reproduce: `Scripts/bench-servers.sh` fetches and prepares the other servers (pinned versions, release files
 checked against the registry's SHA-256), then runs `mail-bench compare`; `--fresh-index` gives our server a

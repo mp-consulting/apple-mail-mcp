@@ -480,6 +480,26 @@ public final class MailStore: @unchecked Sendable {
         return Dictionary(rows.map { ($0.0, Self.bareMessageID($0.1)) }, uniquingKeysWith: { a, _ in a })
     }
 
+    /// How many Message-IDs are carried both by a message in one of `trash` and by one in one of `others` (direct rows
+    /// only: label mailboxes are not looked at). One pass over those mailboxes' rows.
+    public func sharedHeaderCount(trash: [Int64], others: [Int64]) throws -> Int {
+        guard !trash.isEmpty, !others.isEmpty else { return 0 }
+        let trashJSON = MailStore.idArray(trash)
+        return Int(
+            try withDB { db in
+                try db.scalarInt(
+                    """
+                    SELECT COUNT(*) FROM (
+                        SELECT g.message_id_header FROM messages m JOIN message_global_data g ON g.ROWID = m.global_message_id
+                        WHERE m.deleted = 0 AND g.message_id_header IS NOT NULL AND g.message_id_header != ''
+                        AND m.mailbox IN (SELECT value FROM json_each(?) UNION ALL SELECT value FROM json_each(?))
+                        GROUP BY g.message_id_header
+                        HAVING SUM(m.mailbox IN (SELECT value FROM json_each(?))) > 0
+                           AND SUM(m.mailbox NOT IN (SELECT value FROM json_each(?))) > 0)
+                    """, [trashJSON, MailStore.idArray(others), trashJSON, trashJSON]) ?? 0
+            })
+    }
+
     /// The subset of `ids` still in the mailbox (not deleted, directly or through a label).
     public func present(ids: [Int64], mailboxID: Int64) throws -> Set<Int64> {
         guard !ids.isEmpty else { return [] }

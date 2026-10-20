@@ -15,6 +15,7 @@ final class StrayTests {
     deinit { h.remove() }
 
     var icloudInbox: MailboxTarget { MailboxTarget(accountID: h.fixture.icloud, path: "INBOX") }
+    var icloudTrash: MailboxTarget { MailboxTarget(accountID: h.fixture.icloud, path: "Deleted Messages") }
 
     static var keepStrays: Settings {
         var settings = Harness.sendingAllowed
@@ -47,7 +48,7 @@ final class StrayTests {
         let json = try await h.json("trash_messages", ["ids": [.int(Int(h.id("kickoff"))), .int(Int(h.id("receipt")))]])
         #expect(json["trashed"] as? Int == 2)
         // One event per message, each by its Message-ID.
-        #expect(h.automation.calls == [.trash([h.id("kickoff")], icloudInbox), .trash([h.id("receipt")], icloudInbox)])
+        #expect(h.automation.calls == [.trash([h.id("kickoff")], icloudInbox, icloudTrash), .trash([h.id("receipt")], icloudInbox, icloudTrash)])
         #expect(h.automation.refs.map(\.header) == ["kickoff@example.test", try h.toolbox.store.message(id: h.id("receipt")).messageIDHeader])
     }
 
@@ -62,7 +63,7 @@ final class StrayTests {
         #expect(json["trashed"] as? Int == 1)
         #expect(json["retry_one_by_one"] as? [Int] == [Int(receipt), Int(invoice)])
         #expect((json["warning"] as? String)?.contains("call of its own") == true)
-        #expect(h.automation.calls == [.trash([digest], icloudInbox)])
+        #expect(h.automation.calls == [.trash([digest], icloudInbox, icloudTrash)])
         // Alone in its call, it goes by id, with the subject and date Mail must show there.
         let alone = try await h.json("trash_messages", ["ids": [.int(Int(receipt))]])
         #expect(alone["trashed"] as? Int == 1)
@@ -167,7 +168,7 @@ final class StrayTests {
         let json = try JSONSerialization.jsonObject(with: Data(result.text.utf8)) as? [String: Any] ?? [:]
         #expect(json["trashed"] as? Int == 1)
         #expect(json["not_attempted"] as? [Int] == [Int(digest), Int(invoice)])
-        #expect(h.automation.calls == [.trash([receipt], icloudInbox)])
+        #expect(h.automation.calls == [.trash([receipt], icloudInbox, icloudTrash)])
         // What was done is journalled even so.
         #expect(json["change_id"] as? String != nil)
     }
@@ -183,7 +184,7 @@ final class StrayTests {
         #expect(trash.isError && trash.text.contains("has not settled"))
         let move = await h.call("move_messages", ["ids": [.int(Int(invoice))], "to_mailbox": "archive"])
         #expect(move.isError && move.text.contains("INBOX"))
-        #expect(h.automation.calls == [.trash([digest], icloudInbox)])
+        #expect(h.automation.calls == [.trash([digest], icloudInbox, icloudTrash)])
         // Other mailboxes are not affected.
         let archived = try await h.json("trash_messages", ["ids": [.int(Int(h.id("archived")))]])
         #expect(archived["trashed"] as? Int == 1)

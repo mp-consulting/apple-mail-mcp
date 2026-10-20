@@ -11,7 +11,8 @@
 # A stable signature keeps the Full Disk Access and Automation grants across rebuilds; ad-hoc
 # signatures change every build and macOS asks again. Developer ID also gets a secure timestamp,
 # which notarization requires.
-# VERSION and BUILD_NUMBER, when set, stamp the bundle's version (the release workflow sets them).
+# VERSION and BUILD_NUMBER, when set, stamp the bundle's version (the release workflow sets them); the git commit is
+# stamped too (AppleMailMCPCommit).
 # ARCHS picks the architectures (default: universal, "arm64 x86_64"; set ARCHS=arm64 for faster local builds).
 set -eu
 cd "$(dirname "$0")/.."
@@ -36,6 +37,10 @@ ditto --norsrc --noextattr Resources/AppIcon.icns "$APP/Contents/Resources/AppIc
 VERSION="${VERSION:-$(sed -n 's/.*"\([0-9][0-9.]*\)".*/\1/p' Sources/MailMCPKit/MailMCPServer.swift | head -n 1)}"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_NUMBER:-$VERSION}" "$APP/Contents/Info.plist"
+# The commit, so the server can say which build a client started (MailMCPVersion.build); "-dirty" with local changes.
+COMMIT="$(git rev-parse --short=7 HEAD 2>/dev/null || echo unknown)"
+git diff --quiet HEAD 2>/dev/null || COMMIT="$COMMIT-dirty"
+/usr/libexec/PlistBuddy -c "Set :AppleMailMCPCommit $COMMIT" "$APP/Contents/Info.plist"
 # The server's bundle shares the app's identifier, version and usage descriptions (Contacts, Automation).
 HELPER="$APP/Contents/Helpers/Apple Mail MCP Server.app"
 mkdir -p "$HELPER/Contents/MacOS"

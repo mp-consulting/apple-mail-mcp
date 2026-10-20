@@ -357,7 +357,7 @@ public final class MailToolbox: @unchecked Sendable {
                 }
                 : try await definition.run(Arguments(arguments))
             Trace.mark("tool")
-            text = reply.json.serialized()
+            text = (definition.kind == .read || definition.kind == .fileWrite ? reply.json : reply.json.adding("server_version", .string(MailMCPVersion.build))).serialized()
             Trace.mark("serialize")
             summary = reply.summary
             if let id = reply.messageID { link = (try? store.message(id: id))?.mailLink }

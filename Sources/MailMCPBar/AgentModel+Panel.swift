@@ -17,7 +17,7 @@ enum SkillTarget: Hashable {
 
 /// Something the user has to fix, shown as a row only while it is wrong.
 struct AttentionItem: Identifiable, Hashable {
-    enum Fix: Hashable { case fullDiskAccess, automation, openClaude }
+    enum Fix: Hashable { case fullDiskAccess, automation, openClaude, claudeTab }
     var id: String
     var icon: String
     var title: String
@@ -108,11 +108,20 @@ extension AgentModel {
                 id: "client-fda-\(app)", icon: "exclamationmark.lock", title: "\(app) can't read your mail",
                 detail: "Turn on Full Disk Access for \(app), then restart it.", action: "Open Settings…", fix: .fullDiskAccess))
         }
+        // A client that starts another server than this app's (the Claude extension, an old build) reports changes
+        // that this version would not make.
+        for (client, version) in ActivityEntry.clientsOnOlderServer(in: activity) {
+            items.append(AttentionItem(
+                id: "older-server-\(client)", icon: "clock.arrow.circlepath", title: "\(client) uses an older server",
+                detail: "It ran \(version ?? "a version before 0.6.2"), not \(MailMCPVersion.current). Restart it, and check which server it starts.",
+                action: "Show setup", fix: .claudeTab))
+        }
         return items
     }
 
     func perform(_ item: AttentionItem) {
         switch item.fix {
+        case .claudeTab: panelTab = .claude
         case .fullDiskAccess: openFullDiskAccessSettings()
         case .automation: openAutomationSettings()
         case .openClaude:

@@ -157,6 +157,12 @@ public indirect enum JSON: Sendable, Equatable {
         .object(pairs.compactMap { key, value in value.map { (key, $0) } })
     }
 
+    /// This object with `key` added last (anything else is returned as it is).
+    func adding(_ key: String, _ value: JSON) -> JSON {
+        guard case .object(let pairs) = self else { return self }
+        return .object(pairs + [(key, value)])
+    }
+
     public func serialized(pretty: Bool = false) -> String {
         if pretty { return reference(pretty: true) }
         // Tool output: UTF-8 bytes into one buffer, and strings that need no escaping copied whole. Appending scalar

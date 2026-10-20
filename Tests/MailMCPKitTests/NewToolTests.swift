@@ -297,7 +297,7 @@ final class DraftToolTests {
         }
         #expect(mode == .send && message.to == ["bob@example.test"] && message.cc == ["dan@example.test"])
         #expect(message.subject == "Proposal" && message.body.contains("Draft text for Bob") && message.attachments.count == 1)
-        #expect(h.automation.calls.last == .trash([id], MailboxTarget(accountID: h.fixture.icloud, path: "Drafts")))
+        #expect(h.automation.calls.last == .trash([id], MailboxTarget(accountID: h.fixture.icloud, path: "Drafts"), MailboxTarget(accountID: h.fixture.icloud, path: "Deleted Messages")))
     }
 
     @Test func refusesRepliesAndNonDrafts() async throws {

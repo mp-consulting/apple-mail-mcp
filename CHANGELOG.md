@@ -6,6 +6,30 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Trash is a move to Trash.** After 0.6.1, `trash_messages` still took the date-neighbour of some messages on a
+  busy iCloud mailbox: Mail's `delete` removes what it resolves by index, even when the message is named by its
+  Message-ID. Trashing now moves each message to its account's Trash mailbox, by Message-ID, one at a time, and
+  counts it only once it shows up there (more arriving in Trash than asked stops the call, as for a move). No
+  `delete` is sent for a message, except on Gmail, which keeps Mail's `delete` until a move to `[Gmail]/Trash` is
+  checked live. An account with several Trash mailboxes uses the only one holding messages; with none, or several
+  in use, the call is refused instead of guessing (use `move_messages`). `send_draft` removes the sent draft the
+  same way.
+
+### Added
+
+- **Which server a client runs.** `initialize` reports the version with its build (`0.6.2+<commit>`, `.mcpb` for the
+  Claude extension, `+dev` for a plain `swift build`), and so do replies that change mail (`server_version`) and
+  every activity log line. `doctor` lists the build each client used last and warns when one ran an older server
+  in the last hour; the menu bar app shows that under Needs attention.
+- `doctor` counts messages whose Message-ID sits both in Trash and in another mailbox of the same account (Mail
+  can leave such copies after messages are moved out of Trash).
+- `TrashProbeTests`: variant E (move by Message-ID to Trash, paced, while another task keeps sync busy),
+  `APPLE_MAIL_MCP_PROBE_ROUNDS`, and `copiesLeftAfterRestore` (`APPLE_MAIL_MCP_PROBE_GHOSTS=1`), which counts copies
+  left in Trash at +0, +1, +5 and +15 minutes after a restore. `GmailTrashProbeTests` compares `move` to Trash
+  with `delete` on Gmail, on drafts it makes itself.
+
 ## [0.6.1] - 2026-10-20
 
 ### Fixed

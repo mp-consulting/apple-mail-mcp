@@ -71,7 +71,12 @@ swift Scripts/make-icon.swift Resources
 - **Do not** address messages by `id` for delete or move during bulk changes on IMAP: scripting resolves the id to an
   index (`_scriptingRemoveObjectsAtIndexes:fromValueForKey:`) and, with removals in flight, can remove the neighbour.
   Use `whose message id` (`MailSpec.message(header:in:)`, property `meid`), one message at a time, waiting for each
-  to leave the database. Probe: `TrashProbeTests` (`APPLE_MAIL_MCP_LIVE_TRASH=1`).
+  to leave the database (and, for a move, to arrive). Probe: `TrashProbeTests` (`APPLE_MAIL_MCP_LIVE_TRASH=1`).
+- **Do not** trash with `delete`, not even with a `whose message id` specifier: `NSDeleteCommand` turns the evaluated
+  specifier into indexes and removes those, which has taken the neighbour (live, 0.6.1). Trash by `move` to the
+  account's Trash mailbox (`MessageEvent.trash(to:)`). Gmail still uses `delete` until a probe shows that a move to
+  `[Gmail]/Trash` drops the labels the same way. After messages are moved out of Trash, Mail can leave (or bring
+  back minutes later) a copy in Trash: `doctor` counts them.
 - **Do not** delete a rule condition with Apple Events: `-[MFMessageRule(Applescript) removeFromCriteriaAtIndex:]`
   calls itself until Mail crashes (stack overflow). Rewrite conditions in place, or make the rule again.
 - `reply`/`forward` always open a window. `save` is asynchronous: closing or deleting the compose object

@@ -25,7 +25,8 @@
       "command": "${__dirname}/server/apple-mail-mcp",
       "args": [],
       "env": {
-        "APPLE_MAIL_MCP_READ_ONLY": "${user_config.read_only}"
+        "APPLE_MAIL_MCP_READ_ONLY": "${user_config.read_only}",
+        "APPLE_MAIL_MCP_COMMIT": "__COMMIT__.mcpb"
       }
     }
   },

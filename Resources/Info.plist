@@ -12,6 +12,8 @@
 	<string>com.mpconsulting.AppleMailMCP</string>
 	<key>CFBundleName</key>
 	<string>Apple Mail MCP</string>
+	<key>AppleMailMCPCommit</key>
+	<string>__COMMIT__</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

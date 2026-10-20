@@ -32,6 +32,8 @@ struct ChangeStep {
     var messages: [MessageSummary]
     /// A move only counts once the message shows up in `destination`.
     var mustArrive: Bool
+    /// Gmail's trash: Mail's `delete` instead of a move to `destination` (see ``MailToolbox/trashSteps(_:)``).
+    var deletes = false
 }
 
 /// A message that left a mailbox during a change although nobody asked for it.

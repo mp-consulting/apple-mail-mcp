@@ -116,6 +116,29 @@ enum MailSpec {
     }
 }
 
+/// An Apple Event on one message, before the message is set as its direct object.
+struct MessageEvent {
+    var eventClass: String
+    var eventID: String
+    var parameters: [String: NSAppleEventDescriptor] = [:]
+
+    static func move(to target: MailboxTarget) -> MessageEvent {
+        MessageEvent(eventClass: "core", eventID: "move", parameters: ["insh": MailSpec.mailbox(target)])
+    }
+
+    static func copy(to target: MailboxTarget) -> MessageEvent {
+        MessageEvent(eventClass: "core", eventID: "clon", parameters: ["insh": MailSpec.mailbox(target)])
+    }
+
+    /// To Trash is a move to the account's Trash mailbox, never `delete`: Cocoa scripting turns the evaluated
+    /// specifier of a delete into indexes into the mailbox's messages, even with a `whose` specifier, and has removed
+    /// the neighbour of the message it was asked for.
+    static func trash(to trash: MailboxTarget) -> MessageEvent { move(to: trash) }
+
+    /// Mail's `delete`: only for Gmail, until moving to `[Gmail]/Trash` is shown to do the same there.
+    static var delete: MessageEvent { MessageEvent(eventClass: "core", eventID: "delo") }
+}
+
 /// A value read back from an Apple Event reply.
 public indirect enum AEValue: Sendable, Hashable {
     case string(String)
@@ -211,6 +234,12 @@ final class MailEventSender: @unchecked Sendable {
             throw AppleEventError(number: Int(number), message: message)
         }
         return reply.paramDescriptor(forKeyword: keyDirectObject) ?? NSAppleEventDescriptor.null()
+    }
+
+    /// Sends `event` with `message` as its direct object.
+    @discardableResult
+    func send(_ event: MessageEvent, to message: NSAppleEventDescriptor) throws -> NSAppleEventDescriptor {
+        try send(event.eventClass, event.eventID, direct: message, event.parameters)
     }
 
     // Standard suite shorthands.

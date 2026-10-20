@@ -55,6 +55,20 @@ struct AppleEventTests {
         #expect(field(property, "from")?.descriptorType == fourCC("exmn"))
     }
 
+    /// Trashing sends `move … to <the account's Trash>`: a `delete` (`core/delo`) on a message removes by index, even
+    /// with a `whose` specifier, and has taken the neighbour.
+    @Test func trashIsAMoveNeverADelete() throws {
+        let trash = MailboxTarget(accountID: "ACCOUNT", path: "Deleted Messages")
+        let event = MessageEvent.trash(to: trash)
+        #expect(event.eventClass == "core" && event.eventID == "move")
+        #expect(event.eventID != MessageEvent.delete.eventID)
+        let destination = try #require(event.parameters["insh"])
+        #expect(code(field(destination, "want")) == "mbxp")
+        #expect(field(destination, "seld")?.stringValue == "Deleted Messages")
+        #expect(field(try #require(field(destination, "from")), "seld")?.stringValue == "ACCOUNT")
+        #expect(MessageEvent.delete.eventID == "delo" && MessageEvent.delete.parameters.isEmpty)
+    }
+
     /// A message without a Message-ID is changed by id only when Mail shows the subject and date the store has.
     @Test func idIsCheckedAgainstSubjectAndDate() {
         let date = Date(timeIntervalSince1970: 1_700_000_000)

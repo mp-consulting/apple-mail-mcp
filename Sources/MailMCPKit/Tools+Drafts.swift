@@ -88,12 +88,7 @@ extension MailToolbox {
                     attachments: files),
                 mode: .send)
             // The message went out; the draft goes to Trash like Mail does after sending it.
-            let trash = try store.mailboxes(accountID: mailbox.accountID).filter { $0.role == .trash }
-            let report = try? await self.applyVerified([
-                ChangeStep(source: mailbox, destination: trash.count == 1 ? trash[0] : nil, messages: [draft.summary], mustArrive: false)
-            ], tool: "send_draft") { step, message in
-                try await automation.trash([message], in: MailboxTarget(step.source)) > 0
-            }
+            let report = try? await self.applyVerified(try self.trashSteps([(mailbox, [draft.summary])]), tool: "send_draft", send: self.sendToTrash)
             let removed = report?.done.contains(id) ?? false
             return ToolReply(
                 json: .obj([

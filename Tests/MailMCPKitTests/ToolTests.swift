@@ -221,6 +221,7 @@ final class ChangeToolTests {
     deinit { h.remove() }
 
     var icloudInbox: MailboxTarget { MailboxTarget(accountID: h.fixture.icloud, path: "INBOX") }
+    var icloudTrash: MailboxTarget { MailboxTarget(accountID: h.fixture.icloud, path: "Deleted Messages") }
 
     @Test func moveGroupsBySourceAndReturnsNewIDs() async throws {
         let kickoff = h.id("kickoff")
@@ -295,7 +296,7 @@ final class ChangeToolTests {
         #expect(json["trashed"] as? Int == 1)
         #expect((json["skipped_already_in_trash_or_junk"] as? [Int])?.count == 2)
         #expect(json["unverified"] == nil && json["collateral_suspected"] == nil && json["warning"] == nil)
-        #expect(h.automation.calls == [.trash([h.id("receipt")], icloudInbox)])
+        #expect(h.automation.calls == [.trash([h.id("receipt")], icloudInbox, icloudTrash)])
         #expect(h.automation.unguardedChanges == 0)
     }
 
@@ -309,7 +310,7 @@ final class ChangeToolTests {
         #expect(json["trashed"] as? Int == 1)
         #expect(json["unverified"] as? [Int] == [Int(digest)])
         #expect(json["not_attempted"] as? [Int] == [Int(invoice)])
-        #expect(h.automation.calls == [.trash([receipt], icloudInbox), .trash([digest], icloudInbox)])
+        #expect(h.automation.calls == [.trash([receipt], icloudInbox, icloudTrash), .trash([digest], icloudInbox, icloudTrash)])
         #expect(json["collateral_suspected"] == nil)
         #expect((json["warning"] as? String)?.contains("Do not resend") == true)
     }
@@ -329,7 +330,7 @@ final class ChangeToolTests {
         #expect(collateral?["expected_drop"] as? Int == 1 && collateral?["actual_drop"] as? Int == 2)
         // The second mailbox (Archive/2020) is not touched.
         #expect(json["not_attempted"] as? [Int] == [Int(archived)])
-        #expect(h.automation.calls.first == .trash([receipt], icloudInbox))
+        #expect(h.automation.calls.first == .trash([receipt], icloudInbox, icloudTrash))
         #expect(h.automation.calls.filter { if case .trash = $0 { true } else { false } }.count == 1)
         // The stray is named; putting it back did nothing here (this fake Mail ignores moves).
         let strays = collateral?["strays"] as? [[String: Any]]

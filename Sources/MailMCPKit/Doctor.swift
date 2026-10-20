@@ -16,6 +16,11 @@ public enum Doctor {
         public var detail: String
     }
 
+    /// Blocking reads and the Automation permission call (which can stall while Mail is busy): always on the
+    /// concurrent pool, whoever calls it.
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
     public static func checks(settings: Settings) async -> [Check] {
         var checks: [Check] = []
         var store: MailStore?
@@ -73,6 +78,17 @@ public enum Doctor {
                 detail: "\(stuck.count) started over 2 minutes ago and never finished: " + lines.joined(separator: "; ")))
         }
 
+        checks.append(contentsOf: clientChecks(ActivityLog().recent(limit: 400)))
+        if let store, let copies = try? trashCopies(store), !copies.isEmpty {
+            checks.append(Check(
+                name: "Copies in Trash", state: .warning,
+                detail: copies.map { "\($0.count) in \($0.account)" }.joined(separator: ", ") + """
+                     have their Message-ID both in Trash and in another mailbox (left by Mail after messages were \
+                    moved out of Trash). Emptying Trash is safe: the other copy stays. Trashing one of them again puts \
+                    its Message-ID in Trash twice, and Trash then gives it back only one call per message.
+                    """))
+        }
+
         let agent = ApprovalCenter().isAgentRunning()
         checks.append(Check(
             name: "Menu bar app", state: agent || settings.sendPolicy != .confirm ? .ok : .failed,
@@ -81,6 +97,40 @@ public enum Doctor {
             name: "Settings", state: .ok,
             detail: "send policy \(settings.sendPolicy.rawValue), mail changes \(settings.allowMailChanges ? "allowed" : "off"), batch limit \(settings.maxBatchSize)"))
         return checks
+    }
+
+    /// The server build each client used last (from the activity log), and a warning when one used an older server
+    /// than this one in the last hour.
+    static func clientChecks(_ entries: [ActivityEntry], current: String = MailMCPVersion.current, now: Date = Date()) -> [Check] {
+        let week = entries.filter { now.timeIntervalSince($0.date) < 7 * 86_400 }
+        let versions = ActivityEntry.serverVersions(in: week)
+        guard !versions.isEmpty else { return [] }
+        var checks = [Check(
+            name: "Clients", state: .ok,
+            detail: versions.map { "\($0.client): \($0.version ?? "before 0.6.2") (\(Render.isoDate($0.date)))" }.joined(separator: "; "))]
+        let older = ActivityEntry.clientsOnOlderServer(in: week, current: current, now: now)
+        if !older.isEmpty {
+            checks.append(Check(
+                name: "Older server", state: .warning,
+                detail: older.map { "\($0.client) ran \($0.version ?? "a version before 0.6.2")" }.joined(separator: ", ")
+                    + " in the last hour, older than \(current). Restart it, and check which server it starts."))
+        }
+        return checks
+    }
+
+    /// Per account (by name), how many Message-IDs sit both in its Trash and in another of its mailboxes. Gmail is left
+    /// out: its labels put one message in several mailboxes.
+    static func trashCopies(_ store: MailStore) throws -> [(account: String, count: Int)] {
+        let accounts = try store.accounts()
+        var found: [(String, Int)] = []
+        for account in accounts {
+            let boxes = try store.mailboxes(accountID: account.id)
+            guard !boxes.contains(where: { $0.sourceMailboxID != nil }) else { continue }
+            let trash = boxes.filter { $0.role == .trash }.map(\.id)
+            let count = try store.sharedHeaderCount(trash: trash, others: boxes.map(\.id).filter { !trash.contains($0) })
+            if count > 0 { found.append((account.name, count)) }
+        }
+        return found
     }
 
     /// Where the index and approval keys are. A release build loads them (copying keys of an earlier version into

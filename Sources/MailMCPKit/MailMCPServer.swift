@@ -7,6 +7,34 @@ public enum MailMCPVersion {
     /// The app bundle's version when running from "Apple Mail MCP.app" (stamped at release), else the source version.
     public static let current = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String)
         .flatMap { $0.hasPrefix("__") ? nil : $0 } ?? "0.6.1"
+
+    /// The commit this build was made from: stamped by `Scripts/build-app.sh` in the bundle (`AppleMailMCPCommit`), and
+    /// passed by the Claude extension's manifest (`APPLE_MAIL_MCP_COMMIT`); nil for a plain `swift build`.
+    public static let commit: String? = {
+        let stamped = Bundle.main.infoDictionary?["AppleMailMCPCommit"] as? String
+            ?? ProcessInfo.processInfo.environment["APPLE_MAIL_MCP_COMMIT"]
+        return stamped.flatMap { $0.isEmpty || $0.hasPrefix("__") ? nil : $0 }
+    }()
+
+    /// The version with its build as semver build metadata (`0.6.2+1a2b3c4`, `0.6.2+1a2b3c4.mcpb` for the Claude
+    /// extension, `0.6.2+dev` for an unstamped build): what
+    /// `initialize`, replies that change mail and the activity log report, so it shows which build a client started.
+    public static let build = "\(current)+\(commit ?? "dev")"
+
+    /// Whether `version` (a ``build`` string; nil for a server before 0.6.2, which did not log one) is older than
+    /// `reference`, comparing the numeric parts only.
+    public static func isOlder(_ version: String?, than reference: String = current) -> Bool {
+        let numbers = { (text: String) in
+            text.split(separator: "+")[0].split(separator: ".").map { Int($0.prefix { $0.isNumber }) ?? 0 }
+        }
+        guard let version, !version.isEmpty else { return true }
+        let (a, b) = (numbers(version), numbers(reference))
+        for index in 0..<max(a.count, b.count) {
+            let (x, y) = (index < a.count ? a[index] : 0, index < b.count ? b[index] : 0)
+            if x != y { return x < y }
+        }
+        return false
+    }
 }
 
 /// Binds a ``MailToolbox`` to an MCP `Server`.
@@ -14,7 +42,7 @@ public enum MailMCPServer {
     public static func make(toolbox: MailToolbox, watchInterval: TimeInterval = 5) async -> Server {
         let server = Server(
             name: "apple-mail",
-            version: MailMCPVersion.current,
+            version: MailMCPVersion.build,
             title: "Apple Mail",
             instructions: MailToolbox.instructions,
             capabilities: .init(

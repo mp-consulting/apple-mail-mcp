@@ -25,12 +25,15 @@ public struct ActivityEntry: Codable, Sendable, Hashable, Identifiable {
     public var eventMs: Int?
     public var eventMaxMs: Int?
     public var verifyMs: Int?
+    /// The server's ``MailMCPVersion/build`` (absent before 0.6.2), so the log shows which build each client runs.
+    public var version: String?
 
     public init(
         id: UUID = UUID(), date: Date, pid: Int32, client: String?, tool: String, ok: Bool, milliseconds: Int, summary: String,
-        isWrite: Bool, link: String? = nil, running: Bool? = nil
+        isWrite: Bool, link: String? = nil, running: Bool? = nil, version: String? = MailMCPVersion.build
     ) {
         self.id = id
+        self.version = version
         self.running = running
         self.link = link
         self.date = date
@@ -341,6 +344,23 @@ extension ActivityEntry {
             if let app = appName(inFullDiskAccessMessage: entry.summary), !apps.contains(app) { apps.append(app) }
         }
         return apps
+    }
+
+    /// The server build each client used last, most recent first (entries before 0.6.2 carry no version).
+    public static func serverVersions(in entries: [ActivityEntry]) -> [(client: String, version: String?, date: Date)] {
+        Dictionary(grouping: entries.filter { $0.client != nil }, by: { $0.client! })
+            .compactMap { client, entries in entries.max { $0.date < $1.date }.map { (client, $0.version, $0.date) } }
+            .sorted { $0.date > $1.date }
+    }
+
+    /// Clients whose last call in the past `window` ran a server older than `current`: they start another copy than
+    /// the installed one (the Claude extension, an old build), or have not restarted since an update.
+    public static func clientsOnOlderServer(
+        in entries: [ActivityEntry], current: String = MailMCPVersion.current, now: Date = Date(), window: TimeInterval = 3600
+    ) -> [(client: String, version: String?)] {
+        serverVersions(in: entries.filter { now.timeIntervalSince($0.date) < window })
+            .filter { MailMCPVersion.isOlder($0.version, than: current) }
+            .map { ($0.client, $0.version) }
     }
 
     /// "…Full Disk Access to claude, the app…" → "claude".

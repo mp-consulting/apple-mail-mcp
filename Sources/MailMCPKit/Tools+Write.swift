@@ -262,7 +262,7 @@ extension MailToolbox {
                 "trash_messages", "Move to Trash",
                 """
                 Move messages to their account's Trash (recoverable). Messages already in Trash or Junk are left alone. \
-                "trashed" counts only messages Mail's database shows gone from their mailbox; stop if the reply has \
+                "trashed" counts only messages Mail's database shows in Trash; stop if the reply has \
                 "unverified" or "collateral_suspected". Send "resume_ids" in a new call, and each id in \
                 "retry_one_by_one" in a call of its own.
                 """,
@@ -272,7 +272,7 @@ extension MailToolbox {
                         "dry_run": Schema.boolean("Only report what would be trashed (default false)"),
                     ], required: ["ids"]), kind: .mailChange, destructive: true),
             kind: .mailChange
-        ) { [automation] arguments in
+        ) { arguments in
             try self.requireMailChanges()
             let ids = try arguments.ids("ids")
             try self.checkBatch(ids)
@@ -281,6 +281,7 @@ extension MailToolbox {
             // Deleting inside Trash means permanent deletion, which can crash Mail; never do it.
             let skipped = groups.filter { $0.0.role == .trash || $0.0.role == .junk }.flatMap { $0.1.map(\.id) }
             let eligible = groups.filter { $0.0.role != .trash && $0.0.role != .junk }
+            let steps = try self.trashSteps(eligible)
             if dryRun {
                 return ToolReply(
                     json: .obj([
@@ -290,16 +291,9 @@ extension MailToolbox {
                         ("not_found", missing.isEmpty ? nil : .array(missing.map { .int($0) })),
                     ]), summary: "dry run")
             }
-            let store = try self.store
             let trashing = eligible.flatMap(\.1)
             try await self.authorizeChange(tool: "trash_messages", summary: "Move \(trashing.count) messages to Trash", messages: trashing)
-            let steps = try eligible.map { mailbox, messages in
-                let trash = try store.mailboxes(accountID: mailbox.accountID).filter { $0.role == .trash }
-                return ChangeStep(source: mailbox, destination: trash.count == 1 ? trash[0] : nil, messages: messages, mustArrive: false)
-            }
-            let report = try await self.applyVerified(steps, tool: "trash_messages") { step, message in
-                try await automation.trash([message], in: MailboxTarget(step.source)) > 0
-            }
+            let report = try await self.applyVerified(steps, tool: "trash_messages", send: self.sendToTrash)
             let changeID = self.journalMove(.trash, tool: "trash_messages", steps: steps, done: report.done)
             return ToolReply(
                 json: .obj(
@@ -310,6 +304,47 @@ extension MailToolbox {
                     ] + report.fields(notFound: missing)),
                 summary: report.summary("trashed"))
         }
+    }
+
+    /// How each mailbox's messages go to Trash: moved to their account's Trash mailbox, and counted once they show up
+    /// there. An account with several Trash mailboxes uses the only one holding messages (some have a second, empty
+    /// one); without a single Trash the call is refused rather than falling back to `delete`, which removes by index.
+    /// Gmail keeps Mail's `delete` until a move to `[Gmail]/Trash` is shown to drop the labels the same way.
+    func trashSteps(_ groups: [(Mailbox, [MessageSummary])]) throws -> [ChangeStep] {
+        let store = try self.store
+        var trashes: [String: Mailbox] = [:]
+        return try groups.map { mailbox, messages in
+            let boxes = try store.mailboxes(accountID: mailbox.accountID)
+            let candidates = boxes.filter { $0.role == .trash }
+            if boxes.contains(where: { $0.sourceMailboxID != nil }) {
+                return ChangeStep(
+                    source: mailbox, destination: candidates.count == 1 ? candidates[0] : nil, messages: messages, mustArrive: false,
+                    deletes: true)
+            }
+            if let trash = trashes[mailbox.accountID] {
+                return ChangeStep(source: mailbox, destination: trash, messages: messages, mustArrive: true)
+            }
+            let inUse = try candidates.count > 1 ? candidates.filter { try store.liveCount(mailboxID: $0.id) > 0 } : candidates
+            guard inUse.count == 1 else {
+                let account = (try? store.accounts())?.first { $0.id == mailbox.accountID }?.name ?? mailbox.accountID
+                let found = candidates.isEmpty
+                    ? "has no Trash mailbox"
+                    : "has several Trash mailboxes (\(candidates.map(\.path).joined(separator: ", "))) and Mail's own is not clear"
+                throw ToolError("""
+                    \(account) \(found), so nothing was trashed. Use move_messages with to_mailbox set to the mailbox \
+                    Mail uses as Trash for that account.
+                    """)
+            }
+            trashes[mailbox.accountID] = inUse[0]
+            return ChangeStep(source: mailbox, destination: inUse[0], messages: messages, mustArrive: true)
+        }
+    }
+
+    /// Sends one message of a ``trashSteps(_:)`` step to Trash; returns whether Mail found it.
+    func sendToTrash(_ step: ChangeStep, _ message: MessageRef) async throws -> Bool {
+        let source = MailboxTarget(step.source)
+        guard !step.deletes, let trash = step.destination else { return try await automation.delete([message], in: source) > 0 }
+        return try await automation.trash([message], in: source, to: MailboxTarget(trash)) > 0
     }
 
     var createMailbox: ToolDefinition {

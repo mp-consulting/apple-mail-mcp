@@ -137,17 +137,30 @@ public final class FixtureMailStore: @unchecked Sendable {
     /// Adds a mailbox; `path` components are percent-encoded like Mail does (decomposed Unicode).
     @discardableResult
     public func addMailbox(accountID: String, path: String, scheme: String = "imap", source: Int64? = nil) throws -> Int64 {
-        let encoded = path.decomposedStringWithCanonicalMapping.split(separator: "/").map {
-            String($0).addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-._~"))) ?? String($0)
-        }.joined(separator: "/")
         try db.run(
             "INSERT INTO mailboxes (url, source) VALUES (?, ?)",
-            [.text("\(scheme)://\(accountID)/\(encoded)"), source.map(SQLValue.int) ?? .null])
+            [.text(Self.mailboxURL(scheme: scheme, accountID: accountID, path: path)), source.map(SQLValue.int) ?? .null])
         let id = try db.scalarInt("SELECT last_insert_rowid()") ?? 0
         let directory = root.appending(path: ([accountID] + path.split(separator: "/").map { $0 + ".mbox" }).joined(separator: "/"))
             .appending(path: storeUUID).appending(path: "Data")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return id
+    }
+
+    /// Points a mailbox row at a new path, keeping its ROWID and counts.
+    public func renameMailbox(_ id: Int64, to path: String) throws {
+        let (url, _) = try mailboxInfo(id)
+        try db.run(
+            "UPDATE mailboxes SET url = ? WHERE ROWID = ?",
+            [.text(Self.mailboxURL(scheme: url.scheme, accountID: url.accountID, path: path)), .int(id)])
+    }
+
+    /// A mailbox URL as Mail writes it: each path component percent-encoded, decomposed.
+    private static func mailboxURL(scheme: String, accountID: String, path: String) -> String {
+        let encoded = path.decomposedStringWithCanonicalMapping.split(separator: "/").map {
+            String($0).addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-._~"))) ?? String($0)
+        }.joined(separator: "/")
+        return "\(scheme)://\(accountID)/\(encoded)"
     }
 
     /// Removes a mailbox row, as Mail does when the server refuses a mailbox it just created.

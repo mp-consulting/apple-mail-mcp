@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Tool calls from Swift clients take the fast path too.** Foundation's `JSONEncoder` writes the method as
+  `tools\/call`, which the fast path did not recognise, so those calls went through the SDK's decoding.
+- A tool's text reply is written straight into the JSON-RPC line instead of through `JSONEncoder`, which took
+  longer than the tool for a 10 KB reply.
+- The activity log is written in the background, after the reply.
+- The mailbox list is rebuilt only when a row of Mail's mailbox table changed, not on every database write.
+
 ## [0.5.0] - 2026-10-19
 
 ### Added

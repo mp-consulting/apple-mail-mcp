@@ -206,6 +206,12 @@ public final class SQLiteConnection {
         }
 
         public func optionalString(_ column: Int32) -> String? { isNull(column) ? nil : string(column) }
+
+        /// The column's text as UTF-8 bytes, without making a String; valid only inside `body`.
+        public func withBytes<T>(_ column: Int32, _ body: (UnsafeRawBufferPointer) throws -> T) rethrows -> T {
+            let value = sqlite3_column_text(statement, column)
+            return try body(UnsafeRawBufferPointer(start: value, count: Int(sqlite3_column_bytes(statement, column))))
+        }
     }
 }
 

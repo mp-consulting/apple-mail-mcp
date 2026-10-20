@@ -206,6 +206,7 @@ case "call":
     }
     let toolbox = MailToolbox(store: openStore(), automation: MailAutomation(), settings: settings, readOnly: readOnly)
     let result = await toolbox.call(tool, arguments: parsed)
+    toolbox.activity?.flush()
     for content in result.content {
         if case .text(let text, _, _) = content { print(text) }
     }

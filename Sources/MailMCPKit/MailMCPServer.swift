@@ -77,6 +77,7 @@ public enum MailMCPServer {
             toolbox.clientName = clientInfo.title ?? clientInfo.name
         }
         await server.waitUntilCompleted()
+        toolbox.activity?.flush()
     }
 }
 

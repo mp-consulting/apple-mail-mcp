@@ -161,10 +161,15 @@ public indirect enum JSON: Sendable, Equatable {
         if pretty { return reference(pretty: true) }
         // Tool output: UTF-8 bytes into one buffer, and strings that need no escaping copied whole. Appending scalar
         // by scalar to a String made writing a page of results take longer than finding them.
+        return String(decoding: compactUTF8(), as: UTF8.self)
+    }
+
+    /// Compact output as UTF-8 bytes (see `serialized`).
+    func compactUTF8() -> [UInt8] {
         var out: [UInt8] = []
         out.reserveCapacity(4096)
         writeCompact(into: &out)
-        return String(decoding: out, as: UTF8.self)
+        return out
     }
 
     /// The straightforward writer: pretty output, and what `serialized()` must equal (tests).

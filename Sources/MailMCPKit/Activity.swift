@@ -34,7 +34,8 @@ public struct ActivityEntry: Codable, Sendable, Hashable, Identifiable {
 /// Append-only JSON-lines journal shared by all server processes.
 public final class ActivityLog: @unchecked Sendable {
     public let url: URL
-    private let lock = NSLock()
+    /// Appends run here, one at a time.
+    private let writes = DispatchQueue(label: "ActivityLog.writes", qos: .utility)
     private let maxBytes: Int
 
     public init(url: URL = SharedPaths.activityLog, maxBytes: Int = 1_000_000) {
@@ -54,11 +55,20 @@ public final class ActivityLog: @unchecked Sendable {
         return decoder
     }()
 
+    /// Written in the background, in order, so a tool's reply does not wait for the disk. `recent`, `stamp` and
+    /// `flush` see every entry appended before them.
     public func append(_ entry: ActivityEntry) {
+        writes.async { self.store(entry) }
+    }
+
+    /// Waits for the entries appended so far to reach the file.
+    public func flush() {
+        writes.sync {}
+    }
+
+    private func store(_ entry: ActivityEntry) {
         guard var line = try? Self.encoder.encode(entry) else { return }
         line.append(0x0A)
-        lock.lock()
-        defer { lock.unlock() }
         SharedPaths.ensureDirectory(url.deletingLastPathComponent())
         let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int ?? 0
         if size > maxBytes {
@@ -75,6 +85,7 @@ public final class ActivityLog: @unchecked Sendable {
 
     /// Most recent entries first. Reads only the end of the log, growing the window until it holds `limit` lines.
     public func recent(limit: Int = 50) -> [ActivityEntry] {
+        flush()
         var entries: [ActivityEntry] = []
         // The current file, then the rotated one if more entries are needed.
         for file in [url, url.appendingPathExtension("1")] {
@@ -93,7 +104,8 @@ public final class ActivityLog: @unchecked Sendable {
     }
 
     public func stamp() -> Stamp {
-        Stamp(parts: [url, url.appendingPathExtension("1")].map { file in
+        flush()
+        return Stamp(parts: [url, url.appendingPathExtension("1")].map { file in
             var info = stat()
             guard stat(file.path, &info) == 0 else { return [] }
             return [Int64(info.st_size), Int64(info.st_mtimespec.tv_sec), Int64(info.st_mtimespec.tv_nsec), Int64(info.st_ino)]

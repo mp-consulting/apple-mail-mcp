@@ -16,9 +16,7 @@ enum ToolCallFastPath {
 
     /// The tool call in a JSON-RPC line; nil for anything else.
     static func call(in line: Data) -> Call? {
-        // Cheap test first: most other lines are never parsed here.
-        guard line.range(of: Data("tools/call".utf8)) != nil,
-            let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any],
+        guard let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any],
             object["jsonrpc"] as? String == "2.0", object["method"] as? String == "tools/call",
             let id = object["id"], id is String || id is NSNumber,
             let idJSON = try? JSONSerialization.data(withJSONObject: id, options: .fragmentsAllowed),
@@ -63,12 +61,21 @@ enum ToolCallFastPath {
         }
     }
 
-    /// The JSON-RPC reply for `call`, the result encoded as the SDK encodes it.
+    /// The JSON-RPC reply for `call`, the result encoded as the SDK encodes it. Text results, which is what the
+    /// tools return, go through `JSON`: `JSONEncoder` took longer over a 10 KB reply than the tool that made it.
     static func reply(to call: Call, result: CallTool.Result) throws -> Data {
         var reply = Data(#"{"jsonrpc":"2.0","id":"#.utf8)
         reply.append(call.id)
         reply.append(Data(#","result":"#.utf8))
-        reply.append(try JSONEncoder().encode(result))
+        let texts = result.content.compactMap { content -> JSON? in
+            guard case .text(let text, nil, nil) = content else { return nil }
+            return .obj([("type", .string("text")), ("text", .string(text))])
+        }
+        if texts.count == result.content.count, result.structuredContent == nil, result._meta == nil {
+            reply.append(contentsOf: JSON.obj([("content", .array(texts)), ("isError", result.isError.map(JSON.bool))]).compactUTF8())
+        } else {
+            reply.append(try JSONEncoder().encode(result))
+        }
         reply.append(UInt8(ascii: "}"))
         return reply
     }

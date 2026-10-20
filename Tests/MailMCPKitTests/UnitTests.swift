@@ -362,6 +362,10 @@ struct ToolCallFastPathTests {
         let noArguments = try #require(ToolCallFastPath.call(in: line(
             #"{"jsonrpc":"2.0","id":"abc","method":"tools/call","params":{"name":"list_accounts"}}"#)))
         #expect(noArguments.arguments == nil && String(decoding: noArguments.id, as: UTF8.self) == #""abc""#)
+        // As the SDK's own client (JSONEncoder) writes it.
+        let encoded = try JSONEncoder().encode(CallTool.request(id: .number(7), .init(name: "list_accounts")))
+        #expect(String(decoding: encoded, as: UTF8.self).contains(#"tools\/call"#))
+        #expect(ToolCallFastPath.call(in: encoded)?.name == "list_accounts")
     }
 
     @Test func leavesEverythingElseToTheSDK() {
@@ -388,6 +392,24 @@ struct ToolCallFastPathTests {
         #expect(value.isError == true)
         guard case .text(let text, _, _) = value.content.first else { Issue.record("no text"); return }
         #expect(text == #"{"accounts":["Work"]}"#)
+    }
+
+    @Test func textRepliesDecodeLikeTheSDKs() throws {
+        let call = try #require(ToolCallFastPath.call(in: line(
+            #"{"jsonrpc":"2.0","id":"r1","method":"tools/call","params":{"name":"list_accounts"}}"#)))
+        let texts = ["", #"{"a":"q\"uo\\te","b":"line\nbreak"}"#, "tab\tcr\r\u{1}\u{1F}/é😀\u{2028}\u{7F}"]
+        for text in texts {
+            for isError in [nil, true, false] as [Bool?] {
+                let result = CallTool.Result(content: [.text(text: text, annotations: nil, _meta: nil)], isError: isError)
+                let reply = try ToolCallFastPath.reply(to: call, result: result)
+                let decoded = try JSONDecoder().decode(Response<CallTool>.self, from: reply)
+                #expect(decoded.id == .string("r1"))
+                #expect(try decoded.result.get() == result)
+            }
+        }
+        // Anything else still goes through the SDK's encoder.
+        let other = CallTool.Result(content: [.text(text: "a", annotations: nil, _meta: nil), .text(text: "b", annotations: nil, _meta: nil)])
+        #expect(try JSONDecoder().decode(Response<CallTool>.self, from: ToolCallFastPath.reply(to: call, result: other)).result.get() == other)
     }
 
     @Test func transportPassesOtherLinesOn() async throws {

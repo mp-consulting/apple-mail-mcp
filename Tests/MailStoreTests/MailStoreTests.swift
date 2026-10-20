@@ -376,6 +376,23 @@ final class MailStoreTests {
         #expect(store.ownAddressDetections == 2)
     }
 
+    @Test func mailboxesReloadOnlyWhenAMailboxRowChanges() throws {
+        _ = try store.mailboxes()
+        #expect(store.mailboxReloads == 1)
+        // A new message whose counts Mail has not written yet: the database changed, the mailbox table did not.
+        try fixture.store.addMessage(FixtureMessage(
+            subject: "Hello", from: EmailAddress(address: "x@y.test"), to: [], date: Date(), mailbox: fixture.inbox, body: ""))
+        _ = try store.mailboxes()
+        #expect(store.mailboxReloads == 1)
+        try fixture.store.refreshCounts()
+        #expect(try store.mailbox(id: fixture.inbox)?.totalCount == (try fixture.openStore().mailbox(id: fixture.inbox)?.totalCount))
+        #expect(store.mailboxReloads == 2)
+        // Same counts, new path.
+        try fixture.store.renameMailbox(fixture.archive2020, to: "Archive/Old")
+        #expect(try store.mailbox(id: fixture.archive2020)?.path == "Archive/Old")
+        #expect(store.mailboxReloads == 3)
+    }
+
     @Test func concurrentCallsRebuildTheCacheOnce() throws {
         let store = try fixture.openStore()
         DispatchQueue.concurrentPerform(iterations: 8) { _ in _ = try? store.accounts() }

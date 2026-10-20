@@ -70,6 +70,8 @@ public final class MailStore: @unchecked Sendable {
         var role: MailboxRole
     }
     private var parsedMailboxURLs: [String: ParsedMailboxURL] = [:]
+    /// Hash of the mailbox table the cached mailboxes were built from (see `mailboxTableHash`).
+    private var builtFromMailboxTable: Int?
     private var accountNames: [String: String] = [:]
     private var namedAccountIDs: Set<String>?
     private var detectedAddresses: [String: Set<String>] = [:]
@@ -78,6 +80,8 @@ public final class MailStore: @unchecked Sendable {
     static let ownAddressMaxAge: TimeInterval = 300
     /// How many times own addresses were detected (tests check that unrelated writes skip it).
     private(set) var ownAddressDetections = 0
+    /// How many times the mailbox list was built (tests check that writes elsewhere skip it).
+    private(set) var mailboxReloads = 0
 
     private struct SentMailboxState: Equatable {
         var id: Int64
@@ -156,13 +160,21 @@ public final class MailStore: @unchecked Sendable {
         refreshLock.lock()
         defer { refreshLock.unlock() }
         if isCacheFresh(version) { return }
+        // Mail commits for many reasons (flags, new mail elsewhere, its own bookkeeping); when no mailbox row
+        // changed, the mailboxes and accounts stand as they are.
+        if Date().timeIntervalSince(detectedAt) <= Self.ownAddressMaxAge, try mailboxTableHash() == builtFromMailboxTable {
+            lock.withLock { cachedDataVersion = version }
+            return
+        }
 
         // With Mail running this runs on nearly every call, for new counts; a mailbox's URL (and so its name, path
         // and role) does not change, so each is parsed once.
         var mailboxes: [Int64: Mailbox] = [:]
         var schemes: [String: String] = [:]
+        var table = Hasher()
         try withDB { db in
-            try db.query("SELECT ROWID, url, total_count, unread_count, source FROM mailboxes") { row in
+            try db.query(Self.mailboxRowsSQL) { row in
+                Self.combine(row, into: &table)
                 let url = row.string(1)
                 let parsed: ParsedMailboxURL
                 if let known = parsedMailboxURLs[url] {
@@ -194,23 +206,40 @@ public final class MailStore: @unchecked Sendable {
             detectedAt = Date()
             ownAddressDetections += 1
         }
-        lock.lock()
-        let extras = extraAddresses
-        lock.unlock()
-        let accounts = schemes.keys.sorted().map { id -> MailAccount in
-            let addresses = detectedAddresses[id, default: []].union(extras[id, default: []])
-            return MailAccount(id: id, name: accountNames[id] ?? id, kind: schemes[id] ?? "imap", emailAddresses: addresses.sorted())
-        }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        builtFromMailboxTable = table.finalize()
+        mailboxReloads += 1
 
         // In listing order, sorted once per reload (lowercasing each path once, not in every comparison).
         let sorted = mailboxes.values.map { ($0.accountID, $0.path.lowercased(), $0) }
             .sorted { ($0.0, $0.1) < ($1.0, $1.1) }.map(\.2)
         lock.lock()
+        defer { lock.unlock() }
+        // Addresses registered meanwhile (`registerOwnAddresses`) are read under the same lock, so none is lost.
+        cachedAccounts = schemes.keys.sorted().map { id -> MailAccount in
+            let addresses = detectedAddresses[id, default: []].union(extraAddresses[id, default: []])
+            return MailAccount(id: id, name: accountNames[id] ?? id, kind: schemes[id] ?? "imap", emailAddresses: addresses.sorted())
+        }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         cachedMailboxes = mailboxes
         sortedMailboxes = sorted
-        cachedAccounts = accounts
         cachedDataVersion = version
-        lock.unlock()
+    }
+
+    private static let mailboxRowsSQL = "SELECT ROWID, url, total_count, unread_count, source FROM mailboxes"
+
+    private static func combine(_ row: SQLiteConnection.Row, into hasher: inout Hasher) {
+        hasher.combine(row.int(0))
+        row.withBytes(1) { hasher.combine(bytes: $0) }
+        hasher.combine(row.int(2))
+        hasher.combine(row.int(3))
+        hasher.combine(row.optionalInt(4))
+    }
+
+    /// A hash of Mail's mailbox table (rows, URLs, counts), read without making strings: equal to
+    /// `builtFromMailboxTable` when the cached mailboxes still match it.
+    private func mailboxTableHash() throws -> Int {
+        var table = Hasher()
+        try withDB { db in try db.query(Self.mailboxRowsSQL) { Self.combine($0, into: &table) } }
+        return table.finalize()
     }
 
     /// Mail's data version as of the last `refreshCachesIfNeeded` (callers refresh first, e.g. via `lookupTables`):
@@ -254,8 +283,11 @@ public final class MailStore: @unchecked Sendable {
     /// Adds addresses known from elsewhere (Mail's AppleScript `email addresses`, config).
     public func registerOwnAddresses(_ addresses: [String], accountID: String) {
         lock.lock()
-        extraAddresses[accountID, default: []].formUnion(addresses.map { $0.lowercased() })
-        cachedDataVersion = -1
+        let added = Set(addresses.map { $0.lowercased() })
+        extraAddresses[accountID, default: []].formUnion(added)
+        if let index = cachedAccounts.firstIndex(where: { $0.id == accountID }) {
+            cachedAccounts[index].emailAddresses = Set(cachedAccounts[index].emailAddresses).union(added).sorted()
+        }
         lock.unlock()
     }
 

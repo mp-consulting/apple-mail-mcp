@@ -208,31 +208,31 @@ emails waiting you review them one by one; nothing goes out without a click on *
 ## Benchmarks
 
 The same questions to every Apple Mail MCP server in the MCP registry, over MCP stdio like a client sees it, on
-an Apple M1 (16 GB) with a real mailbox (account of 80,474 messages, 1,323 in its inbox). Median of 25 warm runs
-each. The servers that read Mail's files are called in turns, one call each per round, so a change in the
+an Apple M1 (16 GB) with a real mailbox (account of 80,551 messages, 1,336 in its inbox), version 0.6.0. Median of
+25 warm runs each. The servers that read Mail's files are called in turns, one call each per round, so a change in the
 machine's load hits them all alike. Full tables, with response sizes:
 [Benchmarks/compare-mcp-servers.md](Benchmarks/compare-mcp-servers.md).
 
 | Question | Apple Mail MCP | mgcrea 1.28.0 | imdinu 0.5.0 | parasxos 1.8.0 |
 |---|---:|---:|---:|---:|
-| List accounts | 0.3 ms | 0.4 ms | 1.4 ms | – |
-| Unread counts per mailbox | 1.1 ms | 13.5 s¹ | 257 ms | 56 ms |
-| Latest 20 inbox messages | 1.2 ms | 4.98 s | 8.0 ms | 95 ms |
-| Subject search, inbox | 0.7 ms | 21 ms | 11 ms | 90 ms |
-| Subject search, all mailboxes | 2.0 ms | 3.6 ms | 13 ms | 164 ms |
-| Sender search, inbox | 1.1 ms | 1.5 ms | 13 ms | 55 ms |
-| Body text search, inbox | 0.8 ms | 804 ms | 2.4 ms | 80 ms |
-| Conversation thread | 1.4 ms | 20 ms | – | 5.5 ms |
-| Top senders, 30 days | 1.0 ms | 1.9 ms | – | – |
-| Statistics · awaiting reply · needs response · overview | 0.6–5.9 ms | – | – | – |
+| List accounts | 0.4 ms | 0.5 ms | 1.8 ms | – |
+| Unread counts per mailbox | 2.1 ms | 7.05 s | 258 ms | 76 ms |
+| Latest 20 inbox messages | 2.8 ms | 2.85 s | 20 ms | 104 ms |
+| Subject search, inbox | 1.2 ms | 31 ms | 18 ms | 139 ms |
+| Subject search, all mailboxes | 3.4 ms | 6.8 ms | 24 ms | 258 ms |
+| Sender search, inbox | 2.8 ms | 3.5 ms | 23 ms | 78 ms |
+| Body text search, inbox | 2.1 ms | 1.17 s | 6.5 ms | 112 ms |
+| Conversation thread | 3.3 ms | 29 ms | – | 13 ms |
+| Top senders, 30 days | 1.9 ms | 3.1 ms | – | – |
+| Statistics · awaiting reply · needs response · overview | 1.1–11 ms | – | – | – |
 
-– : the server has no tool for that question. ¹ Mail did not answer within mgcrea's 30 s limit.
+– : the server has no tool for that question.
 
 The servers that drive Mail with AppleScript answer in 0.3 s to over 20 s, or time out, and keep Mail busy
 while they do (one run each, [Benchmarks/compare-servers.md](Benchmarks/compare-servers.md)): the Python
 mcp-apple-mail took 0.3–5 s for what it answered, ipsupport-llc 1.6.1 4–23 s; jakobfigur 0.6.2 and
 kiki830621 2.0.1 timed out and jayvee6 0.1.0 failed on this mailbox. Without the body index, a body search scans
-recent messages in parallel instead (12 ms here). Building the index for the whole mailbox takes about a minute.
+recent messages in parallel instead (27 ms here). Building the index for the whole mailbox takes about a minute.
 
 Reproduce: `Scripts/bench-servers.sh` fetches and prepares the other servers (pinned versions, release files
 checked against the registry's SHA-256), then runs `mail-bench compare`; `--fresh-index` gives our server a

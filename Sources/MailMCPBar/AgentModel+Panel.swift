@@ -17,7 +17,7 @@ enum SkillTarget: Hashable {
 
 /// Something the user has to fix, shown as a row only while it is wrong.
 struct AttentionItem: Identifiable, Hashable {
-    enum Fix: Hashable { case fullDiskAccess, automation, openClaude, claudeTab }
+    enum Fix: Hashable { case fullDiskAccess, automation, openClaude, claudeTab, dismissError }
     var id: String
     var icon: String
     var title: String
@@ -85,6 +85,12 @@ extension AgentModel {
 
     var attention: [AttentionItem] {
         var items: [AttentionItem] = []
+        // Something this app tried and could not do (an answer it could not record, the index, a setting).
+        if let lastError {
+            items.append(AttentionItem(
+                id: "error", icon: "exclamationmark.triangle", title: "Something didn't work",
+                detail: lastError, action: "Dismiss", fix: .dismissError))
+        }
         if let data = checks.first(where: { $0.name == "Mail data" }), data.state == .failed {
             items.append(AttentionItem(
                 id: "fda", icon: "lock.shield", title: "Full Disk Access for this app",
@@ -95,7 +101,7 @@ extension AgentModel {
                 id: "automation", icon: "hand.raised", title: "Mail automation is off",
                 detail: "Allow it so Claude can move, flag, draft and send.", action: "Open Settings…", fix: .automation))
         }
-        if clientInstaller.isSetUpTwiceInClaudeDesktop {
+        if isSetUpTwiceInClaudeApp {
             items.append(AttentionItem(
                 id: "claude-twice", icon: "square.on.square", title: "Apple Mail is set up twice in Claude",
                 detail: "Remove the Apple Mail extension in Claude › Settings › Extensions; this app's entry stays and updates with it.",
@@ -122,6 +128,7 @@ extension AgentModel {
     func perform(_ item: AttentionItem) {
         switch item.fix {
         case .claudeTab: panelTab = .claude
+        case .dismissError: lastError = nil
         case .fullDiskAccess: openFullDiskAccessSettings()
         case .automation: openAutomationSettings()
         case .openClaude:
@@ -158,8 +165,9 @@ extension AgentModel {
         }
     }
 
-    /// The config changed after the running Claude app read it: it only loads servers at launch.
-    var claudeAppNeedsRestart: Bool {
+    /// The config changed after the running Claude app read it: it only loads servers at launch. Asks the system
+    /// and the disk, so `refreshClients` calls it and the views read the stored `claudeAppNeedsRestart`.
+    func computeClaudeAppNeedsRestart() -> Bool {
         guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: Self.claudeAppBundleID).first,
               let launched = app.launchDate,
               let modified = (try? FileManager.default.attributesOfItem(atPath: clientInstaller.desktopConfigPath))?[.modificationDate] as? Date

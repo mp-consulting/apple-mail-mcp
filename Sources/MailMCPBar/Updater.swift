@@ -150,6 +150,11 @@ import Security
     /// The download is most of the time an install takes: it fills the bar up to here, the checks and the copy the rest.
     private nonisolated static let downloadShare = 0.8
 
+    /// Downloads, checks and swaps the app: `diskutil` and the copy block, so this never runs on the main actor
+    /// (under Swift 6.2's approachable concurrency a plain `nonisolated async` would run on its caller).
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
     private nonisolated static func installUpdate(
         _ release: Release, over app: URL, report: @escaping @Sendable (InstallProgress) -> Void
     ) async throws {

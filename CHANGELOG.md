@@ -16,6 +16,12 @@ All notable changes to this project are documented here. The format follows
   checked live. An account with several Trash mailboxes uses the only one holding messages; with none, or several
   in use, the call is refused instead of guessing (use `move_messages`). `send_draft` removes the sent draft the
   same way.
+- Menu bar app: an answer that could not be recorded (no approval key) removed the request as if it had been sent.
+  It now stays on screen, and errors the app ran into, which it never showed, appear under Needs attention.
+- Menu bar app: the 15 s cap on status checks did not hold (a task group waits for every child), so a check stuck
+  on Mail held up the activity list and the index; scheduled sends now also run on their own loop.
+- Menu bar app: the Claude tab's restart dot asked the system and the disk on every redraw, and did not update when
+  Claude was restarted; it is now refreshed with the other client checks.
 
 ### Added
 
@@ -29,6 +35,17 @@ All notable changes to this project are documented here. The format follows
   `APPLE_MAIL_MCP_PROBE_ROUNDS`, and `copiesLeftAfterRestore` (`APPLE_MAIL_MCP_PROBE_GHOSTS=1`), which counts copies
   left in Trash at +0, +1, +5 and +15 minutes after a restore. `GmailTrashProbeTests` compares `move` to Trash
   with `delete` on Gmail, on drafts it makes itself.
+
+### Changed
+
+- Menu bar app: the tab highlight slides between tabs, rows that come and go on the Mail tab move into place, and
+  tabs and queued requests dim as soon as they are pressed. Reduce Motion turns the movement off; the approval block
+  never animates, so its Send button never lingers. Increase Contrast gives the approval block a firmer edge.
+- Approval: To, Cc, Bcc and Files show their count and the first three, with the rest one click away, instead of
+  two lines cut short (an email to 23 people showed three). The subject shows in full and the whole preview
+  scrolls. At most five other requests are listed, so the panel and the window fit any screen.
+- Activity: a failed call shows its reason on two lines and in full on hover; states have a shape as well as a
+  colour; tool names read as words; calls from another day show the day.
 
 ## [0.6.1] - 2026-10-20
 

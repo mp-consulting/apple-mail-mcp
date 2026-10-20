@@ -65,13 +65,19 @@ final class AgentModel {
     var openApprovalWindow: (() -> Void)?
     var closeApprovalWindow: (() -> Void)?
 
-    /// Path of the MCP server binary that ships in this app (its own bundle in Contents/Helpers).
-    var serverPath: String {
+    /// Path of the MCP server binary that ships in this app (its own bundle in Contents/Helpers). Fixed for the
+    /// life of the process, so it is looked up once rather than on every render.
+    let serverPath: String = {
         let helper = Bundle.main.bundleURL.appending(path: ClientInstaller.helperExecutable).path
         if FileManager.default.isExecutableFile(atPath: helper) { return helper }
         let besideExecutable = (CommandLine.arguments[0] as NSString).deletingLastPathComponent + "/apple-mail-mcp"
         return FileManager.default.isExecutableFile(atPath: besideExecutable) ? besideExecutable : "apple-mail-mcp"
-    }
+    }()
+    /// The Claude app read its config before this app changed it (see `refreshClients`).
+    private(set) var claudeAppNeedsRestart = false
+    /// Apple Mail is both this app's server and the Claude extension in the Claude app (see `refreshClients`).
+    private(set) var isSetUpTwiceInClaudeApp = false
+    @ObservationIgnored private var isRunningChecks = false
 
     var claudeCodeCommand: String { "claude mcp add apple-mail -- \"\(serverPath)\"" }
 
@@ -120,9 +126,15 @@ final class AgentModel {
                 self.refreshActivity()
                 if tick % 15 == 0 { await self.refreshChecks() }
                 if tick % 5 == 0 { await self.maybeUpdateIndex() }
-                if tick % 15 == 0 { await self.runSchedule() }
                 tick += 1
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+        })
+        // Snoozes and scheduled sends: on their own, so a status check stuck on Mail never delays them.
+        tasks.append(Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.runSchedule()
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
             }
         })
     }
@@ -170,8 +182,10 @@ final class AgentModel {
         do {
             try approvals.decide(request.id, approve: approve)
         } catch {
-            // Without the approval key nothing can be signed, and the server treats the request as declined.
+            // Without the approval key nothing can be signed, and the server treats the request as declined. The
+            // request stays on screen with the error, so nobody thinks an email went out that did not.
             lastError = "Could not record your answer: \(error)"
+            return
         }
         pending.removeAll { $0.id == request.id }
         if focusedApproval == request.id { focusedApproval = pending.first?.id }
@@ -262,16 +276,7 @@ final class AgentModel {
             // Opening is cheap and happens once the index exists; the reads are what take time.
             if statusIndex == nil { statusIndex = BodyIndex.openIfPresent(url: SharedPaths.bodyIndex) }
             let index = statusIndex
-            let readings = await Task.detached(priority: .utility) {
-                var readings = StoreReadings()
-                readings.messageCount = (try? store.messageCount()) ?? 0
-                readings.needsReply = try? store.needsResponse(days: 3, limit: 50)
-                if let status = try? index?.status() {
-                    readings.indexStatus = status
-                    readings.notIndexed = (try? store.countMessages(after: status.coveredThrough)) ?? 0
-                }
-                return readings
-            }.value
+            let readings = await Task(priority: .utility) { await Self.read(store, index: index) }.value
             if readings.messageCount != messageCount { messageCount = readings.messageCount }
             if let current = readings.needsReply { applyNeedsReply(current) }
             if let status = readings.indexStatus {
@@ -281,20 +286,34 @@ final class AgentModel {
         }
         launchAtLogin = SMAppService.mainApp.status == .enabled
         refreshClients()
-        // The automation check asks macOS about Mail and can stall while Mail is busy: cap it.
+        // The automation check asks macOS about Mail and can stall while Mail is busy, and it does not stop when
+        // cancelled: wait for it 15 s at most, and start no second one while it is still out.
+        guard !isRunningChecks else { return }
+        isRunningChecks = true
         let settings = self.settings
-        let checks = await withTaskGroup(of: [Doctor.Check]?.self) { group in
-            group.addTask { await Doctor.checks(settings: settings) }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: 15_000_000_000)
-                return nil
-            }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            return first
+        let checks = await firstResult(within: 15) { [weak self] in
+            let checks = await Doctor.checks(settings: settings)
+            await MainActor.run { self?.isRunningChecks = false }
+            return checks
         }
         if let checks {
             self.checks = checks.filter { $0.name != "Menu bar app" && $0.name != "Settings" }
+        }
+    }
+
+    /// The result of `work`, or nil once `seconds` pass first. Unlike a task group, which waits for every child
+    /// before it returns, this leaves a slow `work` running on its own and answers on time.
+    private func firstResult<T: Sendable>(within seconds: Double, _ work: @escaping @Sendable () async -> T) async -> T? {
+        let answered = Answered()
+        return await withCheckedContinuation { continuation in
+            Task { @MainActor in
+                let value = await work()
+                if answered.claim() { continuation.resume(returning: value) }
+            }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                if answered.claim() { continuation.resume(returning: nil) }
+            }
         }
     }
 
@@ -313,23 +332,50 @@ final class AgentModel {
         isIndexing = true
         defer { isIndexing = false }
         let report: @Sendable (Int, Int) -> Void = { [weak self] done, total in
-            Task { @MainActor in self?.indexProgress = (done, total) }
-        }
-        let result: Result<BodyIndex.UpdateResult, Error> = await Task.detached(priority: .utility) {
-            Result {
-                let index = try BodyIndex(url: SharedPaths.bodyIndex)
-                return try index.update(from: store, timeBudget: force ? .infinity : 60, progress: report)
+            Task { @MainActor in
+                guard let self, self.isIndexing else { return }
+                self.indexProgress = (done, total)
             }
-        }.value
+        }
+        let budget: TimeInterval = force ? .infinity : 60
+        let result = await Task(priority: .utility) { await Self.updateIndex(from: store, timeBudget: budget, progress: report) }.value
         indexProgress = nil
         switch result {
         case .success(let update):
             if update.remaining > 0 { lastIndexRun = .distantPast }  // keep going next tick
-            lastError = nil
+            clearError(startingWith: "Index:")
         case .failure(let error):
             lastError = "Index: \(error)"
         }
         await refreshChecks()
+    }
+
+    /// Counts and index state: local reads that take a moment on a big mailbox, so never on the main thread.
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    private nonisolated static func read(_ store: MailStore, index: BodyIndex?) async -> StoreReadings {
+        var readings = StoreReadings()
+        readings.messageCount = (try? store.messageCount()) ?? 0
+        readings.needsReply = try? store.needsResponse(days: 3, limit: 50)
+        if let status = try? index?.status() {
+            readings.indexStatus = status
+            readings.notIndexed = (try? store.countMessages(after: status.coveredThrough)) ?? 0
+        }
+        return readings
+    }
+
+    /// One indexing run, up to `timeBudget` seconds of tokenizing: off the main thread.
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    private nonisolated static func updateIndex(
+        from store: MailStore, timeBudget: TimeInterval, progress: @escaping @Sendable (Int, Int) -> Void
+    ) async -> Result<BodyIndex.UpdateResult, Error> {
+        Result {
+            let index = try BodyIndex(url: SharedPaths.bodyIndex)
+            return try index.update(from: store, timeBudget: timeBudget, progress: progress)
+        }
     }
 
     func rebuildIndex() async {
@@ -346,7 +392,18 @@ final class AgentModel {
 
     func refreshClients() {
         let installer = clientInstaller
-        clientStatus = Dictionary(uniqueKeysWithValues: ClientInstaller.Client.allCases.map { ($0, installer.status($0)) })
+        let status = Dictionary(uniqueKeysWithValues: ClientInstaller.Client.allCases.map { ($0, installer.status($0)) })
+        if status != clientStatus { clientStatus = status }
+        let restart = computeClaudeAppNeedsRestart()
+        if restart != claudeAppNeedsRestart { claudeAppNeedsRestart = restart }
+        let twice = installer.isSetUpTwiceInClaudeDesktop
+        if twice != isSetUpTwiceInClaudeApp { isSetUpTwiceInClaudeApp = twice }
+    }
+
+    /// An error shown under Needs attention stays until what failed works again, or the user dismisses it; one
+    /// part succeeding does not hide another part's error.
+    func clearError(startingWith prefix: String) {
+        if lastError?.hasPrefix(prefix) == true { lastError = nil }
     }
 
     func install(in client: ClientInstaller.Client) {
@@ -383,7 +440,6 @@ final class AgentModel {
         guard settings.updateInstalledSkills else { return }
         if let updated = try? skillInstaller.refreshInstalled(), !updated.isEmpty {
             skillsMessage = "Updated \(updated.count) Claude skill\(updated.count == 1 ? "" : "s") to this version."
-            lastError = nil
         }
         refreshSkills()
     }
@@ -434,7 +490,7 @@ final class AgentModel {
     func save() {
         do {
             try settings.save()
-            lastError = nil
+            clearError(startingWith: "Could not save settings")
         } catch {
             lastError = "Could not save settings: \(error.localizedDescription)"
         }
@@ -460,5 +516,16 @@ final class AgentModel {
 
     func openAutomationSettings() {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")!)
+    }
+}
+
+/// Lets the first of two tasks, both on the main actor, resume a continuation; the other finds it taken.
+@MainActor
+private final class Answered {
+    private var taken = false
+
+    func claim() -> Bool {
+        defer { taken = true }
+        return !taken
     }
 }

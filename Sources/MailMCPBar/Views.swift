@@ -35,7 +35,8 @@ struct Row<Trailing: View>: View {
             Image(systemName: systemImage).font(.system(size: 15)).foregroundStyle(iconColor).frame(width: 20)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title).font(.callout)
-                Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(3).fixedSize(horizontal: false, vertical: true)
+                    .help(detail)
             }
             Spacer(minLength: 8)
             trailing
@@ -148,6 +149,8 @@ struct TabBar: View {
     @Bindable var model: AgentModel
     let selected: PanelTab
     let select: (PanelTab) -> Void
+    /// One selection pill that slides from tab to tab, like a segmented control.
+    @Namespace private var pill
 
     var body: some View {
         HStack(spacing: 2) {
@@ -157,6 +160,7 @@ struct TabBar: View {
                         Text(tab.rawValue)
                         if tab == .mail, !model.pending.isEmpty {
                             Text("\(model.pending.count)")
+                                .contentTransition(.numericText(value: Double(model.pending.count)))
                                 .font(.caption2.weight(.bold))
                                 .foregroundStyle(.black)
                                 .padding(.horizontal, 5)
@@ -170,22 +174,43 @@ struct TabBar: View {
                     .font(.callout.weight(selected == tab ? .semibold : .regular))
                     .frame(maxWidth: .infinity, minHeight: 26)
                     .contentShape(Rectangle())
-                    .background(
-                        RoundedRectangle(cornerRadius: 7).fill(selected == tab ? Color.primary.opacity(0.14) : .clear))
+                    .background {
+                        if selected == tab {
+                            RoundedRectangle(cornerRadius: 7).fill(Color.primary.opacity(0.14))
+                                .matchedGeometryEffect(id: "pill", in: pill)
+                        }
+                    }
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle())
                 .accessibilityAddTraits(selected == tab ? [.isButton, .isSelected] : .isButton)
             }
         }
         .padding(2)
         .background(RoundedRectangle(cornerRadius: 9).fill(Color.primary.opacity(0.07)))
+        .animatesChanges(of: selected)
+        .animatesChanges(of: model.pending.count)
     }
 }
 
 struct MailTab: View {
     @Bindable var model: AgentModel
 
+    /// Rows that come and go while the panel is open slide into place. The approval queue sits outside
+    /// both animated groups: it appears and leaves at once, so a Send button never lingers on screen.
     var body: some View {
+        VStack(alignment: .leading, spacing: 0) { update }
+            .animatesChanges(of: [model.updater.availableRelease?.version.description, model.updater.installing != nil] as [AnyHashable])
+        if !model.pending.isEmpty {
+            ApprovalQueue(model: model).padding(.horizontal, 12).padding(.top, 4).padding(.bottom, 4).neverAnimated()
+        }
+        VStack(alignment: .leading, spacing: 0) { status }
+            .animatesChanges(of: [
+                model.attention.map(\.id), model.snoozedCount, model.scheduledSends.count, model.needsReply.count,
+                model.activity.first?.id,
+            ] as [AnyHashable])
+    }
+
+    @ViewBuilder private var update: some View {
         if let (release, progress) = model.updater.installing {
             Row(
                 systemImage: "arrow.down.circle.fill", iconColor: .accentColor,
@@ -207,9 +232,9 @@ struct MailTab: View {
                 }
             }
         }
-        if !model.pending.isEmpty {
-            ApprovalQueue(model: model).padding(.horizontal, 12).padding(.top, 4).padding(.bottom, 4)
-        }
+    }
+
+    @ViewBuilder private var status: some View {
         if !model.attention.isEmpty {
             SectionHeader("Needs attention")
             ForEach(model.attention) { item in
@@ -414,23 +439,39 @@ struct ClaudeRows: View {
 struct ActivityRow: View {
     let entry: ActivityEntry
 
+    /// A shape as well as a colour, so the state reads without telling green from orange.
+    private var status: (symbol: String, color: Color, label: String) {
+        if entry.running == true { return ("circle.dotted", .secondary, "Running") }
+        if !entry.ok { return ("xmark.circle.fill", .red, "Failed") }
+        return entry.isWrite ? ("diamond.fill", .orange, "Changed mail") : ("circle.fill", .green, "Read mail")
+    }
+
     var body: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(entry.running == true ? Color.gray : entry.ok ? (entry.isWrite ? Color.orange : Color.green) : Color.red)
-                .frame(width: 6, height: 6)
-            Text(entry.tool).font(.caption.monospaced()).frame(width: 120, alignment: .leading)
-            Text(entry.summary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: status.symbol).font(.system(size: 8, weight: .bold)).foregroundStyle(status.color)
+                .frame(width: 10).accessibilityLabel(status.label)
+            // Words, not the identifier: the longest name (extract invoice fields) fits the column.
+            Text(entry.tool.replacingOccurrences(of: "_", with: " ")).font(.caption).lineLimit(1)
+                .frame(width: 132, alignment: .leading)
+            // A failure is the one summary worth a second line.
+            Text(entry.summary).font(.caption).foregroundStyle(entry.ok ? .secondary : .primary).lineLimit(entry.ok ? 1 : 2)
+                .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 4)
             if let link = entry.link, let url = URL(string: link) {
                 ShowInMailButton(url: url, compact: true)
             }
-            Text(entry.date, format: .dateTime.hour().minute()).font(.caption2.monospacedDigit()).foregroundStyle(.tertiary)
+            // The time alone reads as today: older entries show their day.
+            Text(entry.date, format: Calendar.current.isDateInToday(entry.date) ? .dateTime.hour().minute() : .dateTime.day().month(.abbreviated))
+                .font(.caption2.monospacedDigit()).foregroundStyle(.tertiary)
         }
-        .frame(height: 22)
-        .help("\(entry.client ?? "unknown client") · \(entry.milliseconds) ms\(entry.ok ? "" : " · failed")")
+        .padding(.vertical, 3)
+        .frame(minHeight: 22)
+        .help("\(entry.summary)\n\(entry.client ?? "unknown client") · \(entry.milliseconds) ms\(entry.ok ? "" : " · failed")")
     }
 }
+
+/// An address kept left to right inside right-to-left text, so `name@example.com` never reads `example.com@name`.
+func isolatedLTR(_ text: String) -> String { "\u{2066}\(text)\u{2069}" }
 
 /// Opens a message in Mail through its `message://` link (no Apple Events, no permission needed).
 struct ShowInMailButton: View {
@@ -474,7 +515,8 @@ struct ApprovalQueue: View {
                 } decide: { approve in
                     model.decide(focused, approve: approve)
                 }
-                ForEach(model.pending.filter { $0.id != focused.id }) { other in
+                let others = model.pending.filter { $0.id != focused.id }
+                ForEach(others.prefix(Self.visibleOthers)) { other in
                     Button {
                         model.focusedApproval = other.id
                     } label: {
@@ -482,7 +524,9 @@ struct ApprovalQueue: View {
                             Image(systemName: "envelope").foregroundStyle(.orange).frame(width: 16)
                             Text(other.subject.isEmpty ? "(no subject)" : other.subject).lineLimit(1)
                             Spacer(minLength: 6)
-                            Text(other.to.first ?? (other.action == .change ? "change" : "")).foregroundStyle(.secondary).lineLimit(1)
+                            // Addresses on one domain differ at the start and the end: cut the middle.
+                            Text(other.to.first.map(isolatedLTR) ?? (other.action == .change ? "change" : "")).foregroundStyle(.secondary)
+                                .lineLimit(1).truncationMode(.middle)
                             Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
                         }
                         .font(.caption)
@@ -490,19 +534,30 @@ struct ApprovalQueue: View {
                         .frame(height: 26)
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableButtonStyle())
+                }
+                if others.count > Self.visibleOthers {
+                    Text("\(others.count - Self.visibleOthers) more waiting · the arrows above go through all of them")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .padding(.horizontal, 10)
                 }
             }
         }
     }
+
+    /// Keeps the panel and the approval window to a height that fits any screen, however many requests wait.
+    static let visibleOthers = 5
 }
 
 struct ApprovalBlock: View {
     let request: ApprovalRequest
+    @Environment(\.colorSchemeContrast) private var contrast
     /// (index, count) when several emails wait; shows the pager.
     var position: (Int, Int)?
     var page: (Int) -> Void = { _ in }
     let decide: (Bool) -> Void
+    /// The lists (To, Cc, Bcc, Files) shown in full.
+    @State private var expanded: Set<String> = []
 
     init(request: ApprovalRequest, position: (Int, Int)? = nil, page: @escaping (Int) -> Void = { _ in }, decide: @escaping (Bool) -> Void) {
         self.request = request
@@ -537,45 +592,37 @@ struct ApprovalBlock: View {
                     .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Text([request.client, request.tool.replacingOccurrences(of: "_", with: " ")].compactMap { $0 }.joined(separator: " · "))
-                    .font(.caption2).foregroundStyle(.secondary)
+                let origin = [request.client, request.tool.replacingOccurrences(of: "_", with: " ")].compactMap { $0 }.joined(separator: " · ")
+                Text(origin).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(origin)
             }
-            Text(request.subject.isEmpty ? "(no subject)" : request.subject).font(.headline).lineLimit(2)
+            // In full: the subject is part of what is approved.
+            Text(request.subject.isEmpty ? "(no subject)" : request.subject).font(.headline).fixedSize(horizontal: false, vertical: true)
             Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 2) {
-                if !request.to.isEmpty {
-                    GridRow {
-                        Text("To").foregroundStyle(.secondary)
-                        Text(request.to.joined(separator: ", ")).lineLimit(2)
-                    }
-                }
+                listRow("To", request.to.map(isolatedLTR))
                 if let sendAt = request.sendAt {
                     GridRow {
                         Text("When").foregroundStyle(.secondary)
                         Text(sendAt.formatted(date: .abbreviated, time: .shortened))
                     }
                 }
-                if !request.cc.isEmpty {
-                    GridRow {
-                        Text("Cc").foregroundStyle(.secondary)
-                        Text(request.cc.joined(separator: ", ")).lineLimit(2)
-                    }
-                }
-                if !request.bcc.isEmpty {
-                    GridRow {
-                        Text("Bcc").foregroundStyle(.secondary)
-                        Text(request.bcc.joined(separator: ", ")).lineLimit(2)
-                    }
-                }
-                if !request.attachments.isEmpty {
-                    GridRow {
-                        Text("Files").foregroundStyle(.secondary)
-                        Text(request.attachments.joined(separator: ", ")).lineLimit(2)
-                    }
-                }
+                listRow("Cc", request.cc.map(isolatedLTR))
+                listRow("Bcc", request.bcc.map(isolatedLTR))
+                listRow("Files", request.attachments)
             }
             .font(.caption)
             Divider()
-            Text(request.bodyPreview).font(.callout).lineLimit(10).fixedSize(horizontal: false, vertical: true)
+            // The whole preview the server sent (it keeps 600 characters); long ones scroll inside the block.
+            ScrollView {
+                Text(request.bodyPreview).font(.callout).fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+            .frame(maxHeight: 260)
+            .fixedSize(horizontal: false, vertical: true)
+            if request.bodyPreview.hasSuffix("…") {
+                Text("Preview: the first 600 characters of the message.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
             HStack {
                 if let link = request.originalLink, let url = URL(string: link) {
                     ShowInMailButton(url: url, compact: false, title: "Show original in Mail")
@@ -586,8 +633,34 @@ struct ApprovalBlock: View {
             }
         }
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color.orange.opacity(0.12)))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.orange.opacity(0.35)))
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.orange.opacity(contrast == .increased ? 0.18 : 0.12)))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.orange.opacity(contrast == .increased ? 0.9 : 0.35),
+                                                                 lineWidth: contrast == .increased ? 1.5 : 1))
+        .onChange(of: request.id) { expanded = [] }
+    }
+
+    /// A list never cut silently: its count, the first three, and the rest one click away.
+    @ViewBuilder
+    private func listRow(_ label: String, _ values: [String]) -> some View {
+        if !values.isEmpty {
+            let shown = 3
+            let open = expanded.contains(label)
+            GridRow(alignment: .firstTextBaseline) {
+                Text(values.count > 1 ? "\(label) (\(values.count))" : label).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text((open ? values : Array(values.prefix(shown))).joined(separator: ", "))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                    if values.count > shown {
+                        Button(open ? "Show fewer" : "and \(values.count - shown) more") {
+                            if open { expanded.remove(label) } else { expanded.insert(label) }
+                        }
+                        .buttonStyle(.link)
+                        .focusable(false)  // keyboard focus belongs to Send / Don't Send
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -601,7 +674,7 @@ struct ApprovalWindow: View {
             }
             if !model.pending.isEmpty { ApprovalQueue(model: model) }
             Text("Nothing is sent, unsubscribed or changed in bulk without your OK. Requests cancel after \(Int(model.settings.approvalTimeout)) seconds.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
         .padding(16)
         .padding(.top, 4)
@@ -654,22 +727,27 @@ struct SkillRow: View {
 struct SlashCommand: View {
     let name: String
     @State private var copied = false
+    @State private var reset: Task<Void, Never>?
 
     var body: some View {
         Button {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString("/\(name)", forType: .string)
             copied = true
-            Task {
+            // A second click restarts the wait instead of being cut short by the first one.
+            reset?.cancel()
+            reset = Task {
                 try? await Task.sleep(nanoseconds: 1_200_000_000)
-                copied = false
+                if !Task.isCancelled { copied = false }
             }
         } label: {
             Text(copied ? "Copied /\(name)" : "/\(name)")
                 .font(.callout.monospaced())
                 .foregroundStyle(copied ? Color.green : Color.orange)
+                .contentTransition(.opacity)
         }
         .buttonStyle(.borderless)
+        .animatesChanges(of: copied)
         .help("Type /\(name) in Claude Code to run this skill. Click to copy.")
     }
 }

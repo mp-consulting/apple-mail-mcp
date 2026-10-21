@@ -1,0 +1,40 @@
+name: Publish to the MCP registry
+
+# Lists a published release in the MCP registry without building it again, for when the release workflow's last
+# step failed (the registry answered 504). Uses the .mcpb already attached to the release, so the DMG and the
+# Homebrew cask's checksum stay as they are.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, e.g. v1.2.3
+        required: true
+
+permissions:
+  contents: read
+  id-token: write  # MCP registry login (GitHub OIDC)
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Publish
+        run: |
+          set -eu
+          case "$TAG" in v[0-9]*.[0-9]*.[0-9]*) ;; *) echo "::error::tag must look like v1.2.3"; exit 1 ;; esac
+          VERSION="${TAG#v}"
+          gh release download "$TAG" -p "AppleMailMCP-$VERSION.mcpb" -D "$RUNNER_TEMP"
+          SHA256="$(sha256sum "$RUNNER_TEMP/AppleMailMCP-$VERSION.mcpb" | cut -d' ' -f1)"
+          sed -e "s/__VERSION__/$VERSION/g" -e "s/__SHA256__/$SHA256/" server.json > "$RUNNER_TEMP/server.json"
+          cd "$RUNNER_TEMP"
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz" \
+            | tar xz mcp-publisher
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish

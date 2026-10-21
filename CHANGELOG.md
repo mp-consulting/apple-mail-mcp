@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-10-21
+
+### Fixed
+
+- **"Restart Claude" no longer stays after a restart.** The app compared the date of the Claude app's config file
+  with Claude's launch, but Claude saves its own preferences in that file while it runs, so the file nearly always
+  looked newer and the button never went away. The app now records when it changed its own entry and asks for a
+  restart only when that change is newer than Claude's launch.
+
 ## [0.6.5] - 2026-10-21
 
 ### Fixed
@@ -423,7 +432,8 @@ First release.
   and a reply or forward waiting for approval links to the original.
 - Skills in the Claude tab are listed by their Claude Code slash command (`/mail-triage`…); click to copy.
 
-[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.5...HEAD
+[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.6...HEAD
+[0.6.6]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.2...v0.6.3

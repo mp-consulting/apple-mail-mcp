@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-10-21
+
+### Changed
+
+- Builds record the SDK they were made with. A local build with Xcode 27 recorded the deployment target instead
+  (macOS 14), so macOS gave the menu bar app its pre-26 look: a less rounded menu window without Liquid Glass.
+  `Scripts/build-app.sh` now stamps the real SDK version before signing. Release builds already looked right; this
+  release changes nothing else.
+
 ## [0.6.2] - 2026-10-20
 
 ### Fixed
@@ -385,7 +394,9 @@ First release.
   and a reply or forward waiting for approval links to the original.
 - Skills in the Claude tab are listed by their Claude Code slash command (`/mail-triage`…); click to copy.
 
-[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.3...HEAD
+[0.6.3]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.2...v0.6.3
+[0.6.2]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.5.0...v0.5.1

@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-10-21
+
 ### Fixed
 
 - **Gmail trashes by moving to its Trash too.** 0.6.2 kept Mail's `delete` on Gmail (and Google Workspace) accounts,

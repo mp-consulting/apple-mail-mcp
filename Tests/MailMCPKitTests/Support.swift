@@ -12,7 +12,6 @@ final class RecordingAutomation: MailAutomating, @unchecked Sendable {
         case move([Int64], MailboxTarget, MailboxTarget)
         case setState([Int64], MailboxTarget, Bool?, Bool?, FlagColor?)
         case trash([Int64], MailboxTarget, MailboxTarget)
-        case delete([Int64], MailboxTarget)
         case createMailbox(MailboxTarget)
         case check(String?)
         case compose(OutgoingMessage, DeliveryMode)
@@ -40,7 +39,7 @@ final class RecordingAutomation: MailAutomating, @unchecked Sendable {
     var onCreateMailbox: (@Sendable (MailboxTarget) -> Void)?
     /// Runs inside `compose`, e.g. to simulate Mail sending and then the Apple Event timing out.
     var onCompose: (@Sendable (OutgoingMessage, DeliveryMode) throws -> Void)?
-    /// Runs inside `trash` and `delete`, e.g. to simulate Mail moving the messages to Trash (or more than that).
+    /// Runs inside `trash`, e.g. to simulate Mail moving the messages to Trash (or more than that).
     var onTrash: (@Sendable ([Int64], MailboxTarget) -> Void)?
     /// Runs inside the rule calls, e.g. to write the rule files as Mail would.
     var onRuleChange: (@Sendable (Call) -> Void)?
@@ -88,13 +87,6 @@ final class RecordingAutomation: MailAutomating, @unchecked Sendable {
     func trash(_ messages: [MessageRef], in mailbox: MailboxTarget, to trash: MailboxTarget) async throws -> Int {
         let ids = record(messages)
         recordChange(.trash(ids, mailbox, trash))
-        onTrash?(ids, mailbox)
-        return ids.count
-    }
-
-    func delete(_ messages: [MessageRef], in mailbox: MailboxTarget) async throws -> Int {
-        let ids = record(messages)
-        recordChange(.delete(ids, mailbox))
         onTrash?(ids, mailbox)
         return ids.count
     }

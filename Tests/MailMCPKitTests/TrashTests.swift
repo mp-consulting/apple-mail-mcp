@@ -24,8 +24,9 @@ final class TrashTests {
         h.automation.onTrash = { ids, _ in for id in ids { _ = try? fixture.store.moveMessage(id, to: fixture.trash) } }
     }
 
-    func deletes() -> [RecordingAutomation.Call] {
-        h.automation.calls.filter { if case .delete = $0 { true } else { false } }
+    /// Calls that are not a move to Trash.
+    func notTrash() -> [RecordingAutomation.Call] {
+        h.automation.calls.filter { if case .trash = $0 { false } else { true } }
     }
 
     @Test func trashMovesToTrashMailbox() async throws {
@@ -46,8 +47,7 @@ final class TrashTests {
         trashWorks()
         let json = try await h.json("trash_messages", ["ids": [.int(Int(h.id("receipt"))), .int(Int(h.id("kickoff"))), .int(Int(h.id("archived")))]])
         #expect(json["trashed"] as? Int == 3)
-        #expect(deletes().isEmpty)
-        #expect(h.automation.calls.contains { if case .trash = $0 { true } else { false } })
+        #expect(h.automation.calls.count == 3 && notTrash().isEmpty)
     }
 
     @Test func trashCountsOnlyArrived() async throws {
@@ -83,17 +83,20 @@ final class TrashTests {
             subject: "Note", from: EmailAddress(address: "x@example.test"), to: [], date: Date(), mailbox: local, body: "x"))
         let none = await h.call("trash_messages", ["ids": [.int(Int(note))]])
         #expect(none.isError && none.text.contains("has no Trash mailbox"))
-        #expect(h.automation.calls.count == 1 && deletes().isEmpty)
+        #expect(h.automation.calls.count == 1)
     }
 
-    @Test func gmailKeepsMailsDelete() async throws {
+    @Test func gmailMovesToItsTrash() async throws {
+        // Checked live (GmailTrashProbeTests): the labels go, All Mail keeps nothing, as with `delete`.
         let gmail = h.id("gmail")
         let fixture = h.fixture
-        // Out of All Mail (where Gmail's Trash goes is not modelled here).
-        h.automation.onTrash = { ids, _ in for id in ids { _ = try? fixture.store.moveMessage(id, to: fixture.gmailSent) } }
+        let bin = try fixture.store.addMailbox(accountID: fixture.gmail, path: "[Gmail]/Corbeille")
+        h.automation.onTrash = { ids, _ in for id in ids { _ = try? fixture.store.moveMessage(id, to: bin) } }
         let json = try await h.json("trash_messages", ["ids": [.int(Int(gmail))]])
         #expect(json["trashed"] as? Int == 1)
-        #expect(h.automation.calls == [.delete([gmail], MailboxTarget(accountID: fixture.gmail, path: "[Gmail]/Tous les messages"))])
+        #expect(h.automation.calls == [.trash(
+            [gmail], MailboxTarget(accountID: fixture.gmail, path: "[Gmail]/Tous les messages"),
+            MailboxTarget(accountID: fixture.gmail, path: "[Gmail]/Corbeille"))])
     }
 
     @Test func mailChangesReportTheServerVersion() async throws {

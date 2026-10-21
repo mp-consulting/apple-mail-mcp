@@ -97,8 +97,6 @@ public protocol MailAutomating: Sendable {
     func setState(_ messages: [MessageRef], in mailbox: MailboxTarget, read: Bool?, flagged: Bool?, flagColor: FlagColor?) async throws -> Int
     /// Moves messages to `trash`, their account's Trash mailbox (see ``MessageEvent/trash(to:)``).
     func trash(_ messages: [MessageRef], in mailbox: MailboxTarget, to trash: MailboxTarget) async throws -> Int
-    /// Mail's `delete`, which removes by index: only for Gmail (see ``MessageEvent/delete``).
-    func delete(_ messages: [MessageRef], in mailbox: MailboxTarget) async throws -> Int
     func createMailbox(_ target: MailboxTarget) async throws
     func checkForNewMail(accountID: String?) async throws
     /// Returns the compose object for `.draft` (still open; close it once the draft is stored).
@@ -304,10 +302,6 @@ public final class MailAutomation: MailAutomating {
 
     public func trash(_ messages: [MessageRef], in mailbox: MailboxTarget, to trash: MailboxTarget) async throws -> Int {
         try await forEach(messages, in: mailbox) { mail, message in try mail.send(.trash(to: trash), to: message) }
-    }
-
-    public func delete(_ messages: [MessageRef], in mailbox: MailboxTarget) async throws -> Int {
-        try await forEach(messages, in: mailbox) { mail, message in try mail.send(.delete, to: message) }
     }
 
     public func createMailbox(_ target: MailboxTarget) async throws {

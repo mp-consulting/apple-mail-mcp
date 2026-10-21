@@ -1,12 +1,22 @@
 # Plan: trash by moving to Trash, not by `delete`
 
-Status: released in 0.6.2 without the live runs · 2026-10-20 · follows `2026-10-trash-targets-wrong-message.md`
+Status: released in 0.6.2 and 0.6.4 (Gmail by `move`); the incident-sized iCloud run is pending · 2026-10-20 · follows `2026-10-trash-targets-wrong-message.md`
 
-Still to do on live Mail: run variants A, C, D and E with `APPLE_MAIL_MCP_PROBE_COUNT=200 APPLE_MAIL_MCP_PROBE_ROUNDS=5`
-and record D's result below; run `copiesLeftAfterRestore`. Gmail keeps `delete`: `GmailTrashProbeTests` (drafts it
-makes itself, since a copy on Gmail is only another label on the same message) did not get a result on 2026-10-20,
-because Mail blocked for minutes at a time while it synced a newly added account; run it once the account has
-synced. Departures from the plan: an account with several Trash mailboxes uses the only one holding messages (the
+iCloud, 2026-10-21, quick pass (`Archive/2020`, 40 copies per variant, one round, no load): A 20/20 left, 0 strays
+(12 ms per event); C 20/20, 0 strays (150 ms); D 21/21, 0 strays (23 ms); E not measured (Mail blocked 501 s while
+its load mailboxes were made). A was clean, so at this size the probe does not reproduce the incident and C and D
+prove nothing yet. Still to do: an incident-sized run (A and E, 200 copies, 2 rounds; or the plan's 200 × 5 for
+A, C, D and E), recording D's result here, and `copiesLeftAfterRestore`. Released as 0.6.4 on the Gmail evidence
+with this question open.
+
+Gmail, settled on 2026-10-21 (`GmailTrashProbeTests`, a Gmail account holding 2,675 other messages, 20 drafts each
+labelled INBOX and a probe label, from the All Mail row, by Message-ID, paced): `move` to `[Gmail]/Bin` and `delete`
+gave the same result, at once and a minute later. All 10 + 10 in Bin, 0 left in All Mail, 0 still labelled INBOX
+or probe; the draft rows stayed in `[Gmail]/Drafts` either way (a Gmail draft quirk). No other message left any
+mailbox. Event time: move 556 ms average (max 1,282), delete 480 ms (max 555). So Gmail now trashes by `move` too,
+and no `delete` is sent for a message anywhere.
+
+Departures from the plan: an account with several Trash mailboxes uses the only one holding messages (the
 probe had already seen a second, empty Trash) and is refused only when none or several hold messages; the extension
 reports its build as `<commit>.mcpb`.
 

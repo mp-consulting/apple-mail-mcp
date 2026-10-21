@@ -309,18 +309,12 @@ extension MailToolbox {
     /// How each mailbox's messages go to Trash: moved to their account's Trash mailbox, and counted once they show up
     /// there. An account with several Trash mailboxes uses the only one holding messages (some have a second, empty
     /// one); without a single Trash the call is refused rather than falling back to `delete`, which removes by index.
-    /// Gmail keeps Mail's `delete` until a move to `[Gmail]/Trash` is shown to drop the labels the same way.
+    /// Gmail too: moving to `[Gmail]/Trash` drops the labels and leaves nothing in All Mail, as `delete` does (live).
     func trashSteps(_ groups: [(Mailbox, [MessageSummary])]) throws -> [ChangeStep] {
         let store = try self.store
         var trashes: [String: Mailbox] = [:]
         return try groups.map { mailbox, messages in
-            let boxes = try store.mailboxes(accountID: mailbox.accountID)
-            let candidates = boxes.filter { $0.role == .trash }
-            if boxes.contains(where: { $0.sourceMailboxID != nil }) {
-                return ChangeStep(
-                    source: mailbox, destination: candidates.count == 1 ? candidates[0] : nil, messages: messages, mustArrive: false,
-                    deletes: true)
-            }
+            let candidates = try store.mailboxes(accountID: mailbox.accountID).filter { $0.role == .trash && $0.sourceMailboxID == nil }
             if let trash = trashes[mailbox.accountID] {
                 return ChangeStep(source: mailbox, destination: trash, messages: messages, mustArrive: true)
             }
@@ -342,9 +336,8 @@ extension MailToolbox {
 
     /// Sends one message of a ``trashSteps(_:)`` step to Trash; returns whether Mail found it.
     func sendToTrash(_ step: ChangeStep, _ message: MessageRef) async throws -> Bool {
-        let source = MailboxTarget(step.source)
-        guard !step.deletes, let trash = step.destination else { return try await automation.delete([message], in: source) > 0 }
-        return try await automation.trash([message], in: source, to: MailboxTarget(trash)) > 0
+        guard let trash = step.destination else { return false }
+        return try await automation.trash([message], in: MailboxTarget(step.source), to: MailboxTarget(trash)) > 0
     }
 
     var createMailbox: ToolDefinition {

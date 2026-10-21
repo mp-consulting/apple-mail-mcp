@@ -135,7 +135,7 @@ struct MessageEvent {
     /// the neighbour of the message it was asked for.
     static func trash(to trash: MailboxTarget) -> MessageEvent { move(to: trash) }
 
-    /// Mail's `delete`: only for Gmail, until moving to `[Gmail]/Trash` is shown to do the same there.
+    /// Mail's `delete`, which removes by index: only the live probes send it, to compare.
     static var delete: MessageEvent { MessageEvent(eventClass: "core", eventID: "delo") }
 }
 

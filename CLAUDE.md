@@ -74,9 +74,14 @@ swift Scripts/make-icon.swift Resources
   to leave the database (and, for a move, to arrive). Probe: `TrashProbeTests` (`APPLE_MAIL_MCP_LIVE_TRASH=1`).
 - **Do not** trash with `delete`, not even with a `whose message id` specifier: `NSDeleteCommand` turns the evaluated
   specifier into indexes and removes those, which has taken the neighbour (live, 0.6.1). Trash by `move` to the
-  account's Trash mailbox (`MessageEvent.trash(to:)`). Gmail still uses `delete` until a probe shows that a move to
-  `[Gmail]/Trash` drops the labels the same way. After messages are moved out of Trash, Mail can leave (or bring
+  account's Trash mailbox (`MessageEvent.trash(to:)`), Gmail included: a move from All Mail to `[Gmail]/Trash` drops
+  every label and leaves nothing in All Mail, exactly as `delete` does (`GmailTrashProbeTests`, 2026-10-21). On Gmail
+  a copy is only another label on the same message, so probes there make their own drafts; a draft's row stays in
+  `[Gmail]/Drafts` after it is trashed either way. After messages are moved out of Trash, Mail can leave (or bring
   back minutes later) a copy in Trash: `doctor` counts them.
+- Mail cannot delete a mailbox (or Gmail label) through scripting: `delete mailbox …` fails with -10000 (iCloud and
+  Gmail, 2026-10). A mailbox made by scripting can take minutes to reach the database while Mail is busy. So the live
+  probes keep their `MCP Probe …` mailboxes and empty them into Trash instead.
 - **Do not** delete a rule condition with Apple Events: `-[MFMessageRule(Applescript) removeFromCriteriaAtIndex:]`
   calls itself until Mail crashes (stack overflow). Rewrite conditions in place, or make the rule again.
 - `reply`/`forward` always open a window. `save` is asynchronous: closing or deleting the compose object

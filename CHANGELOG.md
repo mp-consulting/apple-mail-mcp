@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Gmail trashes by moving to its Trash too.** 0.6.2 kept Mail's `delete` on Gmail (and Google Workspace) accounts,
+  which can take the neighbouring message like it did on iCloud. A live check showed that moving to `[Gmail]/Trash`
+  does exactly what `delete` did: every label dropped, nothing left in All Mail. No `delete` is sent for a message
+  on any account now.
+
+### Changed
+
+- The live trash probes keep their `MCP Probe …` mailboxes and empty them into Trash, since Mail cannot delete a
+  mailbox through scripting (-10000), and they wait for a new mailbox and retry set-up steps while Mail is busy (a
+  copy only when it did not land).
+
 ## [0.6.3] - 2026-10-21
 
 ### Changed

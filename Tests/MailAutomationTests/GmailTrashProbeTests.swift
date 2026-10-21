@@ -4,8 +4,8 @@ import Testing
 
 @testable import MailAutomation
 
-/// Whether Gmail can trash by `move` to `[Gmail]/Trash` like the other accounts, or must keep Mail's `delete`
-/// (see `docs/plans/2026-10-trash-via-move.md`, change 3). Copies of existing messages cannot be used on Gmail: a copy
+/// Whether Gmail can trash by `move` to `[Gmail]/Trash` like the other accounts rather than Mail's `delete` (see
+/// `docs/plans/2026-10-trash-via-move.md`, change 3; on 2026-10-21 it did the same as `delete`, so the server moves there too). Copies of existing messages cannot be used on Gmail: a copy
 /// is another label on the same message, so trashing it would trash the original. The probe makes its own messages
 /// instead, as drafts it saves (nothing is sent), adds each to INBOX and to a probe label so it carries several
 /// labels, then trashes half by `move` to Trash and half by `delete`, from the mailbox the server would use (the row
@@ -31,9 +31,10 @@ struct GmailTrashProbeTests {
         let automation = MailAutomation()
         let mail = MailEventSender(timeout: 60)
         let account = try #require(try store.accounts().first { $0.id == accountID }, "no account \(accountID)")
-        // An account without mail yet has no address in the store: its name usually is one.
+        // The addresses Mail has for the account: the store's come from sent mail and can include another account's.
+        let configured = (try? mail.get(MailSpec.property("emad", of: MailSpec.account(id: accountID)))).map { AEValue($0).list.compactMap(\.string) }
         let address = try #require(
-            Self.environment["APPLE_MAIL_MCP_PROBE_ADDRESS"] ?? account.emailAddresses.first ?? (account.name.contains("@") ? account.name : nil),
+            Self.environment["APPLE_MAIL_MCP_PROBE_ADDRESS"] ?? configured?.first ?? (account.name.contains("@") ? account.name : nil),
             "no address for the account: set APPLE_MAIL_MCP_PROBE_ADDRESS")
         var boxes = try store.mailboxes(accountID: accountID)
         try #require(boxes.contains { $0.sourceMailboxID != nil }, "not a Gmail account (no label mailboxes)")
@@ -48,19 +49,6 @@ struct GmailTrashProbeTests {
         let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "")
         print("probe: gmail: \(count) drafts, account holding \(others) other messages")
 
-        /// Retries an event Mail did not answer in time (it can block for a while when it syncs), once it answers again.
-        func retrying<T>(_ body: () async throws -> T) async throws -> T {
-            for attempt in 1... {
-                do {
-                    return try await body()
-                } catch let error as AppleEventError where error.number == -1712 && attempt < 3 {
-                    print("probe: gmail: Mail did not answer in time, trying again")
-                    try TrashProbeTests.waitForMail()
-                }
-            }
-            fatalError("unreachable")
-        }
-
         /// Moves every probe message (subject "MCP Probe …") outside Trash to Trash: what earlier runs left, or what this
         /// one made before it failed.
         func trashProbeMessages() async {
@@ -71,7 +59,7 @@ struct GmailTrashProbeTests {
                     let rows = try store.messages(ids: Array(try store.headerRows(mailboxID: box.id).keys))
                         .filter { $0.mailboxID == box.id && $0.subject.hasPrefix("MCP Probe ") && $0.messageIDHeader != nil }
                     guard !rows.isEmpty else { continue }
-                    count += try await retrying {
+                    count += try await TrashProbeTests.retrying {
                         try await automation.trash(TrashProbeTests.refs(rows), in: MailboxTarget(box), to: MailboxTarget(trash))
                     }
                 }
@@ -106,19 +94,24 @@ struct GmailTrashProbeTests {
             for index in 1...count {
                 let subject = "MCP Probe \(stamp) #\(index)"
                 let started = try store.maxMessageRowID()
-                let handle = try await retrying {
+                let handle = try await TrashProbeTests.retrying {
                     try await automation.compose(
                         OutgoingMessage(from: address, to: [address], subject: subject, body: "Apple Mail MCP probe draft. Safe to delete."),
                         mode: .draft)
                 }
                 var row: MessageSummary?
                 _ = try TrashProbeTests.wait(180) {
-                    let ids = try homes.flatMap { try store.headerRows(mailboxID: $0.id).keys.filter { $0 > started } }
+                    let newest = try store.maxMessageRowID()
+                    let ids = newest > started ? Array((started + 1)...newest) : []
                     row = try store.messages(ids: ids).first { $0.subject == subject && $0.messageIDHeader != nil }
                     return row != nil
                 }
                 if let handle { try? await automation.closeCompose(handle) }
                 let saved = try #require(row, "draft \(index) did not show up")
+                // Any account: a draft Mail saved elsewhere means the sender did not pick this account.
+                try #require(
+                    homes.contains { $0.id == saved.mailboxID },
+                    "Mail saved draft \(index) (id \(saved.id)) in \(saved.mailboxPath) of \(saved.accountName): the sender did not select the account")
                 headers.append(saved.messageIDHeader!)
                 draftRows[saved.messageIDHeader!] = saved
             }
@@ -137,8 +130,8 @@ struct GmailTrashProbeTests {
                 let draft = draftRows[header]!
                 let home = MailboxTarget(boxes.first { $0.id == draft.mailboxID } ?? drafts)
                 let ref = MessageRef(id: draft.id, header: header, subject: draft.subject, dateReceived: draft.dateReceived)
-                _ = try await retrying { try await automation.copy([ref], from: home, to: MailboxTarget(inbox)) }
-                _ = try await retrying { try await automation.copy([ref], from: home, to: labelTarget) }
+                _ = try await TrashProbeTests.retrying { try await automation.copy([ref], from: home, to: MailboxTarget(inbox)) }
+                _ = try await TrashProbeTests.retrying { try await automation.copy([ref], from: home, to: labelTarget) }
             }
             let labelled = try TrashProbeTests.wait(300) {
                 let (inInbox, inLabel) = (try present(inbox), try present(label))
@@ -172,7 +165,7 @@ struct GmailTrashProbeTests {
                 for header in strays {
                     let home = before[inbox.id]?[header] != nil ? inbox : allMail
                     let rows = try store.messages(messageIDHeaders: [header], mailboxIDs: [trash.id]).filter { $0.mailboxID == trash.id }
-                    _ = try? await retrying { try await automation.move(TrashProbeTests.refs(rows), from: MailboxTarget(trash), to: MailboxTarget(home)) }
+                    _ = try? await TrashProbeTests.retrying { try await automation.move(TrashProbeTests.refs(rows), from: MailboxTarget(trash), to: MailboxTarget(home)) }
                     let back = try TrashProbeTests.wait(30) { try present(home)[header] != nil }
                     if back { putBack += 1 }
                     print("probe: gmail: a message nobody asked for went to Trash; put back in \(home.path): \(back ? "yes" : "NOT YET, check Trash")")
@@ -194,10 +187,11 @@ struct GmailTrashProbeTests {
                 let way = moved.contains(header) ? "move" : "delete"
                 let sent = Date()
                 do {
-                    _ = try await retrying {
-                        way == "move"
-                            ? try await automation.trash([ref], in: MailboxTarget(source), to: MailboxTarget(trash))
-                            : try await automation.delete([ref], in: MailboxTarget(source))
+                    if way == "move" {
+                        _ = try await TrashProbeTests.retrying { try await automation.trash([ref], in: MailboxTarget(source), to: MailboxTarget(trash)) }
+                    } else {
+                        // Mail's `delete`, which the server no longer sends, by Message-ID as 0.6.1 did.
+                        _ = try await TrashProbeTests.retrying { try mail.send(.delete, to: MailSpec.message(header: header, in: MailboxTarget(source))) }
                     }
                 } catch {
                     print("probe: gmail: \(way) failed: \(error)")
@@ -222,8 +216,13 @@ struct GmailTrashProbeTests {
 
             // Probe messages still outside Trash go there (by `move`, never a delete in Trash); then the label goes.
             await trashProbeMessages()
-            try mail.send("core", "delo", direct: MailSpec.mailbox(labelTarget))
-            print("probe: gmail: deleted the probe label; the drafts are in \(trash.path): delete them there in Mail")
+            // Mail refuses to delete a Gmail label through scripting (-10000): the results are in by now.
+            do {
+                try mail.send("core", "delo", direct: MailSpec.mailbox(labelTarget))
+                print("probe: gmail: deleted the probe label; the drafts are in \(trash.path): delete them there in Mail")
+            } catch {
+                print("probe: gmail: could not delete the label \(labelTarget.path) (\(error)); the drafts are in \(trash.path)")
+            }
         } catch {
             print("probe: gmail: stopped: \(error)")
             await trashProbeMessages()

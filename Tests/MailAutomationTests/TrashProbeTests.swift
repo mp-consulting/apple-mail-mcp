@@ -6,23 +6,25 @@ import Testing
 
 /// Reproduces the 2026-10-20 incidents on real Mail: `delete message id <rowid>` sent back to back on an IMAP
 /// mailbox removed the date-neighbour of some requested messages instead of the messages themselves, and `delete`
-/// by Message-ID (0.6.1) still did. Each variant works on its own throwaway mailbox `MCP Probe <time> <variant>`,
-/// filled with copies of messages from a mailbox the tester names, and trashes every second one:
+/// by Message-ID (0.6.1) still did. Each variant works in its own probe mailbox `MCP Probe <variant>`, filled with
+/// copies of messages from a mailbox the tester names, and trashes every second one:
 ///
 /// - A: `delete message id`, back to back (the path before 0.6.1)
 /// - B: `delete message id`, each waiting until the database shows the message gone
 /// - C: `move message id … to` the account's Trash, back to back
 /// - D: `delete (every message whose message id = …)`, back to back (the path of 0.6.1)
 /// - E: `move (every message whose message id = …) to` the account's Trash, each waiting until the message shows up
-///   there (the path from 0.6.2), while a second task moves 50 messages back and forth between two other probe
-///   mailboxes of the account, so sync is busy as during the incident
+///   there (the path from 0.6.2), while a second task moves 50 messages back and forth between `MCP Probe E load A`
+///   and `… load B`, so sync is busy as during the incident
 ///
 /// `copiesLeftAfterRestore` checks the other thing seen that day: messages moved out of Trash left a copy behind
-/// in Trash, or one came back there minutes later. It trashes and restores a probe mailbox the way the server does,
-/// then counts rows per Message-ID in the probe mailbox and in Trash at +0, +1, +5 and +15 minutes.
+/// in Trash, or one came back there minutes later. It trashes and restores `MCP Probe ghosts` the way the server
+/// does, then counts rows per Message-ID in it and in Trash at +0, +1, +5 and +15 minutes.
 ///
-/// Prints counts and timings only, never message content. At the end the copies in Trash go back to their probe
-/// mailbox and the probe mailboxes are deleted (Mail must not delete messages already in Trash).
+/// Mail cannot delete a mailbox through scripting (-10000), and a new one can take minutes to reach its database, so
+/// the probe mailboxes are made once and kept: a run first moves anything left in them to Trash, and ends by moving
+/// its copies there too. Only copies ever go to Trash (safe to empty); the source is only read. Events that set
+/// things up are tried again when Mail does not answer in time. Prints counts and timings only, never content.
 ///
 /// Opt in with APPLE_MAIL_MCP_LIVE_TRASH=1 (it changes mail), APPLE_MAIL_MCP_PROBE_ACCOUNT=<IMAP account id> and
 /// APPLE_MAIL_MCP_PROBE_SOURCE=<mailbox path to copy from>. Optional: APPLE_MAIL_MCP_PROBE_COUNT (default 40),
@@ -113,12 +115,19 @@ struct TrashProbeTests {
         messages.map { MessageRef(id: $0.id, header: $0.messageIDHeader, subject: $0.subject, dateReceived: $0.dateReceived) }
     }
 
-    /// A probe mailbox, and how to tell its copies in Trash: rows newer than `since` carrying one of `headers`
-    /// (nil: any Message-ID of the source).
-    struct Probe {
-        var mailbox: Mailbox
-        var since: Int64
-        var headers: Set<String>?
+    /// Runs an event that sets things up, again (up to 3 times) when Mail did not answer in time, once it answers.
+    /// Only for events that can be repeated safely (a move by Message-ID, making a mailbox that is checked first);
+    /// not for a copy, nor for the events a variant measures: one that timed out may still have acted.
+    static func retrying<T>(_ body: () async throws -> T) async throws -> T {
+        for attempt in 1... {
+            do {
+                return try await body()
+            } catch let error as AppleEventError where error.number == -1712 && attempt < 3 {
+                print("probe: Mail did not answer in time, trying again")
+                try waitForMail()
+            }
+        }
+        fatalError("unreachable")
     }
 
     /// The account, source mailbox and Trash a run works on, and the messages it may copy.
@@ -129,7 +138,6 @@ struct TrashProbeTests {
         let trash: Mailbox
         let automation = MailAutomation()
         let mail = MailEventSender(timeout: 60)
-        let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "")
         /// Messages whose Message-ID only they carry in the source, newest first, handed out once each.
         private var unique: [Int64]
 
@@ -141,6 +149,7 @@ struct TrashProbeTests {
             self.store = store
             self.accountID = accountID
             source = try #require(boxes.first { $0.path == sourcePath }, "no mailbox \(sourcePath) in that account")
+            try #require(!source.path.hasPrefix("MCP Probe"), "the source must not be a probe mailbox")
             // Some accounts have a second, empty Trash; Mail uses the main one (as the server does).
             trash = try #require(
                 try boxes.filter { $0.role == .trash }.max { try store.liveCount(mailboxID: $0.id) < store.liveCount(mailboxID: $1.id) },
@@ -157,60 +166,79 @@ struct TrashProbeTests {
             return try store.messages(ids: Array(unique.prefix(count)))
         }
 
-        /// A new mailbox `MCP Probe <stamp> <name>` holding copies of `originals`, once Mail has settled.
-        func makeProbe(_ name: String, copying originals: [MessageSummary]) async throws -> Probe {
+        /// The probe mailbox `MCP Probe <name>`: the one an earlier run made, else a new one (Mail can take minutes to
+        /// list it in its database).
+        func mailbox(_ name: String) async throws -> Mailbox {
+            let target = MailboxTarget(accountID: accountID, path: "MCP Probe \(name)")
+            if let existing = try store.mailboxes(accountID: accountID).first(where: { $0.path == target.path }) { return existing }
             try TrashProbeTests.waitForMail()
-            let target = MailboxTarget(accountID: accountID, path: "MCP Probe \(stamp) \(name)")
-            try await automation.createMailbox(target)
+            // Made by an earlier run but not in the database yet: do not ask Mail for a second one.
+            if (try? mail.get(MailSpec.property("pnam", of: MailSpec.mailbox(target)))) == nil {
+                try await TrashProbeTests.retrying { try await automation.createMailbox(target) }
+            }
             var created: Mailbox?
-            _ = try TrashProbeTests.wait(60) {
+            _ = try TrashProbeTests.wait(300) {
                 created = try store.mailboxes(accountID: accountID).first { $0.path == target.path }
                 return created != nil
             }
-            let mailbox = try #require(created, "Mail did not create \(target.path)")
-            let probe = Probe(mailbox: mailbox, since: try store.maxMessageRowID(), headers: Set(originals.compactMap(\.messageIDHeader)))
-            let copied = try await automation.copy(TrashProbeTests.refs(originals), from: MailboxTarget(source), to: target)
+            return try #require(created, "\(target.path) did not reach Mail's database in 5 minutes")
+        }
+
+        /// How Mail is told which message in `mailbox`: by Message-ID when no other message there carries it.
+        func refs(_ messages: [MessageSummary], in mailbox: Mailbox) throws -> [MessageRef] {
+            let counts = try store.headerRows(mailboxID: mailbox.id).values.reduce(into: [String: Int]()) { $0[$1, default: 0] += 1 }
+            return messages.map {
+                MessageRef(id: $0.id, header: $0.messageIDHeader.flatMap { counts[$0] == 1 ? $0 : nil }, subject: $0.subject, dateReceived: $0.dateReceived)
+            }
+        }
+
+        /// Moves everything in a probe mailbox to Trash (copies only: a probe mailbox holds nothing else).
+        func empty(_ mailbox: Mailbox) async {
+            do {
+                try #require(mailbox.path.hasPrefix("MCP Probe "), "not a probe mailbox")
+                let messages = try store.messages(ids: Array(try store.headerRows(mailboxID: mailbox.id).keys))
+                guard !messages.isEmpty else { return }
+                try TrashProbeTests.waitForMail()
+                for ref in try refs(messages, in: mailbox) {
+                    _ = try await TrashProbeTests.retrying { try await automation.trash([ref], in: MailboxTarget(mailbox), to: MailboxTarget(trash)) }
+                }
+                let emptied = try TrashProbeTests.wait(180) { try store.liveCount(mailboxID: mailbox.id) == 0 }
+                print("probe: \(mailbox.path): \(messages.count) copies moved to Trash\(emptied ? "" : " (not all yet)")")
+            } catch {
+                print("probe: could not empty \(mailbox.path): \(error)")
+            }
+        }
+
+        /// Every probe mailbox emptied, so a run starts clean.
+        func emptyProbeMailboxes() async throws {
+            for box in try store.mailboxes(accountID: accountID) where box.path.hasPrefix("MCP Probe ") { await empty(box) }
+        }
+
+        /// `mailbox`, emptied, then holding copies of `originals`, once Mail has settled.
+        func fill(_ mailbox: Mailbox, with originals: [MessageSummary]) async throws {
+            await empty(mailbox)
+            try TrashProbeTests.waitForMail()
+            var copied = 0
+            for ref in try refs(originals, in: source) {
+                // A copy that timed out may still have been made: send it again only when it did not arrive.
+                for attempt in 1...3 {
+                    do {
+                        copied += try await automation.copy([ref], from: MailboxTarget(source), to: MailboxTarget(mailbox))
+                        break
+                    } catch let error as AppleEventError where error.number == -1712 && attempt < 3 {
+                        print("probe: Mail did not answer in time, checking before trying again")
+                        try TrashProbeTests.waitForMail()
+                        let arrived = try ref.header.map { header in
+                            try TrashProbeTests.wait(30) { try !store.messages(messageIDHeaders: [header], mailboxIDs: [mailbox.id]).isEmpty }
+                        } ?? false
+                        if arrived { copied += 1; break }
+                    }
+                }
+            }
             let filled = try TrashProbeTests.wait(180) { try store.liveCount(mailboxID: mailbox.id) >= originals.count }
-            print("probe: \(name): copied \(copied), \(try store.liveCount(mailboxID: mailbox.id)) in the probe mailbox")
+            print("probe: \(mailbox.path): copied \(copied), \(try store.liveCount(mailboxID: mailbox.id)) there")
             try #require(filled, "the copies did not all arrive")
             try TrashProbeTests.settle(store, mailbox)
-            return probe
-        }
-
-        /// The copies in Trash go back to the probe mailbox, then the mailbox goes. A row in Trash counts as a copy only
-        /// when it is newer than the probe, carries a Message-ID of the source, and the source still holds that message;
-        /// one whose Message-ID is in Trash twice cannot be moved by Message-ID and stays.
-        func cleanUp(_ probe: Probe) async {
-            do {
-                try TrashProbeTests.waitForMail()
-                let stillInSource = Set(try store.headerRows(mailboxID: source.id).values.filter { !$0.isEmpty })
-                let trashRows = try store.headerRows(mailboxID: trash.id)
-                let trashCounts = trashRows.values.reduce(into: [String: Int]()) { $0[$1, default: 0] += 1 }
-                let copies = trashRows.filter {
-                    $0.key > probe.since && stillInSource.contains($0.value) && (probe.headers?.contains($0.value) ?? true)
-                }
-                let movable = try store.messages(ids: copies.filter { trashCounts[$0.value] == 1 }.map(\.key))
-                _ = try await automation.move(TrashProbeTests.refs(movable), from: MailboxTarget(trash), to: MailboxTarget(probe.mailbox))
-                let back = try TrashProbeTests.wait(120) { try store.present(ids: movable.map(\.id), mailboxID: trash.id).isEmpty }
-                print("probe: \(probe.mailbox.path): \(movable.count) copies moved back from Trash\(back ? "" : " (not all yet)")")
-                try TrashProbeTests.waitForMail()
-                try mail.send("core", "delo", direct: MailSpec.mailbox(MailboxTarget(probe.mailbox)))
-                print("probe: deleted \(probe.mailbox.path)")
-                if copies.count > movable.count {
-                    print("probe: \(copies.count - movable.count) probe copies stay in Trash (Message-ID there twice); delete them in Mail")
-                }
-            } catch {
-                print("probe: could not clean up \(probe.mailbox.path): \(error); delete it in Mail")
-            }
-        }
-
-        /// Probe mailboxes an earlier run left behind go first, so no Message-ID ends up in Trash twice.
-        func cleanUpEarlierRuns() async throws {
-            for box in try store.mailboxes(accountID: accountID) where box.path.hasPrefix("MCP Probe ") {
-                let since = (try store.headerRows(mailboxID: box.id).keys.min() ?? Int64.max) - 1
-                print("probe: cleaning up a probe mailbox an earlier run left")
-                await cleanUp(Probe(mailbox: box, since: since, headers: nil))
-            }
         }
 
         /// Moves the messages of `from` to `to` and back, one at a time by Message-ID, until `stop` is set; returns
@@ -219,8 +247,10 @@ struct TrashProbeTests {
             var moves = 0
             var (here, there) = (from, to)
             while !stop.isSet {
-                guard let messages = try? store.messages(ids: Array(try store.headerRows(mailboxID: here.id).keys)) else { break }
-                for ref in TrashProbeTests.refs(messages) where !stop.isSet {
+                guard let messages = try? store.messages(ids: Array(try store.headerRows(mailboxID: here.id).keys)),
+                    let refs = try? refs(messages, in: here)
+                else { break }
+                for ref in refs where !stop.isSet {
                     moves += (try? await automation.move([ref], from: MailboxTarget(here), to: MailboxTarget(there))) ?? 0
                 }
                 (here, there) = (there, here)
@@ -244,18 +274,18 @@ struct TrashProbeTests {
         let session = try Session()
         let store = session.store
         let mail = session.mail
-        try await session.cleanUpEarlierRuns()
+        try await session.emptyProbeMailboxes()
         print("probe: \(Self.count) messages per variant, \(rounds) round(s)")
 
-        var probes: [Probe] = []
+        var used: [Mailbox] = []
         var totals: [Variant: Result] = [:]
         for round in 1...rounds {
             for variant in variants {
                 let name = "\(variant.rawValue)\(rounds > 1 ? "\(round)" : "")"
                 do {
-                    let probe = try await session.makeProbe(name, copying: try session.take(Self.count))
-                    probes.append(probe)
-                    let mailbox = probe.mailbox
+                    let mailbox = try await session.mailbox(variant.rawValue)
+                    if !used.contains(mailbox) { used.append(mailbox) }
+                    try await session.fill(mailbox, with: try session.take(Self.count))
                     let target = MailboxTarget(mailbox)
                     let headers = Set(try store.headerRows(mailboxID: mailbox.id).values)
 
@@ -263,10 +293,11 @@ struct TrashProbeTests {
                     let stop = Flag()
                     var loadTask: Task<Int, Never>?
                     if variant == .e {
-                        let loadA = try await session.makeProbe("\(name) load A", copying: try session.take(Self.loadCount))
-                        let loadB = try await session.makeProbe("\(name) load B", copying: [])
-                        probes += [loadA, loadB]
-                        loadTask = Task { await session.load(between: loadA.mailbox, and: loadB.mailbox, until: stop) }
+                        let loadA = try await session.mailbox("E load A"), loadB = try await session.mailbox("E load B")
+                        for box in [loadA, loadB] where !used.contains(box) { used.append(box) }
+                        await session.empty(loadB)
+                        try await session.fill(loadA, with: try session.take(Self.loadCount))
+                        loadTask = Task { await session.load(between: loadA, and: loadB, until: stop) }
                     }
 
                     // Every second message in list order (newest first) is requested.
@@ -346,17 +377,18 @@ struct TrashProbeTests {
             }
         }
 
-        for probe in probes { await session.cleanUp(probe) }
+        for mailbox in used { await session.empty(mailbox) }
     }
 
     @Test(.enabled(if: ghosts)) func copiesLeftAfterRestore() async throws {
         setvbuf(stdout, nil, _IOLBF, 0)  // progress shows in a log file as it happens
         let session = try Session()
         let store = session.store
-        try await session.cleanUpEarlierRuns()
-        let probe = try await session.makeProbe("ghosts", copying: try session.take(Self.count))
-        let mailbox = probe.mailbox
-        let headers = try #require(probe.headers)
+        try await session.emptyProbeMailboxes()
+        let mailbox = try await session.mailbox("ghosts")
+        let originals = try session.take(Self.count)
+        try await session.fill(mailbox, with: originals)
+        let headers = Set(originals.compactMap(\.messageIDHeader))
 
         /// Rows per probe Message-ID in the probe mailbox and in Trash.
         func census(_ label: String) throws {
@@ -368,14 +400,18 @@ struct TrashProbeTests {
 
         // To Trash and back, one message at a time by Message-ID, as the server does.
         for message in try store.messages(ids: Array(try store.headerRows(mailboxID: mailbox.id).keys)) {
-            _ = try await session.automation.trash(Self.refs([message]), in: MailboxTarget(mailbox), to: MailboxTarget(session.trash))
+            _ = try await Self.retrying {
+                try await session.automation.trash(try session.refs([message], in: mailbox), in: MailboxTarget(mailbox), to: MailboxTarget(session.trash))
+            }
             _ = try Self.wait(15) { try store.present(ids: [message.id], mailboxID: mailbox.id).isEmpty }
         }
         try Self.settle(store, session.trash)
         try census("after trashing")
         let trashed = try store.messages(messageIDHeaders: Array(headers), mailboxIDs: [session.trash.id])
         for message in trashed {
-            _ = try await session.automation.move(Self.refs([message]), from: MailboxTarget(session.trash), to: MailboxTarget(mailbox))
+            _ = try await Self.retrying {
+                try await session.automation.move(try session.refs([message], in: session.trash), from: MailboxTarget(session.trash), to: MailboxTarget(mailbox))
+            }
             _ = try Self.wait(15) { try store.present(ids: [message.id], mailboxID: session.trash.id).isEmpty }
         }
         let restored = Date()
@@ -384,7 +420,7 @@ struct TrashProbeTests {
             if due > Date() { try await Task.sleep(for: .seconds(due.timeIntervalSinceNow)) }
             try census("+\(minute) min after the restore")
         }
-        await session.cleanUp(probe)
+        await session.empty(mailbox)
     }
 
     /// Waits until Mail answers a cheap request again: after a burst of removals it can block for minutes.

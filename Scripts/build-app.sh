@@ -29,6 +29,15 @@ BIN="$(swift build -c release $ARCH_FLAGS --scratch-path "$BUILD" --show-bin-pat
 
 [ -f Resources/AppIcon.icns ] || swift Scripts/make-icon.swift Resources
 
+# SwiftPM's build system can record the deployment target as the SDK version (`sdk 14.0` in LC_BUILD_VERSION, seen
+# with Xcode 27). macOS then treats the app as built for macOS 14 and gives it the pre-26 look: square-ish menu window,
+# no Liquid Glass. Stamp the SDK the binaries were really built with (unsigned copies, before codesign).
+SDK_VERSION="$(xcrun --sdk macosx --show-sdk-version)"
+stamp_sdk() {
+    vtool -set-build-version macos 14.0 "$SDK_VERSION" -replace -output "$1.stamped" "$1"
+    mv "$1.stamped" "$1"
+}
+
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 ditto --norsrc --noextattr "$BIN/MailMCPBar" "$APP/Contents/MacOS/Apple Mail MCP"
@@ -50,6 +59,9 @@ cp "$APP/Contents/Info.plist" "$HELPER/Contents/Info.plist"
     -c "Set :CFBundleDisplayName Apple Mail MCP Server" -c "Delete :CFBundleIconFile" "$HELPER/Contents/Info.plist"
 STANDALONE="$(dirname "$APP")/apple-mail-mcp"
 ditto --norsrc --noextattr "$BIN/apple-mail-mcp" "$STANDALONE"
+for binary in "$APP/Contents/MacOS/Apple Mail MCP" "$HELPER/Contents/MacOS/apple-mail-mcp" "$STANDALONE"; do
+    stamp_sdk "$binary"
+done
 xattr -cr "$APP"
 
 if [ -z "${SIGN_IDENTITY:-}" ]; then

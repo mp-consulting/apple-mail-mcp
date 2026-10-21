@@ -48,6 +48,15 @@ public struct ClientInstaller: Sendable {
     var desktopConfig: URL { home.appending(path: "Library/Application Support/Claude/claude_desktop_config.json") }
     public var desktopConfigPath: String { desktopConfig.path }
 
+    /// Touched whenever this app changes its entry in the Claude app's config. The config's own date can't say
+    /// that: the Claude app saves its preferences in the same file while it runs.
+    var desktopEntryMarker: URL { home.appending(path: "Library/Application Support/apple-mail-mcp/claude-app-entry.changed") }
+
+    /// When this app last changed its entry in the Claude app's config; nil if it never did (or before 0.6.6).
+    public var desktopEntryChanged: Date? {
+        (try? FileManager.default.attributesOfItem(atPath: desktopEntryMarker.path))?[.modificationDate] as? Date
+    }
+
     public struct Failure: Error, CustomStringConvertible {
         public var description: String
     }
@@ -197,6 +206,11 @@ public struct ClientInstaller: Sendable {
             var servers = root["mcpServers"] as? [String: Any] ?? [:]
             servers[Self.serverName] = entry
             root["mcpServers"] = servers
+        }
+        if url == desktopConfig {
+            let marker = desktopEntryMarker
+            try? FileManager.default.createDirectory(at: marker.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? Data().write(to: marker)
         }
     }
 

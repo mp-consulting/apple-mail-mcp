@@ -165,14 +165,14 @@ extension AgentModel {
         }
     }
 
-    /// The config changed after the running Claude app read it: it only loads servers at launch. Asks the system
+    /// Our entry changed after the running Claude app read it: it only loads servers at launch. Asks the system
     /// and the disk, so `refreshClients` calls it and the views read the stored `claudeAppNeedsRestart`.
     func computeClaudeAppNeedsRestart() -> Bool {
         guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: Self.claudeAppBundleID).first,
               let launched = app.launchDate,
-              let modified = (try? FileManager.default.attributesOfItem(atPath: clientInstaller.desktopConfigPath))?[.modificationDate] as? Date
+              let changed = clientInstaller.desktopEntryChanged
         else { return false }
-        return modified > launched
+        return changed > launched
     }
 
     /// Server and every skill in one click.

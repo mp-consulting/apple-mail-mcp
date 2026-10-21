@@ -37,7 +37,8 @@ swift Scripts/make-icon.swift Resources
   (`APPLE_MAIL_MCP_LIVE=1`). Benchmarks and logs print counts and timings, never message content.
   Screenshots use `mail-bench demo` data (`APPLE_MAIL_MCP_MAIL_ROOT`, `APPLE_MAIL_MCP_ACCOUNTS_DB`,
   `APPLE_MAIL_MCP_SUPPORT_DIR`).
-- **Reads never talk to Mail.** Only `MailAutomation` sends Apple Events. No AppleScript source anywhere.
+- **Reads never talk to Mail.** Only `MailAutomation` sends Apple Events. No AppleScript source anywhere, except the
+  updater's `osascript … with administrator privileges`, which swaps in an update when another account owns the app.
 - Tool output is compact JSON (`JSON.obj`, keys in a deliberate order, false/empty fields omitted).
 - The server must start even when Mail data is unreadable: the store opens lazily and errors explain
   which app needs Full Disk Access (`LaunchContext`).

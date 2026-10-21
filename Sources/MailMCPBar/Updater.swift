@@ -108,18 +108,18 @@ import Security
     /// Why the app can't replace itself where it runs, if it can't; the release page is offered instead.
     var installBlocker: String? {
         let app = Bundle.main.bundleURL
-        let folder = app.deletingLastPathComponent()
         if app.path.contains("/AppTranslocation/") {
             return "Move Apple Mail MCP to the Applications folder to install updates from here."
         }
         if (try? app.resourceValues(forKeys: [.volumeIsReadOnlyKey]))?.volumeIsReadOnly == true {
             return "Apple Mail MCP is running from a read-only disk. Copy it to Applications first."
         }
-        if !FileManager.default.isWritableFile(atPath: folder.path) {
-            return "Your account can't write to \(folder.path(percentEncoded: false)). Download the update instead."
-        }
         return nil
     }
+
+    /// Whether installing asks for an administrator's password: the app was installed by another account
+    /// (or by hand from the disk image), so this account can't replace it.
+    var needsAdministrator: Bool { !Self.canReplace(Bundle.main.bundleURL) }
 
     func install(_ release: Release) async {
         guard installBlocker == nil else { return }
@@ -198,8 +198,70 @@ import Security
               version == release.version
         else { throw InstallError("the download holds a different version than the release.") }
 
-        report(InstallProgress(step: "Installing…", fraction: 0.97))
-        _ = try files.replaceItemAt(app, withItemAt: staged)
+        if canReplace(app) {
+            report(InstallProgress(step: "Installing…", fraction: 0.97))
+            _ = try files.replaceItemAt(app, withItemAt: staged)
+            shareWithAdministrators(app)
+        } else {
+            report(InstallProgress(step: "Waiting for an administrator's password…", fraction: 0.97))
+            try installAsAdministrator(staged, over: app)
+        }
+    }
+
+    /// Replacing the app means moving its folder and deleting what's inside, so every folder in it must be
+    /// writable, not just the one it sits in. A copy another account installed (or updated) isn't.
+    private nonisolated static func canReplace(_ app: URL) -> Bool {
+        let files = FileManager.default
+        var folders = [app.deletingLastPathComponent(), app]
+        if let walk = files.enumerator(at: app, includingPropertiesForKeys: [.isDirectoryKey]) {
+            for case let url as URL in walk where (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+                folders.append(url)
+            }
+        }
+        return folders.allSatisfy { files.isWritableFile(atPath: $0.path) }
+    }
+
+    /// Lets every administrator account on the Mac update the app next time, not only this one. Code signatures
+    /// don't cover permissions, so this leaves the signature intact.
+    private nonisolated static func shareWithAdministrators(_ app: URL) {
+        try? run("/usr/sbin/chown", "-R", ":admin", app.path)
+        try? run("/bin/chmod", "-R", "g+w", app.path)
+    }
+
+    /// Swaps the app as root, after the macOS administrator prompt. The signature is checked again on a copy
+    /// only root can change, so nothing can swap the staged app between the check above and the install.
+    private nonisolated static func installAsAdministrator(_ staged: URL, over app: URL) throws {
+        let script = #"""
+            set -e
+            app="$1"; staged="$2"; requirement="$3"
+            new="$(dirname "$app")/.$(basename "$app").new"; old="$(dirname "$app")/.$(basename "$app").old"
+            rm -rf "$new" "$old"
+            trap 'rm -rf "$new"' EXIT
+            /usr/bin/ditto "$staged" "$new"
+            /usr/sbin/chown -R root:admin "$new"
+            /usr/bin/codesign --verify --deep --strict -R "=$requirement" "$new"
+            mv "$app" "$old"
+            mv "$new" "$app"
+            rm -rf "$old"
+            /bin/chmod -R g+w "$app"
+            """#
+        let process = Process()
+        process.executableURL = URL(filePath: "/usr/bin/osascript")
+        process.arguments = [
+            "-e", "on run argv",
+            "-e", #"do shell script "/bin/sh -c " & quoted form of item 1 of argv & " sh " & quoted form of item 2 of argv & " " & quoted form of item 3 of argv & " " & quoted form of item 4 of argv with administrator privileges"#,
+            "-e", "end run",
+            script, app.path, staged.path, appRequirement,
+        ]
+        let errors = Pipe()
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = errors
+        try process.run()
+        let message = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+        guard process.terminationStatus != 0 else { return }
+        if message.contains("-128") { throw InstallError("the administrator password was cancelled.") }
+        throw InstallError("installing as an administrator failed: \(message.trimmingCharacters(in: .whitespacesAndNewlines))")
     }
 
     /// Waits for this process to exit, then opens the new copy.

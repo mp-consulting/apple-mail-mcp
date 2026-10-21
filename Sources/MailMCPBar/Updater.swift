@@ -16,6 +16,8 @@ import Security
         case upToDate
         case available(Release)
         case installing(Release, InstallProgress)
+        /// Another account installed this version over the running one.
+        case installedElsewhere(AppVersion)
         case failed(String)
     }
 
@@ -53,13 +55,17 @@ import Security
         if case let .installing(release, progress) = state { (release, progress) } else { nil }
     }
 
+    var installedElsewhere: AppVersion? {
+        if case let .installedElsewhere(version) = state { version } else { nil }
+    }
+
     /// Checks now if a day has passed, then looks again every hour (a Mac that slept through the
     /// due time catches up within the hour).
     func start() {
         guard isEnabled, schedule == nil else { return }
         schedule = Task { [weak self] in
             while !Task.isCancelled {
-                await self?.checkIfDue()
+                if self?.noticeNewerInstall() != true { await self?.checkIfDue() }
                 try? await Task.sleep(nanoseconds: 60 * 60 * 1_000_000_000)
             }
         }
@@ -76,7 +82,7 @@ import Security
         case .checking, .installing: return
         default: break
         }
-        guard isEnabled else { return }
+        guard isEnabled, !noticeNewerInstall() else { return }
         state = .checking
         do {
             var request = URLRequest(url: Release.latestURL)
@@ -138,6 +144,29 @@ import Security
         } catch {
             state = .failed("Couldn't install Apple Mail MCP \(release.version): \(error.localizedDescription)")
         }
+    }
+
+    /// The version in the app's folder now. Newer than the one running when another account updated the app.
+    private nonisolated static func installedVersion(of app: URL) -> AppVersion? {
+        (NSDictionary(contentsOf: app.appending(path: "Contents/Info.plist"))?["CFBundleShortVersionString"] as? String)
+            .flatMap(AppVersion.init)
+    }
+
+    /// Another account updated the app under this one: offer a relaunch instead of the same update again.
+    /// Returns whether a newer copy is installed.
+    @discardableResult func noticeNewerInstall() -> Bool {
+        guard let currentVersion, let installed = Self.installedVersion(of: Bundle.main.bundleURL), installed > currentVersion
+        else { return false }
+        switch state {
+        case .installing: break  // our own install, about to relaunch
+        default: state = .installedElsewhere(installed)
+        }
+        return true
+    }
+
+    /// Opens the copy another account installed, once this one has quit.
+    func relaunchIntoInstalledVersion() {
+        relaunch()
     }
 
     // MARK: Installing

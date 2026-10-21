@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- When another account on the Mac updates Apple Mail MCP, the running copy offers to relaunch into the new
+  version instead of offering the same update again.
+
 ## [0.6.6] - 2026-10-21
 
 ### Fixed

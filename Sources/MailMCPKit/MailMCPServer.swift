@@ -6,7 +6,7 @@ import MailStore
 public enum MailMCPVersion {
     /// The app bundle's version when running from "Apple Mail MCP.app" (stamped at release), else the source version.
     public static let current = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String)
-        .flatMap { $0.hasPrefix("__") ? nil : $0 } ?? "0.6.4"
+        .flatMap { $0.hasPrefix("__") ? nil : $0 } ?? "0.6.5"
 
     /// The commit this build was made from: stamped by `Scripts/build-app.sh` in the bundle (`AppleMailMCPCommit`), and
     /// passed by the Claude extension's manifest (`APPLE_MAIL_MCP_COMMIT`); nil for a plain `swift build`.

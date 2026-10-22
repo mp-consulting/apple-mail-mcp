@@ -99,6 +99,34 @@ final class TrashTests {
             MailboxTarget(accountID: fixture.gmail, path: "[Gmail]/Corbeille"))])
     }
 
+    @Test func bigMailboxesGoByIDInBatches() async throws {
+        // Above the limit, `whose message id` would read every message in the mailbox: each goes by id instead,
+        // checked against its subject and date, a batch included (also one without a Message-ID of its own).
+        h.toolbox.headerLookupLimit = 1
+        trashWorks()
+        let receipt = h.id("receipt"), digest = h.id("digest")
+        try h.fixture.store.setMessageIDHeader(receipt, to: nil)
+        let json = try await h.json("trash_messages", ["ids": [.int(Int(receipt)), .int(Int(digest))]])
+        #expect(json["trashed"] as? Int == 2 && json["retry_one_by_one"] == nil)
+        #expect(h.automation.calls == [.trash([receipt], icloudInbox, icloudTrash), .trash([digest], icloudInbox, icloudTrash)])
+        let refs = h.automation.refs
+        #expect(refs.map(\.id) == [receipt, digest] && refs.allSatisfy { $0.header == nil })
+        #expect(refs.last?.subject == (try h.toolbox.store.message(id: digest)).subject)
+    }
+
+    @Test func smallMailboxesKeepTheMessageID() async throws {
+        trashWorks()
+        let digest = h.id("digest")
+        _ = try await h.json("trash_messages", ["ids": [.int(Int(digest))]])
+        #expect(h.automation.refs.first?.header == (try h.toolbox.store.message(id: digest)).messageIDHeader)
+    }
+
+    @Test func flagsInBigMailboxesGoByID() async throws {
+        h.toolbox.headerLookupLimit = 1
+        _ = try await h.json("update_messages", ["ids": [.int(Int(h.id("kickoff")))], "read": true])
+        #expect(h.automation.refs.count == 1 && h.automation.refs.first?.header == nil)
+    }
+
     @Test func mailChangesReportTheServerVersion() async throws {
         trashWorks()
         let json = try await h.json("trash_messages", ["ids": [.int(Int(h.id("receipt")))]])

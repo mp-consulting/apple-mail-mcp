@@ -57,8 +57,9 @@ public struct OutgoingMessage: Sendable, Hashable {
 
 /// A message to change, and how Mail is told which one. Mail's scripting `id` is resolved to an index into the
 /// mailbox for a delete or a move, and has removed the neighbour instead (live, on IMAP, with removals in flight),
-/// so a message is addressed by its Message-ID header whenever that is unique in its mailbox. Without one it goes
-/// by `id`, and only after Mail confirms that the message there has the expected subject and date.
+/// so a message is addressed by its Message-ID header whenever that is unique in its mailbox. Without one, or in a
+/// mailbox too big for that lookup to be quick (it reads every message there), it goes by `id`, and only after Mail
+/// confirms that the message there has the expected subject and date.
 public struct MessageRef: Sendable, Hashable {
     public var id: Int64
     /// The Message-ID header (without brackets) when no other message in the mailbox carries it; nil to go by `id`.

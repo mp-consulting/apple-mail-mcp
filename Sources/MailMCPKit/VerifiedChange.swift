@@ -173,14 +173,17 @@ struct ChangeCheck {
     let headerless: Set<Int64>
     /// The highest row before the change: a moved message comes back above it.
     let maxRowID: Int64
+    /// The source is too big to find messages by Message-ID quickly (see ``MailToolbox/headerLookupLimit``).
+    let byID: Bool
 
     var sourceCount: Int { snapshot.count }
 
-    init(_ step: ChangeStep, store: MailStore) throws {
+    init(_ step: ChangeStep, store: MailStore, headerLookupLimit: Int) throws {
         self.store = store
         maxRowID = try store.maxMessageRowID()
         let snapshot = try store.headerRows(mailboxID: step.source.id)
         self.snapshot = snapshot
+        byID = snapshot.count > headerLookupLimit
         headerCounts = snapshot.values.reduce(into: [:]) { counts, header in
             if !header.isEmpty { counts[header, default: 0] += 1 }
         }
@@ -202,14 +205,16 @@ struct ChangeCheck {
     }
 
     /// How Mail is told which message: by its Message-ID when no other message in the source carries it. Without
-    /// one, by id (checked against its subject and date), and only when the call is about this message `alone`.
+    /// one, by id (checked against its subject and date), and only when the call is about this message `alone`. In a
+    /// source too big for Message-ID lookups, every message goes by id, checked the same way, batch or not.
     func ref(_ message: MessageSummary, alone: Bool) -> MessageRef? {
-        let ref = MessageRef(message, carriers: headerCounts)
-        return ref.header != nil || alone ? ref : nil
+        let ref = MessageRef(message, carriers: headerCounts, byID: byID)
+        return ref.header != nil || alone || byID ? ref : nil
     }
 
     /// Where `messages` (all of the step's by default) stand now. The step's messages were sent by unique
-    /// Message-ID or alone, so one message's outcome does not depend on the others.
+    /// Message-ID, or by id once Mail confirmed the subject and date, so one message's outcome does not depend on the
+    /// others.
     func outcome(of messages: [MessageSummary]? = nil) throws -> Outcome {
         let messages = messages ?? step.messages
         var outcome = Outcome()
@@ -391,10 +396,13 @@ extension MailToolbox {
     @TaskLocal static var callStart: Date?
 
     /// How Mail is told which message (see ``MessageRef``): by Message-ID when no other message in the mailbox
-    /// carries it, else by id, checked against the subject and date.
+    /// carries it and the mailbox is small enough (``headerLookupLimit``), else by id, checked against the subject
+    /// and date.
     func messageRefs(_ messages: [MessageSummary], in mailbox: Mailbox) throws -> [MessageRef] {
-        let carriers = try ChangeCheck.rows(messages, in: mailbox, store: store).mapValues(\.count)
-        return messages.map { MessageRef($0, carriers: carriers) }
+        let store = try self.store
+        let byID = try store.liveCount(mailboxID: mailbox.id) > headerLookupLimit
+        let carriers = byID ? [:] : try ChangeCheck.rows(messages, in: mailbox, store: store).mapValues(\.count)
+        return messages.map { MessageRef($0, carriers: carriers, byID: byID) }
     }
 
     /// Refuses when a change to one of `mailboxes` went wrong moments ago (see ``ChangeBreaker``).
@@ -434,7 +442,7 @@ extension MailToolbox {
                     step.messages.forEach { skip($0.id) }
                     continue
                 }
-                let check = try ChangeCheck(step, store: store)
+                let check = try ChangeCheck(step, store: store, headerLookupLimit: headerLookupLimit)
                 report.gone += check.gone
                 guard !check.step.messages.isEmpty else { continue }
                 var sent: [Int64] = []
@@ -529,7 +537,8 @@ extension MailToolbox {
         for (_, group) in Dictionary(grouping: strays, by: { [$0.nowIn!.id, $0.source.id] }) {
             let home = group[0].source, now = group[0].nowIn!
             let messages = try store.messages(ids: group.compactMap(\.newID))
-            let check = try ChangeCheck(ChangeStep(source: now, destination: home, messages: messages, mustArrive: true), store: store)
+            let check = try ChangeCheck(
+                ChangeStep(source: now, destination: home, messages: messages, mustArrive: true), store: store, headerLookupLimit: headerLookupLimit)
             for message in check.step.messages {
                 guard !Task.isCancelled, let ref = check.ref(message, alone: false) else { continue }
                 guard (try? await automation.move([ref], from: MailboxTarget(now), to: MailboxTarget(home))) ?? 0 > 0 else { continue }
@@ -548,10 +557,11 @@ extension MailToolbox {
 
 extension MessageRef {
     /// How Mail is told which message: by its Message-ID when `carriers` (rows per Message-ID in its mailbox) says
-    /// no other message there carries it, else by id, checked against its subject and date.
-    init(_ message: MessageSummary, carriers: [String: Int]) {
+    /// no other message there carries it, else by id, checked against its subject and date. `byID`: always by id,
+    /// for a mailbox too big to look up by Message-ID quickly.
+    init(_ message: MessageSummary, carriers: [String: Int], byID: Bool = false) {
         self.init(
-            id: message.id, header: message.messageIDHeader.flatMap { carriers[$0] == 1 ? $0 : nil }, subject: message.subject,
-            dateReceived: message.dateReceived)
+            id: message.id, header: byID ? nil : message.messageIDHeader.flatMap { carriers[$0] == 1 ? $0 : nil },
+            subject: message.subject, dateReceived: message.dateReceived)
     }
 }

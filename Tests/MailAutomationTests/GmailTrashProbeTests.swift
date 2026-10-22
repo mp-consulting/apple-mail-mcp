@@ -24,7 +24,7 @@ struct GmailTrashProbeTests {
     static let enabled = environment["APPLE_MAIL_MCP_LIVE_TRASH"] == "1" && environment["APPLE_MAIL_MCP_PROBE_GMAIL"] != nil
 
     @Test(.enabled(if: enabled)) func moveToTrashMatchesDelete() async throws {
-        setvbuf(stdout, nil, _IOLBF, 0)  // progress shows in a log file as it happens
+        TrashProbeTests.log("probe: ---- gmail, logging to \(TrashProbeTests.logURL.path)")
         let accountID = try #require(Self.environment["APPLE_MAIL_MCP_PROBE_GMAIL"])
         let count = max(2, Int(Self.environment["APPLE_MAIL_MCP_PROBE_COUNT"] ?? "") ?? 20)
         let store = try MailStore.open()
@@ -47,7 +47,7 @@ struct GmailTrashProbeTests {
             others == 0 || Self.environment["APPLE_MAIL_MCP_PROBE_GMAIL_NONEMPTY"] == "1",
             "All Mail holds \(others) messages: set APPLE_MAIL_MCP_PROBE_GMAIL_NONEMPTY=1 to probe anyway")
         let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "")
-        print("probe: gmail: \(count) drafts, account holding \(others) other messages")
+        TrashProbeTests.log("probe: gmail: \(count) drafts, account holding \(others) other messages")
 
         /// Moves every probe message (subject "MCP Probe …") outside Trash to Trash: what earlier runs left, or what this
         /// one made before it failed.
@@ -63,9 +63,9 @@ struct GmailTrashProbeTests {
                         try await automation.trash(TrashProbeTests.refs(rows), in: MailboxTarget(box), to: MailboxTarget(trash))
                     }
                 }
-                if count > 0 { print("probe: gmail: moved \(count) probe messages to Trash") }
+                if count > 0 { TrashProbeTests.log("probe: gmail: moved \(count) probe messages to Trash") }
             } catch {
-                print("probe: gmail: could not move the probe messages to Trash: \(error); delete them in Mail")
+                TrashProbeTests.log("probe: gmail: could not move the probe messages to Trash: \(error); delete them in Mail")
             }
         }
         await trashProbeMessages()
@@ -116,9 +116,9 @@ struct GmailTrashProbeTests {
                 draftRows[saved.messageIDHeader!] = saved
             }
             if let first = draftRows.values.first, first.mailboxID != drafts.id {
-                print("probe: gmail: drafts are filed in \(boxes.first { $0.id == first.mailboxID }?.path ?? "another mailbox")")
+                TrashProbeTests.log("probe: gmail: drafts are filed in \(boxes.first { $0.id == first.mailboxID }?.path ?? "another mailbox")")
             }
-            print("probe: gmail: \(headers.count) drafts saved")
+            TrashProbeTests.log("probe: gmail: \(headers.count) drafts saved")
 
             /// Rows of each Message-ID in `mailbox`, directly or through a label.
             func present(_ mailbox: Mailbox) throws -> [String: Int] {
@@ -144,13 +144,13 @@ struct GmailTrashProbeTests {
             /// Per mailbox, how many of the moved and deleted probe messages it shows, and how many other messages left it.
             let before = try Dictionary(uniqueKeysWithValues: boxes.map { ($0.id, try present($0)) })
             func census(_ when: String) throws {
-                print("probe: gmail: \(when)")
+                TrashProbeTests.log("probe: gmail: \(when)")
                 for box in boxes {
                     let now = try present(box)
                     let m = moved.filter { now[$0] != nil }.count, d = deleted.filter { now[$0] != nil }.count
                     let lost = (before[box.id] ?? [:]).filter { !moved.contains($0.key) && !deleted.contains($0.key) && now[$0.key] == nil }.count
                     guard m + d + lost > 0 else { continue }
-                    print("probe:   \(box.path)\(box.sourceMailboxID != nil ? " (label)" : ""): move \(m)/\(moved.count), delete \(d)/\(deleted.count)"
+                    TrashProbeTests.log("probe:   \(box.path)\(box.sourceMailboxID != nil ? " (label)" : ""): move \(m)/\(moved.count), delete \(d)/\(deleted.count)"
                         + (lost > 0 ? ", \(lost) other messages left" : ""))
                 }
             }
@@ -168,7 +168,7 @@ struct GmailTrashProbeTests {
                     _ = try? await TrashProbeTests.retrying { try await automation.move(TrashProbeTests.refs(rows), from: MailboxTarget(trash), to: MailboxTarget(home)) }
                     let back = try TrashProbeTests.wait(30) { try present(home)[header] != nil }
                     if back { putBack += 1 }
-                    print("probe: gmail: a message nobody asked for went to Trash; put back in \(home.path): \(back ? "yes" : "NOT YET, check Trash")")
+                    TrashProbeTests.log("probe: gmail: a message nobody asked for went to Trash; put back in \(home.path): \(back ? "yes" : "NOT YET, check Trash")")
                 }
                 return strays.count
             }
@@ -180,7 +180,7 @@ struct GmailTrashProbeTests {
                 guard let row = try store.messages(messageIDHeaders: [header], mailboxIDs: [inbox.id]).first,
                     let source = boxes.first(where: { $0.id == row.mailboxID })
                 else {
-                    print("probe: gmail: a draft is not in INBOX, skipped")
+                    TrashProbeTests.log("probe: gmail: a draft is not in INBOX, skipped")
                     continue
                 }
                 let ref = MessageRef(id: row.id, header: header, subject: row.subject, dateReceived: row.dateReceived)
@@ -194,37 +194,37 @@ struct GmailTrashProbeTests {
                         _ = try await TrashProbeTests.retrying { try mail.send(.delete, to: MailSpec.message(header: header, in: MailboxTarget(source))) }
                     }
                 } catch {
-                    print("probe: gmail: \(way) failed: \(error)")
+                    TrashProbeTests.log("probe: gmail: \(way) failed: \(error)")
                 }
                 eventMs[way]!.append(Date().timeIntervalSince(sent) * 1000)
                 _ = try TrashProbeTests.wait(15) { try present(inbox)[header] == nil }
                 if try await putBackStrays() > 0 {
                     stopped = true
-                    print("probe: gmail: stopped after a stray (\(way))")
+                    TrashProbeTests.log("probe: gmail: stopped after a stray (\(way))")
                 }
             }
             for (way, times) in eventMs.sorted(by: { $0.key > $1.key }) where !times.isEmpty {
-                print("probe: gmail: \(way): event avg \(Int(times.reduce(0, +) / Double(times.count))) ms, max \(Int(times.max()!)) ms")
+                TrashProbeTests.log("probe: gmail: \(way): event avg \(Int(times.reduce(0, +) / Double(times.count))) ms, max \(Int(times.max()!)) ms")
             }
             try TrashProbeTests.settle(store, trash)
             try census("after trashing")
             try await Task.sleep(for: .seconds(60))
             // Strays have landed late before.
-            if try await putBackStrays() > 0 { print("probe: gmail: late stray found") }
+            if try await putBackStrays() > 0 { TrashProbeTests.log("probe: gmail: late stray found") }
             try census("a minute later")
-            print("probe: gmail: \(putBack) strays put back\(stopped ? ", run stopped early" : "")")
+            TrashProbeTests.log("probe: gmail: \(putBack) strays put back\(stopped ? ", run stopped early" : "")")
 
             // Probe messages still outside Trash go there (by `move`, never a delete in Trash); then the label goes.
             await trashProbeMessages()
             // Mail refuses to delete a Gmail label through scripting (-10000): the results are in by now.
             do {
                 try mail.send("core", "delo", direct: MailSpec.mailbox(labelTarget))
-                print("probe: gmail: deleted the probe label; the drafts are in \(trash.path): delete them there in Mail")
+                TrashProbeTests.log("probe: gmail: deleted the probe label; the drafts are in \(trash.path): delete them there in Mail")
             } catch {
-                print("probe: gmail: could not delete the label \(labelTarget.path) (\(error)); the drafts are in \(trash.path)")
+                TrashProbeTests.log("probe: gmail: could not delete the label \(labelTarget.path) (\(error)); the drafts are in \(trash.path)")
             }
         } catch {
-            print("probe: gmail: stopped: \(error)")
+            TrashProbeTests.log("probe: gmail: stopped: \(error)")
             await trashProbeMessages()
             throw error
         }

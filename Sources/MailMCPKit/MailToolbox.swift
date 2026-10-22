@@ -70,6 +70,10 @@ public final class MailToolbox: @unchecked Sendable {
     public var mailboxSettle: TimeInterval = 3
     /// How long moves and trashes wait for Mail's database to show their outcome (tests shorten it).
     public var verification = ChangeVerification()
+    /// Mailboxes holding more messages than this have theirs found by id (checked against subject and date) rather
+    /// than by Message-ID: `whose message id` makes Mail read every message there, about 2.5 ms each (live,
+    /// 2026-10-22: 0.55 s in 257 messages, 5.5 s in 2,215, 10.7 s in 4,507, 16–38 s in 9,440; by id 0.2 s).
+    public var headerLookupLimit = 1_000
     /// How long rule changes wait for Mail to save its rule files (tests shorten it).
     public var ruleVerification = RuleVerification()
     /// When the running Mail started (nil when it is not running); tests fix it.

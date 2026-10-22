@@ -73,6 +73,10 @@ swift Scripts/make-icon.swift Resources
   index (`_scriptingRemoveObjectsAtIndexes:fromValueForKey:`) and, with removals in flight, can remove the neighbour.
   Use `whose message id` (`MailSpec.message(header:in:)`, property `meid`), one message at a time, waiting for each
   to leave the database (and, for a move, to arrive). Probe: `TrashProbeTests` (`APPLE_MAIL_MCP_LIVE_TRASH=1`).
+  `whose message id` makes Mail read every message in the mailbox, about 2.5 ms each (5.5 s in 2,215 messages,
+  16–38 s in 9,440; `whose id` 2.6–3.8 s there; by `id` 0.2 s), so above `MailToolbox.headerLookupLimit` (1,000)
+  messages go by `id` after Mail confirms their subject and date. Back-to-back `delete` and `move` by `id` on 200
+  probe copies never misfired (2026-10-22): the probe has not reproduced the incident on copies.
 - **Do not** trash with `delete`, not even with a `whose message id` specifier: `NSDeleteCommand` turns the evaluated
   specifier into indexes and removes those, which has taken the neighbour (live, 0.6.1). Trash by `move` to the
   account's Trash mailbox (`MessageEvent.trash(to:)`), Gmail included: a move from All Mail to `[Gmail]/Trash` drops

@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Moves, trashes and flags in big mailboxes were slow enough to fail.** Since 0.6.1 each message was found with
+  `whose message id`, which makes Mail read every message in the mailbox: about 2.5 ms per message there, so 5 s
+  in a 2,000-message archive and 16–38 s in a 9,000-message one, past the 20 s each event may take. Mailboxes above
+  1,000 messages now have theirs found by id (0.2 s), after Mail confirms the subject and date, batches included;
+  smaller ones keep the Message-ID lookup. Both still move one message at a time, check each in Mail's database, and
+  put back any stray.
+
+### Changed
+
+- The live probes write each line to `~/Library/Logs/AppleMailMCP/probes.log` as it happens, copy into their
+  mailboxes by id (a copy removes nothing, so no index can shift), and `fillBigMailbox` fills a probe mailbox past
+  the limit for trying the server's own tools there.
+
 ## [0.6.7] - 2026-10-22
 
 ### Changed

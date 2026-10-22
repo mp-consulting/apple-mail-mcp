@@ -1,13 +1,25 @@
 # Plan: trash by moving to Trash, not by `delete`
 
-Status: released in 0.6.2 and 0.6.4 (Gmail by `move`); the incident-sized iCloud run is pending · 2026-10-20 · follows `2026-10-trash-targets-wrong-message.md`
+Status: released in 0.6.2, 0.6.4 (Gmail by `move`) and 0.6.8 (big mailboxes by id); probe cannot reproduce the incident · 2026-10-20 · follows `2026-10-trash-targets-wrong-message.md`
 
 iCloud, 2026-10-21, quick pass (`Archive/2020`, 40 copies per variant, one round, no load): A 20/20 left, 0 strays
 (12 ms per event); C 20/20, 0 strays (150 ms); D 21/21, 0 strays (23 ms); E not measured (Mail blocked 501 s while
 its load mailboxes were made). A was clean, so at this size the probe does not reproduce the incident and C and D
-prove nothing yet. Still to do: an incident-sized run (A and E, 200 copies, 2 rounds; or the plan's 200 × 5 for
-A, C, D and E), recording D's result here, and `copiesLeftAfterRestore`. Released as 0.6.4 on the Gmail evidence
-with this question open.
+prove nothing yet. Released as 0.6.4 on the Gmail evidence with this question open.
+
+iCloud, 2026-10-22, incident-sized (200 copies per variant, back to back, 2 rounds): A (`delete` by id) 200/200 left,
+0 strays, 17 ms per event; C (`move` by id) 200/200, 0 strays, 37 ms. The incident's own path did not misfire on
+copies, so the probe cannot reproduce it, and says nothing for or against addressing by id.
+
+Found meanwhile: `whose message id` makes Mail read every message in the mailbox, about 2.5 ms each (0.55 s in 257,
+5.5 s in 2,215, 10.7 s in 4,507, 16–38 s in 9,440; `whose id` 2.6–3.8 s in 9,440; by id 0.2 s), so since 0.6.1 moves
+and trashes in big archives ran into the 20 s event timeout. 0.6.8: mailboxes above 1,000 messages go by id after
+Mail confirms subject and date (the identity check `whose message id` gave), keeping move-not-delete, pacing,
+verification and stray restore. Checked end to end on 2026-10-22 with the server's own `trash_messages` (CLI) on 20
+copies spread through `MCP Probe big` (1,500 copies): 12 confirmed and 2 reported unverified that Mail moved after
+their wait; exactly those 14 arrived in Trash and left the mailbox, no stray. Mail stalled under the Mac's load
+(load average 140–190; one lookup by id took 45 s, then 0.25 s), which stopped both calls early. Still open:
+`copiesLeftAfterRestore`.
 
 Gmail, settled on 2026-10-21 (`GmailTrashProbeTests`, a Gmail account holding 2,675 other messages, 20 drafts each
 labelled INBOX and a probe label, from the All Mail row, by Message-ID, paced): `move` to `[Gmail]/Bin` and `delete`

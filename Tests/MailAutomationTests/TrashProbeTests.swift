@@ -30,7 +30,8 @@ import Testing
 /// APPLE_MAIL_MCP_PROBE_SOURCE=<mailbox path to copy from>. Optional: APPLE_MAIL_MCP_PROBE_COUNT (default 40),
 /// APPLE_MAIL_MCP_PROBE_ROUNDS (default 1), APPLE_MAIL_MCP_PROBE_VARIANTS (e.g. "ACDE"), APPLE_MAIL_MCP_PROBE_GHOSTS=1
 /// for `copiesLeftAfterRestore` (about 20 minutes), APPLE_MAIL_MCP_PROBE_LARGE=<path>[,<path>] to time a `whose`
-/// lookup on big mailboxes (read only). Needs Full Disk Access for the test runner, to read Mail's database.
+/// lookup on big mailboxes (read only), APPLE_MAIL_MCP_PROBE_LOG (default ~/Library/Logs/AppleMailMCP/probes.log, where
+/// every line lands as it happens). Needs Full Disk Access for the test runner, to read Mail's database.
 @Suite("Live trash probe", .serialized)
 struct TrashProbeTests {
     static let environment = ProcessInfo.processInfo.environment
@@ -89,6 +90,28 @@ struct TrashProbeTests {
         }
     }
 
+    /// Where the probes' lines go as they happen: `swift test` holds a test's output until it exits, so a long run
+    /// showed nothing for hours and a restart lost it all. Counts and timings only, like everything the probes print.
+    static let logURL = URL(filePath: environment["APPLE_MAIL_MCP_PROBE_LOG"]
+        ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Logs/AppleMailMCP/probes.log").path)
+    private static let logLock = NSLock()
+
+    /// Prints `line` and appends it, timestamped, to ``logURL`` at once.
+    static func log(_ line: String) {
+        print(line)
+        logLock.withLock {
+            try? FileManager.default.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let stamped = Data("\(ISO8601DateFormatter().string(from: Date())) \(line)\n".utf8)
+            if let handle = try? FileHandle(forWritingTo: logURL) {
+                _ = try? handle.seekToEnd()
+                try? handle.write(contentsOf: stamped)
+                try? handle.close()
+            } else {
+                try? stamped.write(to: logURL)
+            }
+        }
+    }
+
     /// Polls `condition` every 0.25 s for up to `timeout` seconds.
     static func wait(_ timeout: TimeInterval, _ condition: () throws -> Bool) rethrows -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
@@ -123,7 +146,7 @@ struct TrashProbeTests {
             do {
                 return try await body()
             } catch let error as AppleEventError where error.number == -1712 && attempt < 3 {
-                print("probe: Mail did not answer in time, trying again")
+                TrashProbeTests.log("probe: Mail did not answer in time, trying again")
                 try waitForMail()
             }
         }
@@ -157,7 +180,7 @@ struct TrashProbeTests {
             let rows = try store.headerRows(mailboxID: source.id)
             let counts = rows.values.reduce(into: [String: Int]()) { $0[$1, default: 0] += 1 }
             unique = rows.filter { !$0.value.isEmpty && counts[$0.value] == 1 }.keys.sorted(by: >)
-            print("probe: copying from a mailbox of \(rows.count), \(unique.count) with a unique Message-ID")
+            TrashProbeTests.log("probe: copying from a mailbox of \(rows.count), \(unique.count) with a unique Message-ID")
         }
 
         func take(_ count: Int) throws -> [MessageSummary] {
@@ -203,9 +226,9 @@ struct TrashProbeTests {
                     _ = try await TrashProbeTests.retrying { try await automation.trash([ref], in: MailboxTarget(mailbox), to: MailboxTarget(trash)) }
                 }
                 let emptied = try TrashProbeTests.wait(180) { try store.liveCount(mailboxID: mailbox.id) == 0 }
-                print("probe: \(mailbox.path): \(messages.count) copies moved to Trash\(emptied ? "" : " (not all yet)")")
+                TrashProbeTests.log("probe: \(mailbox.path): \(messages.count) copies moved to Trash\(emptied ? "" : " (not all yet)")")
             } catch {
-                print("probe: could not empty \(mailbox.path): \(error)")
+                TrashProbeTests.log("probe: could not empty \(mailbox.path): \(error)")
             }
         }
 
@@ -218,17 +241,20 @@ struct TrashProbeTests {
         func fill(_ mailbox: Mailbox, with originals: [MessageSummary]) async throws {
             await empty(mailbox)
             try TrashProbeTests.waitForMail()
+            // By id: a copy removes nothing from the source, so no index can shift, and finding a message by its
+            // Message-ID costs about 2.5 ms per message in the mailbox (some 20 s in a big archive). A copy that timed
+            // out may still have been made: it is sent again only when it did not arrive.
             var copied = 0
-            for ref in try refs(originals, in: source) {
-                // A copy that timed out may still have been made: send it again only when it did not arrive.
+            for original in originals {
                 for attempt in 1...3 {
                     do {
-                        copied += try await automation.copy([ref], from: MailboxTarget(source), to: MailboxTarget(mailbox))
+                        try mail.send(.copy(to: MailboxTarget(mailbox)), to: MailSpec.message(original.id, in: MailboxTarget(source)))
+                        copied += 1
                         break
                     } catch let error as AppleEventError where error.number == -1712 && attempt < 3 {
-                        print("probe: Mail did not answer in time, checking before trying again")
+                        TrashProbeTests.log("probe: Mail did not answer in time, checking before trying again")
                         try TrashProbeTests.waitForMail()
-                        let arrived = try ref.header.map { header in
+                        let arrived = try original.messageIDHeader.map { header in
                             try TrashProbeTests.wait(30) { try !store.messages(messageIDHeaders: [header], mailboxIDs: [mailbox.id]).isEmpty }
                         } ?? false
                         if arrived { copied += 1; break }
@@ -236,7 +262,7 @@ struct TrashProbeTests {
                 }
             }
             let filled = try TrashProbeTests.wait(180) { try store.liveCount(mailboxID: mailbox.id) >= originals.count }
-            print("probe: \(mailbox.path): copied \(copied), \(try store.liveCount(mailboxID: mailbox.id)) there")
+            TrashProbeTests.log("probe: \(mailbox.path): copied \(copied), \(try store.liveCount(mailboxID: mailbox.id)) there")
             try #require(filled, "the copies did not all arrive")
             try TrashProbeTests.settle(store, mailbox)
         }
@@ -267,7 +293,7 @@ struct TrashProbeTests {
     }
 
     @Test(.enabled(if: enabled)) func neighbourRemoval() async throws {
-        setvbuf(stdout, nil, _IOLBF, 0)  // progress shows in a log file as it happens
+        Self.log("probe: ---- \(#function), logging to \(Self.logURL.path)")
         let rounds = max(1, Int(Self.environment["APPLE_MAIL_MCP_PROBE_ROUNDS"] ?? "") ?? 1)
         let variants = Self.environment["APPLE_MAIL_MCP_PROBE_VARIANTS"].map { $0.compactMap { Variant(rawValue: String($0).uppercased()) } }
             ?? Variant.allCases
@@ -275,7 +301,7 @@ struct TrashProbeTests {
         let store = session.store
         let mail = session.mail
         try await session.emptyProbeMailboxes()
-        print("probe: \(Self.count) messages per variant, \(rounds) round(s)")
+        TrashProbeTests.log("probe: \(Self.count) messages per variant, \(rounds) round(s)")
 
         var used: [Mailbox] = []
         var totals: [Variant: Result] = [:]
@@ -319,7 +345,7 @@ struct TrashProbeTests {
                             case .e: try mail.send(.trash(to: trash), to: byHeader)
                             }
                         } catch {
-                            print("probe: \(name): event failed: \(error)")
+                            TrashProbeTests.log("probe: \(name): event failed: \(error)")
                         }
                         result.eventMs.append(Date().timeIntervalSince(sent) * 1000)
                         switch variant {
@@ -349,15 +375,15 @@ struct TrashProbeTests {
                         else { continue }
                         result.neighbourStrays += 1
                     }
-                    print("probe: \(result)")
+                    TrashProbeTests.log("probe: \(result)")
                     totals[variant, default: Result(variant: variant)].add(result)
                 } catch {
-                    print("probe: \(name) stopped: \(error)")
+                    TrashProbeTests.log("probe: \(name) stopped: \(error)")
                 }
             }
         }
         if rounds > 1 {
-            for variant in variants { if let total = totals[variant] { print("probe: total \(total)") } }
+            for variant in variants { if let total = totals[variant] { TrashProbeTests.log("probe: total \(total)") } }
         }
 
         if let large = Self.environment["APPLE_MAIL_MCP_PROBE_LARGE"] {
@@ -370,9 +396,9 @@ struct TrashProbeTests {
                     try Self.waitForMail()
                     let sent = Date()
                     _ = try mail.get(MailSpec.property("ID  ", of: MailSpec.message(header: header, in: MailboxTarget(mailbox))))
-                    print("probe: whose lookup in a mailbox of \(try store.liveCount(mailboxID: mailbox.id)): \(Int(Date().timeIntervalSince(sent) * 1000)) ms")
+                    TrashProbeTests.log("probe: whose lookup in a mailbox of \(try store.liveCount(mailboxID: mailbox.id)): \(Int(Date().timeIntervalSince(sent) * 1000)) ms")
                 } catch {
-                    print("probe: whose lookup failed: \(error)")
+                    TrashProbeTests.log("probe: whose lookup failed: \(error)")
                 }
             }
         }
@@ -381,7 +407,7 @@ struct TrashProbeTests {
     }
 
     @Test(.enabled(if: ghosts)) func copiesLeftAfterRestore() async throws {
-        setvbuf(stdout, nil, _IOLBF, 0)  // progress shows in a log file as it happens
+        Self.log("probe: ---- \(#function), logging to \(Self.logURL.path)")
         let session = try Session()
         let store = session.store
         try await session.emptyProbeMailboxes()
@@ -395,7 +421,7 @@ struct TrashProbeTests {
             let here = try store.messages(messageIDHeaders: Array(headers), mailboxIDs: [mailbox.id])
             let inTrash = try store.messages(messageIDHeaders: Array(headers), mailboxIDs: [session.trash.id])
             let twice = Dictionary(grouping: here, by: { $0.messageIDHeader ?? "" }).values.filter { $0.count > 1 }.count
-            print("probe: ghosts \(label): \(here.count) rows in the probe mailbox (\(twice) Message-IDs twice), \(inTrash.count) in Trash")
+            TrashProbeTests.log("probe: ghosts \(label): \(here.count) rows in the probe mailbox (\(twice) Message-IDs twice), \(inTrash.count) in Trash")
         }
 
         // To Trash and back, one message at a time by Message-ID, as the server does.
@@ -423,6 +449,18 @@ struct TrashProbeTests {
         await session.empty(mailbox)
     }
 
+    /// Fills `MCP Probe big` with APPLE_MAIL_MCP_PROBE_BIG copies (more than the server's `headerLookupLimit`) and
+    /// leaves them, so the server's own tools can be run on a big mailbox, e.g. `apple-mail-mcp call trash_messages`
+    /// on some of its ids. The next probe run empties it into Trash like the other probe mailboxes.
+    @Test(.enabled(if: enabled && environment["APPLE_MAIL_MCP_PROBE_BIG"] != nil)) func fillBigMailbox() async throws {
+        Self.log("probe: ---- \(#function), logging to \(Self.logURL.path)")
+        let count = try #require(Int(Self.environment["APPLE_MAIL_MCP_PROBE_BIG"] ?? ""), "APPLE_MAIL_MCP_PROBE_BIG must be a number")
+        let session = try Session()
+        let mailbox = try await session.mailbox("big")
+        try await session.fill(mailbox, with: try session.take(count))
+        Self.log("probe: big: \(try session.store.liveCount(mailboxID: mailbox.id)) copies in \(mailbox.path) (id \(mailbox.id))")
+    }
+
     /// Waits until Mail answers a cheap request again: after a burst of removals it can block for minutes.
     static func waitForMail(timeout: TimeInterval = 300) throws {
         let mail = MailEventSender(timeout: 20)
@@ -431,10 +469,10 @@ struct TrashProbeTests {
             do {
                 _ = try mail.get(MailSpec.property("pnam", of: MailSpec.every("mact", of: nil)))
                 let waited = Date().timeIntervalSince(started)
-                if waited > 2 { print("probe: Mail answered again after \(Int(waited)) s") }
+                if waited > 2 { TrashProbeTests.log("probe: Mail answered again after \(Int(waited)) s") }
                 return
             } catch let error as AppleEventError where error.number == -1712 && Date().timeIntervalSince(started) < timeout {
-                print("probe: waiting for Mail to answer…")
+                TrashProbeTests.log("probe: waiting for Mail to answer…")
             }
         }
     }

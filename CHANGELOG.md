@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.8] - 2026-10-22
+
 ### Fixed
 
 - **Moves, trashes and flags in big mailboxes were slow enough to fail.** Since 0.6.1 each message was found with

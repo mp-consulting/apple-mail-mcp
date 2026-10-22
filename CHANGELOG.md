@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.7] - 2026-10-22
+
 ### Changed
 
 - When another account on the Mac updates Apple Mail MCP, the running copy offers to relaunch into the new
@@ -437,7 +439,8 @@ First release.
   and a reply or forward waiting for approval links to the original.
 - Skills in the Claude tab are listed by their Claude Code slash command (`/mail-triage`…); click to copy.
 
-[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.6...HEAD
+[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.7...HEAD
+[0.6.7]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.6...v0.6.7
 [0.6.6]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.3...v0.6.4

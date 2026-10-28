@@ -5,90 +5,133 @@ import SwiftUI
 struct RemoteSection: View {
     @Bindable var model: AgentModel
     @State private var passcode = ""
-    @State private var copied = false
+    @State private var copied: String?
 
     private var remote: RemoteHost { model.remote }
 
     var body: some View {
         Section {
-            Toggle("Let claude.ai and the Claude apps connect", isOn: $model.settings.remoteAccess)
-            TextField("Public address", text: $model.settings.remoteAddress, prompt: Text(verbatim: "https://mcp.example.com/me/mail"))
-            TextField("Port", value: $model.settings.remotePort, format: .number.grouping(.never))
-            Picker("Listen on", selection: $model.settings.remoteListen) {
-                Text("Every network (tunnel on another machine)").tag("")
-                Text("This Mac only (tunnel on this Mac)").tag("127.0.0.1")
-            }
-            LabeledContent("Status") { statusText }
-            if let address = RemoteServer.Address(model.settings.remoteAddress) {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text("Connector URL")
-                        Spacer()
-                        Button(copied ? "Copied" : "Copy") {
-                            model.copy(address.resource)
-                            copied = true
-                        }
-                        .controlSize(.small)
+            Toggle(isOn: $model.settings.remoteAccess) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Let claude.ai and the Claude apps connect")
+                    if model.settings.remoteAccess { statusLine } else {
+                        Text("Use Apple Mail from Claude on the web and your phone, through a tunnel to this Mac.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
-                    Text(verbatim: address.resource).font(.callout.monospaced()).textSelection(.enabled).foregroundStyle(.secondary)
                 }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Tunnel route")
-                    Text(verbatim: "Hostname \(address.host), path \(Self.routePath(address))")
-                        .font(.caption.monospaced()).textSelection(.enabled).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            HStack {
-                SecureField(remote.hasPasscode ? "New passcode" : "Passcode (8 characters or more)", text: $passcode)
-                Button(remote.hasPasscode ? "Change" : "Set") {
-                    remote.setPasscode(passcode)
-                    passcode = ""
-                }
-                .disabled(passcode.count < 8)
-                if remote.hasPasscode {
-                    Button("Remove") { remote.setPasscode(nil) }
-                }
-            }
-            if let message = remote.message {
-                Text(message).font(.caption).foregroundStyle(.secondary)
             }
         } header: {
             Text("Remote access")
-        } footer: {
-            Text("""
-                In claude.ai, add a custom connector with the connector URL. Connecting asks for the passcode, or for Allow here. \
-                Sending and big changes still ask here, as for Claude on this Mac. Publish the port with a tunnel (cloudflared) \
-                whose route also carries the discovery documents, as shown.
-                """)
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
-        Section("Connected apps") {
-            if remote.apps.isEmpty {
-                Text("None yet.").foregroundStyle(.secondary)
+        if model.settings.remoteAccess {
+            Section {
+                TextField("Public address", text: $model.settings.remoteAddress, prompt: Text(verbatim: "https://mcp.example.com/me/mail"))
+                TextField("Port", value: $model.settings.remotePort, format: .number.grouping(.never))
+                Picker("Listen on", selection: $model.settings.remoteListen) {
+                    Text("Every network (tunnel on another machine)").tag("")
+                    Text("This Mac only (tunnel on this Mac)").tag("127.0.0.1")
+                }
+            } header: {
+                Text("Connection")
             }
-            ForEach(remote.apps) { app in
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(app.name + (app.readOnly ? " · read only" : ""))
-                        Text(Self.detail(app)).font(.caption).foregroundStyle(.secondary)
+            if let address = RemoteServer.Address(model.settings.remoteAddress) {
+                Section {
+                    copyRow("Connector URL", value: address.resource, font: .callout.monospaced())
+                    copyRow("Tunnel path", value: Self.routePath(address), font: .caption.monospaced())
+                } header: {
+                    Text("Connect from claude.ai")
+                } footer: {
+                    Text("In claude.ai: Settings › Connectors › Add custom connector, with the connector URL. In the tunnel, route \(address.host) with the tunnel path to this Mac's port.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Section {
+                LabeledContent("Passcode") {
+                    if remote.hasPasscode {
+                        Label("Set", systemImage: "checkmark.circle.fill").foregroundStyle(.green).labelStyle(.titleAndIcon)
+                    } else {
+                        Text("Not set").foregroundStyle(.secondary)
                     }
-                    Spacer()
-                    Button("Disconnect") { remote.disconnect(app) }
+                }
+                HStack {
+                    SecureField(remote.hasPasscode ? "New passcode" : "8 characters or more", text: $passcode)
+                        .onSubmit(savePasscode)
+                    Button(remote.hasPasscode ? "Change" : "Set", action: savePasscode).disabled(passcode.count < 8)
+                    if remote.hasPasscode {
+                        Button("Remove", role: .destructive) { remote.setPasscode(nil) }
+                    }
+                }
+                if let message = remote.message {
+                    Text(message).font(.caption).foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Approval")
+            } footer: {
+                Text("Connecting asks for the passcode, or for Allow here. Sending and big changes still ask here, as for Claude on this Mac.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            Section("Connected apps") {
+                if remote.apps.isEmpty {
+                    Text("None yet. Apps you approve show here.").foregroundStyle(.secondary)
+                }
+                ForEach(remote.apps) { app in
+                    HStack {
+                        Image(systemName: app.readOnly ? "eye" : "square.and.pencil").foregroundStyle(.secondary).frame(width: 18)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(app.name + (app.readOnly ? " · read only" : ""))
+                            Text(Self.detail(app)).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Disconnect") { remote.disconnect(app) }
+                    }
                 }
             }
         }
     }
 
-    @ViewBuilder
-    private var statusText: some View {
-        switch remote.status {
-        case .off: Text("Off").foregroundStyle(.secondary)
-        case .needsAddress: Text("Enter the public address").foregroundStyle(.orange)
-        case .starting: Text("Starting…").foregroundStyle(.secondary)
-        case .running: Text("Listening on port \(model.settings.remotePort.formatted(.number.grouping(.never)))").foregroundStyle(.green)
-        case .failed(let message): Text(message).foregroundStyle(.red).lineLimit(3)
+    private func savePasscode() {
+        guard passcode.count >= 8 else { return }
+        remote.setPasscode(passcode)
+        passcode = ""
+    }
+
+    /// A value to paste elsewhere, on its own line under its label, with a Copy button that says it worked.
+    private func copyRow(_ title: String, value: String, font: Font) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(title)
+                Spacer()
+                Button(copied == title ? "Copied" : "Copy") {
+                    model.copy(value)
+                    copied = title
+                    Task {
+                        try? await Task.sleep(nanoseconds: 1_500_000_000)
+                        if copied == title { copied = nil }
+                    }
+                }
+                .controlSize(.small)
+            }
+            Text(verbatim: value).font(font).foregroundStyle(.secondary).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    /// The server's state, next to the switch it follows.
+    private var statusLine: some View {
+        let (color, text): (Color, String) = switch remote.status {
+        case .off: (.secondary, "Off")
+        case .needsAddress: (.orange, "Enter the public address below")
+        case .starting: (.secondary, "Starting…")
+        case .running: (.green, "Listening on port \(model.settings.remotePort.formatted(.number.grouping(.never))) · \(Self.appsText(remote.apps.count))")
+        case .failed(let message): (.red, message)
+        }
+        return HStack(alignment: .firstTextBaseline, spacing: 5) {
+            Circle().fill(color).frame(width: 7, height: 7)
+            Text(text).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+        }
+    }
+
+    static func appsText(_ count: Int) -> String {
+        count == 0 ? "no app connected" : count == 1 ? "1 app connected" : "\(count) apps connected"
     }
 
     static func detail(_ app: RemoteHost.App) -> String {
@@ -130,8 +173,5 @@ struct RemoteRow: View {
         }
     }
 
-    private var appsText: String {
-        let count = model.remote.apps.count
-        return count == 0 ? "no app connected" : count == 1 ? "1 app connected" : "\(count) apps connected"
-    }
+    private var appsText: String { RemoteSection.appsText(model.remote.apps.count) }
 }

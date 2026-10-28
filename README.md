@@ -122,7 +122,7 @@ app serves MCP over HTTP with OAuth; a tunnel (such as cloudflared) publishes it
 Turn it on in **More settings… › Remote access**:
 
 <p align="center">
-  <picture><source media="(prefers-color-scheme: light)" srcset="docs/images/settings-remote-light.png"><img src="docs/images/settings-remote.png" width="460" alt="Remote access settings: public address, port, status, connector URL, tunnel route, passcode, and two connected Claude apps with Disconnect"></picture>
+  <picture><source media="(prefers-color-scheme: light)" srcset="docs/images/settings-remote-light.png"><img src="docs/images/settings-remote.png" width="460" alt="Remote access settings: the switch with its status, the connection, the connector URL and tunnel path to copy, the passcode, and two connected Claude apps with Disconnect"></picture>
 </p>
 
 1. Enter the **public address** the tunnel publishes, such as `https://mcp.example.com/me/mail`. Several servers
@@ -135,7 +135,7 @@ Turn it on in **More settings… › Remote access**:
    **Connect** opens the sign-in page:
 
 <p align="center">
-  <picture><source media="(prefers-color-scheme: light)" srcset="docs/images/signin-light.png"><img src="docs/images/signin.png" width="360" alt="The sign-in page: Connect Claude to Apple Mail, a read-only option, the passcode field with Allow, Approve on my Mac, and Deny"></picture>
+  <picture><source media="(prefers-color-scheme: light)" srcset="docs/images/signin-light.png"><img src="docs/images/signin.png" width="360" alt="The sign-in page: Connect Claude to Apple Mail, a choice of full access or read only, the passcode field with Allow, Approve on my Mac, and Don't allow"></picture>
   <picture><source media="(prefers-color-scheme: light)" srcset="docs/images/approval-connect-light.png"><img src="docs/images/approval-connect.png" width="400" alt="The menu bar app asks: Claude wants to connect to Apple Mail, with Deny and Allow"></picture>
 </p>
 

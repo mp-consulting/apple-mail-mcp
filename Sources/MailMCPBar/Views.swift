@@ -612,7 +612,7 @@ struct ApprovalBlock: View {
             // In full: the subject is part of what is approved.
             Text(request.subject.isEmpty ? "(no subject)" : request.subject).font(.headline).fixedSize(horizontal: false, vertical: true)
             Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 2) {
-                listRow("To", request.to.map(isolatedLTR))
+                listRow(request.action == .connect ? "Returns to" : "To", request.to.map(isolatedLTR))
                 if let sendAt = request.sendAt {
                     GridRow {
                         Text("When").foregroundStyle(.secondary)

@@ -101,11 +101,11 @@ struct RemoteTests {
             let query = query(client: client, challenge: challenge)
             let (_, _, answer) = try await request(
                 "POST", "/me/mail/oauth/approve", json: ["query": query, "approve": true, "passcode": "correct horse", "readOnly": readOnly])
-            let code = try #require(code(in: object(answer)["redirect"] as? String ?? ""))
+            let issued = try #require(self.code(in: object(answer)["redirect"] as? String ?? ""))
             let (status, _, tokens) = try await request(
                 "POST", "/me/mail/oauth/token",
                 form: [
-                    "grant_type": "authorization_code", "code": code, "client_id": client, "code_verifier": verifier,
+                    "grant_type": "authorization_code", "code": issued, "client_id": client, "code_verifier": verifier,
                     "redirect_uri": "https://claude.ai/api/mcp/auth_callback", "resource": "https://mcp.example.com/me/mail",
                 ])
             #expect(status == 200)
@@ -250,16 +250,16 @@ struct RemoteTests {
         let verifier = String(repeating: "w", count: 60)
         let query = remote.query(client: client, challenge: RemoteAccess.challenge(for: verifier))
         let (_, _, answer) = try await remote.request("POST", "/me/mail/oauth/approve", json: ["query": query, "approve": true, "passcode": "correct horse"])
-        let code = try #require(remote.code(in: remote.object(answer)["redirect"] as! String))
+        let issued = try #require(remote.code(in: remote.object(answer)["redirect"] as! String))
         let wrong = try await remote.request(
             "POST", "/me/mail/oauth/token",
-            form: ["grant_type": "authorization_code", "code": code, "client_id": client, "code_verifier": String(repeating: "x", count: 60), "redirect_uri": "https://claude.ai/api/mcp/auth_callback"])
+            form: ["grant_type": "authorization_code", "code": issued, "client_id": client, "code_verifier": String(repeating: "x", count: 60), "redirect_uri": "https://claude.ai/api/mcp/auth_callback"])
         #expect(wrong.status == 400)
         #expect(remote.object(wrong.body)["error"] as? String == "invalid_grant")
         // The code was spent by the failed try.
         let again = try await remote.request(
             "POST", "/me/mail/oauth/token",
-            form: ["grant_type": "authorization_code", "code": code, "client_id": client, "code_verifier": verifier, "redirect_uri": "https://claude.ai/api/mcp/auth_callback"])
+            form: ["grant_type": "authorization_code", "code": issued, "client_id": client, "code_verifier": verifier, "redirect_uri": "https://claude.ai/api/mcp/auth_callback"])
         #expect(again.status == 400)
     }
 

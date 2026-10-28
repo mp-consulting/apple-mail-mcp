@@ -68,12 +68,18 @@ extension AgentModel {
         }
     }
 
-    /// A dot on the Claude tab: a client to connect or restart, or skills not added yet.
+    /// claude.ai has connected through the remote server: the Claude apps on the same account reach Mail that way.
+    var usesClaudeAI: Bool { settings.remoteAccess && !remote.apps.isEmpty }
+
+    /// A dot on the Claude tab: a client to connect or restart, or skills not added yet. With claude.ai connected,
+    /// the local setups are optional and ask for nothing.
     var claudeNeedsAction: Bool {
+        if case .failed = remote.status, settings.remoteAccess { return true }
         let code = clientStatus[.claudeCode] ?? .notInstalled
         let app = clientStatus[.claudeDesktop] ?? .notInstalled
-        let codeTodo = code == .notInstalled || { if case .otherCommand = code { true } else { false } }()
-        let appTodo = app == .notInstalled || { if case .otherCommand = app { true } else { false } }() || claudeAppNeedsRestart
+        let local = !usesClaudeAI
+        let codeTodo = local && (code == .notInstalled || { if case .otherCommand = code { true } else { false } }())
+        let appTodo = (local && (app == .notInstalled || { if case .otherCommand = app { true } else { false } }())) || claudeAppNeedsRestart
         return codeTodo || appTodo || (code == .installed && installedSkillCount == 0)
     }
 
@@ -151,7 +157,7 @@ extension AgentModel {
             let skills = installedSkillCount
             return skills == 0 ? "Server connected · no skills yet" : "Server connected · \(skills) skill\(skills == 1 ? "" : "s")"
         case .otherCommand: return "Uses another mail server; connect to switch"
-        case .notInstalled: return "Adds the server and the skills"
+        case .notInstalled: return usesClaudeAI ? "Not needed: uses claude.ai" : "Adds the server and the skills"
         case .clientMissing: return "Claude Code isn't installed"
         }
     }
@@ -161,7 +167,9 @@ extension AgentModel {
         case .installed:
             return claudeAppNeedsRestart ? "Added. Restart Claude to load it." : "Server connected · skills: switch below to Claude app"
         case .otherCommand: return "Uses another mail server; connect to switch"
-        case .notInstalled: return "Adds the server; Claude needs a restart"
+        case .notInstalled:
+            if claudeAppNeedsRestart { return "Removed. Restart Claude to unload the local server." }
+            return usesClaudeAI ? "Not needed: uses claude.ai" : "Adds the server; Claude needs a restart"
         case .clientMissing: return "The Claude app isn't installed"
         }
     }

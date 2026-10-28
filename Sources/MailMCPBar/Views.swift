@@ -416,6 +416,12 @@ struct ClaudeRows: View {
     @Bindable var model: AgentModel
 
     var body: some View {
+        if model.settings.remoteAccess || !model.remote.apps.isEmpty {
+            RemoteClaudeRow(model: model)
+        }
+        // With claude.ai connected, the Claude apps signed in to the same account have Mail already: a local setup
+        // is an option, not a step left to do.
+        let remote = model.usesClaudeAI
         let code = model.clientStatus[.claudeCode] ?? .notInstalled
         Row(systemImage: "terminal", title: "Claude Code", detail: model.claudeCodeDetail) {
             switch code {
@@ -428,7 +434,11 @@ struct ClaudeRows: View {
             case .clientMissing:
                 Text("Not installed").font(.caption).foregroundStyle(.tertiary)
             case .notInstalled, .otherCommand:
-                Button("Connect") { model.connectClaudeCode() }.glassButton(prominent: true).controlSize(.small)
+                if remote {
+                    Button("Add locally") { model.connectClaudeCode() }.buttonStyle(.borderless).controlSize(.small).foregroundStyle(.secondary)
+                } else {
+                    Button("Connect") { model.connectClaudeCode() }.glassButton(prominent: true).controlSize(.small)
+                }
             }
         }
         let app = model.clientStatus[.claudeDesktop] ?? .notInstalled
@@ -442,9 +452,63 @@ struct ClaudeRows: View {
                 }
             case .clientMissing:
                 Text("Not installed").font(.caption).foregroundStyle(.tertiary)
+            case .notInstalled where model.claudeAppNeedsRestart, .otherCommand where model.claudeAppNeedsRestart:
+                // Removed while the app runs: it keeps the server until it restarts.
+                Button("Restart Claude") { model.restartClaudeApp() }.glassButton(prominent: true).controlSize(.small)
             case .notInstalled, .otherCommand:
-                Button("Connect") { model.install(in: .claudeDesktop) }.glassButton(prominent: true).controlSize(.small)
+                if remote {
+                    Button("Add locally") { model.install(in: .claudeDesktop) }.buttonStyle(.borderless).controlSize(.small).foregroundStyle(.secondary)
+                } else {
+                    Button("Connect") { model.install(in: .claudeDesktop) }.glassButton(prominent: true).controlSize(.small)
+                }
             }
+        }
+    }
+}
+
+/// claude.ai and the Claude apps, through the remote server: connected (with how many apps and when one last came),
+/// ready for its first connection, or what stops it.
+struct RemoteClaudeRow: View {
+    @Bindable var model: AgentModel
+    @State private var copied = false
+
+    var body: some View {
+        let remote = model.remote
+        let address = RemoteServer.Address(model.settings.remoteAddress)
+        Row(systemImage: "globe", iconColor: model.usesClaudeAI ? .accentColor : .secondary, title: "claude.ai", detail: detail) {
+            if case .failed = remote.status {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange).accessibilityLabel("Problem")
+            } else if model.usesClaudeAI {
+                Checkmark()
+            } else if case .running = remote.status, let address {
+                Button(copied ? "Copied" : "Copy URL") {
+                    model.copy(address.resource)
+                    copied = true
+                    Task {
+                        try? await Task.sleep(nanoseconds: 1_500_000_000)
+                        copied = false
+                    }
+                }
+                .glassButton(prominent: true).controlSize(.small)
+                .help("The connector URL, for claude.ai › Settings › Connectors › Add custom connector")
+            } else {
+                SettingsLink { Text("Set up…") }.buttonStyle(.link).controlSize(.small)
+            }
+        }
+    }
+
+    private var detail: String {
+        let remote = model.remote
+        switch remote.status {
+        case .off: return "Remote access is off"
+        case .needsAddress: return "Enter the public address in More settings…"
+        case .starting: return "Starting…"
+        case .failed(let message): return message
+        case .running:
+            guard !remote.apps.isEmpty else { return "Ready · add the connector URL in claude.ai" }
+            let count = remote.apps.count == 1 ? "1 app" : "\(remote.apps.count) apps"
+            guard let last = remote.apps.compactMap(\.lastUsed).max() else { return "Connected · \(count)" }
+            return "Connected · \(count) · used \(last.formatted(.relative(presentation: .named)))"
         }
     }
 }

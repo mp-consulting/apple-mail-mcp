@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-28
+
 ### Added
 
 - **Remote access for claude.ai and the Claude apps.** `apple-mail-mcp remote` serves MCP over HTTP (Streamable
@@ -15,6 +17,13 @@ All notable changes to this project are documented here. The format follows
   Allow in the menu bar app; each may be read-only, and sending and big changes still ask in the menu bar app.
 - Settings › Remote access: turn it on, the address, port and interface, the passcode, the connector URL and the
   tunnel's path pattern, and the connected apps with Disconnect. The menu bar app runs and restarts the server.
+
+### Changed
+
+- The Claude tab shows claude.ai: connected (how many apps, when one was last used), ready with its URL to copy, or
+  off. With claude.ai connected, Claude Code and the Claude app read "Not needed" and offer Add locally instead of
+  Connect, and the tab no longer asks for them; a local server removed while the Claude app runs offers Restart
+  Claude.
 
 ## [0.6.8] - 2026-10-22
 

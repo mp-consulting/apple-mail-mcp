@@ -53,6 +53,8 @@ final class AgentModel {
 
     let approvals = ApprovalCenter()
     let log = ActivityLog()
+    /// The remote server for claude.ai, while Settings › Remote access is on.
+    let remote = RemoteHost()
     private var store: MailStore?
     /// Read by the status checks off the main thread; kept open between runs.
     @ObservationIgnored private var statusIndex: BodyIndex?
@@ -115,6 +117,7 @@ final class AgentModel {
             while !Task.isCancelled {
                 self?.approvals.beat()
                 self?.refreshApprovals()
+                if let self { self.remote.apply(self.settings, serverPath: self.serverPath) }
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
             }
         })
@@ -205,6 +208,7 @@ final class AgentModel {
         case .change: content.title = "Change these messages?"
         case .unsubscribe: content.title = "Unsubscribe?"
         case .rule: content.title = "Allow this Mail rule?"
+        case .connect: content.title = "Connect an app to your mail?"
         }
         content.subtitle = request.subject.isEmpty ? "(no subject)" : request.subject
         let target = request.to.isEmpty ? "" : "To " + request.to.joined(separator: ", ")
@@ -491,6 +495,7 @@ final class AgentModel {
         do {
             try settings.save()
             clearError(startingWith: "Could not save settings")
+            remote.apply(settings, serverPath: serverPath)
         } catch {
             lastError = "Could not save settings: \(error.localizedDescription)"
         }

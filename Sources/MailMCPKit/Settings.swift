@@ -70,6 +70,15 @@ public struct Settings: Codable, Sendable, Equatable {
     public var callBudget: Double = 90
     /// Put back at once the messages Mail moved or trashed although nobody asked it to.
     public var restoreStrays = true
+    /// Serve MCP over HTTP for claude.ai and the Claude apps (through a tunnel such as cloudflared), with OAuth.
+    public var remoteAccess = false
+    /// The address clients use, as published by the tunnel: `https://mcp.example.com/me/mail`. Its path is where the
+    /// server answers, and the metadata's issuer and endpoints are built from it.
+    public var remoteAddress = ""
+    /// The local port the tunnel forwards to.
+    public var remotePort = 8590
+    /// The interface to listen on: empty for every one (a tunnel on another machine), `127.0.0.1` for one on this Mac.
+    public var remoteListen = ""
 
     public init() {}
 
@@ -106,6 +115,10 @@ public struct Settings: Codable, Sendable, Equatable {
         approveChangesAbove = field(.approveChangesAbove, defaults.approveChangesAbove)
         callBudget = field(.callBudget, defaults.callBudget)
         restoreStrays = field(.restoreStrays, defaults.restoreStrays)
+        remoteAccess = field(.remoteAccess, defaults.remoteAccess)
+        remoteAddress = field(.remoteAddress, defaults.remoteAddress)
+        remotePort = field(.remotePort, defaults.remotePort)
+        remoteListen = field(.remoteListen, defaults.remoteListen)
     }
 
     /// The defaults when there is no file; `failClosed` when the file exists but is not valid settings JSON.

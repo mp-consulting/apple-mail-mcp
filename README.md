@@ -24,7 +24,7 @@ file attachments, and it can only send an email after you click **Send**.
 <p align="center">
   <picture><source media="(prefers-color-scheme: light)" srcset="docs/images/tab-mail-light.png"><img src="docs/images/tab-mail.png" width="300" alt="Mail tab: three emails waiting for approval, one shown in full, recent activity"></picture>
   <picture><source media="(prefers-color-scheme: light)" srcset="docs/images/tab-claude-light.png"><img src="docs/images/tab-claude.png" width="300" alt="Claude tab: Claude Code and the Claude app connected, the eight skills by slash command"></picture>
-  <picture><source media="(prefers-color-scheme: light)" srcset="docs/images/tab-settings-light.png"><img src="docs/images/tab-settings.png" width="300" alt="Settings tab: send policy, changes, search index and updates"></picture>
+  <picture><source media="(prefers-color-scheme: light)" srcset="docs/images/tab-settings-light.png"><img src="docs/images/tab-settings.png" width="300" alt="Settings tab: send policy, changes, remote access for claude.ai, search index and updates"></picture>
 </p>
 
 ## Any email account, ready for AI
@@ -114,6 +114,35 @@ macOS asks for two permissions, for the **app that starts the server** (Claude, 
 Give Full Disk Access to Apple Mail MCP too, for the panel's counts and the search index. If something is
 missing, every tool answers with the exact app to allow, and the panel shows it under **Needs attention**.
 Run `apple-mail-mcp doctor` for a full check.
+
+## claude.ai and your phone
+
+The Claude apps on iPhone, Android and the web reach Mail on your Mac as a **custom connector**. The menu bar
+app serves MCP over HTTP with OAuth; a tunnel (such as cloudflared) publishes it at an HTTPS address of yours.
+Turn it on in **More settings… › Remote access**:
+
+<p align="center">
+  <picture><source media="(prefers-color-scheme: light)" srcset="docs/images/settings-remote-light.png"><img src="docs/images/settings-remote.png" width="460" alt="Remote access settings: public address, port, status, connector URL, tunnel route, passcode, and two connected Claude apps with Disconnect"></picture>
+</p>
+
+1. Enter the **public address** the tunnel publishes, such as `https://mcp.example.com/me/mail`. Several servers
+   can share one host name, each on its own path.
+2. Route that path to the port (8590 by default) in the tunnel. The route must also carry the discovery documents,
+   which OAuth puts at the root with the path appended; the settings show the exact path pattern, for example
+   `^/(\.well-known/[^/]+/)?me/mail(/.*)?$`.
+3. Set a **passcode** to approve connections from anywhere, or approve them in the menu bar app.
+4. In claude.ai, **Settings › Connectors › Add custom connector** with the connector URL (no client ID or secret).
+   **Connect** opens the sign-in page:
+
+<p align="center">
+  <picture><source media="(prefers-color-scheme: light)" srcset="docs/images/signin-light.png"><img src="docs/images/signin.png" width="360" alt="The sign-in page: Connect Claude to Apple Mail, a read-only option, the passcode field with Allow, Approve on my Mac, and Deny"></picture>
+  <picture><source media="(prefers-color-scheme: light)" srcset="docs/images/approval-connect-light.png"><img src="docs/images/approval-connect.png" width="400" alt="The menu bar app asks: Claude wants to connect to Apple Mail, with Deny and Allow"></picture>
+</p>
+
+A connection may do what Claude on the Mac may do, or only read; sending and big changes still wait for your OK
+in the menu bar app. **Connected apps** lists each one, and **Disconnect** ends it at its next request. Tokens last
+an hour and refresh for 90 days of use; the server keeps only their hashes. Details, the tunnel set-up and the
+security model: [docs/remote.md](docs/remote.md).
 
 ## What Claude can do
 
@@ -248,6 +277,7 @@ synthetic benchmark on every push.
 
 ```text
 apple-mail-mcp [--read-only] [--write-dir DIR] [--attach-dir DIR]   serve MCP over stdio
+apple-mail-mcp remote [--port N] [--listen ADDR] [--address URL]    serve MCP over HTTP with OAuth (claude.ai)
 apple-mail-mcp doctor                                               check permissions, data, index
 apple-mail-mcp index [--rebuild] [--prune]                          build or update the body index
 apple-mail-mcp install | uninstall [claude-code | claude-desktop]   register with Claude
@@ -261,6 +291,7 @@ every server (changes apply immediately).
 ## How it works
 
 ```text
+claude.ai ──HTTPS──▶ tunnel ──HTTP──▶ apple-mail-mcp remote (OAuth, one session per connection) ─┐
 Claude ──MCP (stdio)──▶ apple-mail-mcp ─┬─ reads ──▶ ~/Library/Mail/V10/MailData/Envelope Index (SQLite, read-only)
                                         │            .emlx files · local hashed full-text index (FTS5)
                                         └─ writes ─▶ Apple Events ─▶ Mail.app ─▶ your accounts

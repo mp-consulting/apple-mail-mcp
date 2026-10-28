@@ -9,6 +9,10 @@ let usage = """
     USAGE
       apple-mail-mcp [--read-only] [--write-dir DIR]... [--attach-dir DIR]...
           Serve MCP over stdio (what MCP clients run).
+      apple-mail-mcp remote [--port N] [--listen ADDRESS] [--address URL]
+          Serve MCP over HTTP with OAuth, for claude.ai through a tunnel (the menu bar app runs this when
+          Settings › Remote access is on). URL is the address the tunnel publishes, e.g.
+          https://mcp.example.com/me/mail; defaults come from the settings.
       apple-mail-mcp index [--rebuild] [--prune]
           Build or update the full-text body index.
       apple-mail-mcp doctor
@@ -113,6 +117,49 @@ case nil, "serve":
         activity: ProcessInfo.processInfo.environment["APPLE_MAIL_MCP_NO_ACTIVITY"] == nil ? ActivityLog() : nil,
         readOnly: readOnly)
     try await MailMCPServer.runStdio(toolbox: toolbox)
+
+case "remote":
+    // Started by the menu bar app: ends with it.
+    if ProcessInfo.processInfo.environment["APPLE_MAIL_MCP_REMOTE_CHILD"] != nil { watchParent() }
+    var current = settings.current
+    var options = rest[...]
+    while let option = options.popFirst() {
+        guard let value = options.popFirst() else { fail("\(option) needs a value") }
+        switch option {
+        case "--port": current.remotePort = Int(value) ?? 0
+        case "--listen": current.remoteListen = value
+        case "--address": current.remoteAddress = value
+        default: fail("unknown option \(option)")
+        }
+    }
+    guard let address = RemoteServer.Address(current.remoteAddress) else {
+        fail("Set the public address first (Settings › Remote access, or --address https://mcp.example.com/me/mail).")
+    }
+    guard let port = UInt16(exactly: current.remotePort), port > 0 else { fail("--port is 1 to 65535") }
+    // One store for every session: the first that needs it opens it.
+    let storeBox = LazyStore { try MailStore.open() }
+    let activity = ProcessInfo.processInfo.environment["APPLE_MAIL_MCP_NO_ACTIVITY"] == nil
+    let server = RemoteServer(address: address, access: RemoteAccess(), approvals: ApprovalCenter(), settings: settings) { sessionReadOnly in
+        MailToolbox(
+            storeProvider: { do { return try storeBox.get() } catch { throw LaunchContext.explain(error) } },
+            automation: MailAutomation(), settings: settings, activity: activity ? ActivityLog() : nil, readOnly: isReadOnly || sessionReadOnly)
+    }
+    let listener = try HTTPListener(host: current.remoteListen, port: port) { await server.handle($0) }
+    do {
+        try await listener.start()
+    } catch {
+        fail("apple-mail-mcp: cannot listen on port \(port): \(error)")
+    }
+    FileHandle.standardError.write(Data("apple-mail-mcp \(MailMCPVersion.build): serving \(address.resource) on port \(port)\n".utf8))
+    // Runs until stopped (the menu bar app ends it when remote access is turned off).
+    signal(SIGTERM, SIG_IGN)
+    let termination = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+    termination.setEventHandler {
+        listener.stop()
+        exit(0)
+    }
+    termination.resume()
+    while true { try await Task.sleep(nanoseconds: 3_600_000_000_000) }
 
 case "index":
     let store = openStore()

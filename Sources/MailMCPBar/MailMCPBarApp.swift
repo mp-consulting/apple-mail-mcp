@@ -122,6 +122,12 @@ enum Snapshots {
             save(MenuContent(model: model, fixedTab: .claude), "tab-claude")
             save(MenuContent(model: model, fixedTab: .settings), "tab-settings")
             save(ApprovalWindow(model: model), "approval")
+            if model.settings.remoteAccess {
+                save(Form { RemoteSection(model: model) }.formStyle(.grouped).frame(width: 540), "settings-remote")
+                if let connect = model.pending.first(where: { $0.action == .connect }) {
+                    save(ApprovalBlock(request: connect) { _ in }.padding(16).frame(width: 460), "approval-connect")
+                }
+            }
         }
     }
 }

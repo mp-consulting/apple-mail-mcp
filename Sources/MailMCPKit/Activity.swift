@@ -170,6 +170,9 @@ public struct ApprovalRequest: Codable, Sendable, Hashable, Identifiable {
         /// Create or turn on a Mail rule that sends mail or deletes it, or matches every message; `to` holds the
         /// addresses it forwards, redirects or replies to, `bodyPreview` its conditions and actions.
         case rule
+        /// Connect a remote MCP client (claude.ai) over OAuth; `subject` names the app, `to` where approving sends
+        /// the browser back, `bodyPreview` what it may do.
+        case connect
     }
 
     public var id: UUID

@@ -9,9 +9,9 @@ changes go through Mail with Apple Events.
 |---|---|
 | `MailStore` | Read side: SQLite wrapper, Envelope Index queries, `.emlx` files, MIME, HTML→text, folding, the FTS5 body index |
 | `MailAutomation` | Write side: raw Apple Events to Mail (`AppleEvents.swift`), typed API (`MailAutomation.swift`), cross-process lock |
-| `MailMCPKit` | MCP tools (`Tools+*.swift`), settings, approvals, activity log, path guard, skills, client installer, updates |
-| `apple-mail-mcp` | The server and CLI (`serve`, `doctor`, `index`, `call`, `install`, `skills`) |
-| `MailMCPBar` | The menu bar app (SwiftUI): status, approvals, Claude setup, skills, settings, updater |
+| `MailMCPKit` | MCP tools (`Tools+*.swift`), settings, approvals, activity log, path guard, skills, client installer, updates; `Remote/`: the HTTP server for claude.ai (`HTTPListener` on Network.framework, `RemoteServer` routing under the public address's path and one MCP session per connection, `RemoteAccess` OAuth clients, grants and passcode in `remote-access.json`, `AuthorizePage`); docs/remote.md |
+| `apple-mail-mcp` | The server and CLI (`serve`, `remote`, `doctor`, `index`, `call`, `install`, `skills`) |
+| `MailMCPBar` | The menu bar app (SwiftUI): status, approvals, Claude setup, skills, settings, updater; `RemoteHost` runs `apple-mail-mcp remote` while remote access is on |
 | `MailFixtures` | Synthetic Mail stores for tests and benchmarks (same schema and file layout as Mail V10) |
 | `mail-bench` | Benchmarks: `store`, `synthetic`, `compare` (vs the other Apple Mail MCP servers; `Scripts/bench-servers.sh`), `demo` (screenshot data) |
 | `Skills/` | The Claude skills, one `SKILL.md` each; embedded into the binary |

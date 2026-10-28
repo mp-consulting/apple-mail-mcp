@@ -374,6 +374,7 @@ struct SettingsTab: View {
                     value: $model.settings.approveChangesAbove, in: 0...500, step: 5).fixedSize()
         }
         SettingRow("Notify me when mail waits for a reply") { Toggle("", isOn: $model.settings.notifyNeedsReply).labelsHidden() }
+        RemoteRow(model: model)
         SectionDivider()
         SectionHeader("Search and updates")
         SettingRow("Keep the search index up to date") { Toggle("", isOn: $model.settings.autoUpdateBodyIndex).labelsHidden() }
@@ -585,6 +586,7 @@ struct ApprovalBlock: View {
         case .change: ("CHANGE THESE MESSAGES?", "Go Ahead", "Don't")
         case .unsubscribe: ("UNSUBSCRIBE?", "Unsubscribe", "Don't")
         case .rule: ("ALLOW THIS MAIL RULE?", "Allow", "Don't")
+        case .connect: ("CONNECT TO YOUR MAIL?", "Allow", "Deny")
         }
     }
 
@@ -809,6 +811,7 @@ struct SettingsView: View {
                 }
                 Toggle("Open at login", isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) }))
             }
+            RemoteSection(model: model)
             Section("Updates") {
                 Toggle("Check for updates every day", isOn: $model.settings.checkForUpdates)
                     .disabled(!model.updater.isEnabled)

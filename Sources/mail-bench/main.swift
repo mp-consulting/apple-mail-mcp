@@ -697,6 +697,13 @@ case "demo":
     try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
     var settings = Settings()
     settings.sendPolicy = .confirm
+    if options.values["remote"] != nil {
+        // Remote access on, at a made-up address, on a port of this Mac only.
+        settings.remoteAccess = true
+        settings.remoteAddress = "https://mcp.example.com/sam/mail"
+        settings.remotePort = 18_590
+        settings.remoteListen = "127.0.0.1"
+    }
     try settings.save(to: support.appending(path: "settings.json"))
     let store = try MailStore(location: fixture.location)
     try BodyIndex(url: support.appending(path: "body-index.sqlite")).update(from: store)
@@ -737,6 +744,26 @@ case "demo":
             bodyPreview: "Hi Anna,\n\nThanks for the deck. The timeline works for us; I'd move the API migration to week 34 so it lands after the security review. I'll send the updated estimates by Friday.\n\nBest,\nSam",
             attachments: ["estimates-q3.xlsx"], status: .pending, decided: nil,
             originalLink: "message://%3Croadmap@northwind.test%3E"))
+    }
+    if options.values["remote"] != nil {
+        let access = RemoteAccess(url: support.appending(path: "remote-access.json"))
+        try access.setPasscode("demo-passcode")
+        for (name, readOnly, daysAgo) in [("Claude", false, 12.0), ("Claude", true, 3.0)] {
+            let now = Date().addingTimeInterval(-daysAgo * 86_400)
+            let client = try access.register(["client_name": name, "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"]], now: now)
+            let verifier = String(repeating: "d", count: 43)
+            let code = access.issueCode(
+                clientID: client.id, readOnly: readOnly, redirectURI: client.redirectURIs[0], redirectURIGiven: true,
+                challenge: RemoteAccess.challenge(for: verifier), now: now)
+            _ = try access.exchange(code: code, clientID: client.id, redirectURI: client.redirectURIs[0], verifier: verifier, now: now)
+        }
+        if options.values["approval"] != nil {
+            try approvals.submit(ApprovalRequest(
+                id: UUID(), created: Date().addingTimeInterval(-60), tool: "connect", client: "Claude", from: nil, to: ["claude.ai"], cc: [], bcc: [],
+                subject: "Claude wants to connect to Apple Mail",
+                bodyPreview: "It may read, organize and draft your mail. Sending and big changes still ask you here first.", attachments: [],
+                status: .pending, decided: nil, kind: .connect))
+        }
     }
     report = """
         Demo data in \(folder.path). Run the app with:

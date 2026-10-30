@@ -19,7 +19,7 @@ jobs:
     # macOS 26 and its Xcode: the menu bar app uses the Liquid Glass APIs and Swift 6.2.
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Use the newest Xcode on the runner
         # The image's default can lag behind; local builds use the current Xcode, so CI should too.
@@ -47,7 +47,7 @@ jobs:
     # The Dockerfile Glama builds to read the tools: the server must keep compiling on Linux (demo mailbox only).
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Build the image
         run: docker build -t apple-mail-mcp .

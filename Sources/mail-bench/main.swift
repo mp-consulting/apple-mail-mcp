@@ -3,7 +3,6 @@ import MCP
 import MailFixtures
 import MailMCPKit
 import MailStore
-import System
 
 // Benchmarks for apple-mail-mcp. Prints timings and counts only, never message content.
 //
@@ -72,11 +71,15 @@ func format(_ ms: Double) -> String {
 }
 
 func machineDescription() -> String {
+    #if os(macOS)
     var size = 0
     sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0)
     var buffer = [CChar](repeating: 0, count: max(size, 1))
     sysctlbyname("machdep.cpu.brand_string", &buffer, &size, nil, 0)
     let cpu = String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    #else
+    let cpu = "\(ProcessInfo.processInfo.activeProcessorCount) CPUs"
+    #endif
     let memory = ProcessInfo.processInfo.physicalMemory / 1_073_741_824
     let os = ProcessInfo.processInfo.operatingSystemVersionString
     var load = [Double](repeating: 0, count: 3)
@@ -745,6 +748,7 @@ case "demo":
             attachments: ["estimates-q3.xlsx"], status: .pending, decided: nil,
             originalLink: "message://%3Croadmap@northwind.test%3E"))
     }
+    #if os(macOS)
     if options.values["remote"] != nil {
         let access = RemoteAccess(url: support.appending(path: "remote-access.json"))
         try access.setPasscode("demo-passcode")
@@ -765,6 +769,7 @@ case "demo":
                 status: .pending, decided: nil, kind: .connect))
         }
     }
+    #endif
     report = """
         Demo data in \(folder.path). Run the app with:
         APPLE_MAIL_MCP_MAIL_ROOT='\(fixture.root.path)' APPLE_MAIL_MCP_ACCOUNTS_DB='\(fixture.accountsDatabase.path)' APPLE_MAIL_MCP_SUPPORT_DIR='\(support.path)'

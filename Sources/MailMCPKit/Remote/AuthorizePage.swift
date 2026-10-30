@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 
 /// The page a browser opens when a remote client connects: which app asks, where approving sends the browser, what it
@@ -216,3 +217,4 @@ enum AuthorizePage {
         return String(String(decoding: data, as: UTF8.self).dropFirst().dropLast()).replacingOccurrences(of: "</", with: "<\\/")
     }
 }
+#endif

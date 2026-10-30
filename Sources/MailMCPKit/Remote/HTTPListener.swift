@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Network
 
@@ -280,3 +281,4 @@ public final class HTTPListener: @unchecked Sendable {
         }
     }
 }
+#endif

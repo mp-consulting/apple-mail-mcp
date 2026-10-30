@@ -410,9 +410,23 @@ public enum MIME {
         case "iso-8859-1", "latin1", "latin-1": return .isoLatin1
         case "windows-1252", "cp1252": return .windowsCP1252
         default:
+            #if canImport(Darwin)
             let cf = CFStringConvertIANACharSetNameToEncoding(name as CFString)
             guard cf != kCFStringEncodingInvalidId else { return nil }
             return String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(cf))
+            #else
+            // No CoreFoundation charset table on Linux: the common ones Foundation decodes there.
+            switch name {
+            case "utf-16": return .utf16
+            case "iso-8859-2", "latin2": return .isoLatin2
+            case "windows-1250", "cp1250": return .windowsCP1250
+            case "windows-1251", "cp1251": return .windowsCP1251
+            case "shift_jis", "shift-jis", "sjis": return .shiftJIS
+            case "euc-jp": return .japaneseEUC
+            case "iso-2022-jp": return .iso2022JP
+            default: return nil
+            }
+            #endif
         }
     }
 

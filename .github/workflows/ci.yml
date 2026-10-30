@@ -42,3 +42,20 @@ jobs:
 
       - name: Benchmark (synthetic mailbox, no personal data)
         run: .build/arm64-apple-macosx/release/mail-bench synthetic --messages 20000 --runs 5 >> "$GITHUB_STEP_SUMMARY"
+
+  linux:
+    # The Dockerfile Glama builds to read the tools: the server must keep compiling on Linux (demo mailbox only).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Build the image
+        run: docker build -t apple-mail-mcp .
+
+      - name: The server lists its tools
+        run: |
+          printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}' \
+            '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+            | { cat; sleep 2; } | docker run --rm -i apple-mail-mcp | grep -q '"name":"search_messages"'

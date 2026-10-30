@@ -57,8 +57,12 @@ enum ToolCallFastPath {
         case is NSNull:
             return .null
         case let number as NSNumber:
+            #if canImport(Darwin)
             if CFGetTypeID(number) == CFBooleanGetTypeID() { return .bool(number.boolValue) }
             return CFNumberIsFloatType(number) ? .double(number.doubleValue) : .int(number.intValue)
+            #else
+            return nil  // no way to tell a Bool from a number here: the SDK decodes the call
+            #endif
         case let text as String:
             return text.hasPrefix("data:") ? nil : .string(text)
         case let list as [Any]:

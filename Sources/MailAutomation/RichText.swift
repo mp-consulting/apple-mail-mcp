@@ -1,4 +1,6 @@
+#if os(macOS)
 import AppKit
+#endif
 import Foundation
 
 /// HTML → RTF for Mail's `content`. Mail turns rich text into a proper multipart HTML email
@@ -10,6 +12,7 @@ public enum RichText {
         blockquote{margin:0 0 0 .8ex;border-left:2px solid #c0c0c0;padding-left:1ex;color:#555}</style>
         """
 
+    #if os(macOS)
     /// Converts on the main thread (AppKit's HTML importer requires it).
     @MainActor
     public static func rtf(fromHTML html: String) throws -> Data {
@@ -24,6 +27,7 @@ public enum RichText {
             from: NSRange(location: 0, length: attributed.length),
             documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf])
     }
+    #endif
 
     /// Escapes plain text for embedding in HTML, keeping line breaks.
     public static func escape(_ text: String) -> String {

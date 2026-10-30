@@ -1,7 +1,9 @@
 import Foundation
 import Logging
 import MCP
-import System
+#if canImport(Glibc)
+import Glibc
+#endif
 
 /// MCP over stdio without polling. The SDK's `StdioTransport` makes stdin non-blocking and sleeps 10 ms whenever
 /// nothing is waiting, so every request sat up to 10 ms before the server read it. Here a thread blocks in
@@ -43,7 +45,7 @@ public actor LineTransport: Transport {
                 if count < 0 {
                     if errno == EINTR { continue }
                     if errno == EAGAIN { Self.wait(for: input, events: Int16(POLLIN)); continue }
-                    continuation.finish(throwing: MCPError.transportError(Errno(rawValue: errno)))
+                    continuation.finish(throwing: MCPError.transportError(POSIXError.current))
                     return
                 }
                 if count == 0 { break }
@@ -87,11 +89,11 @@ public actor LineTransport: Transport {
         try message.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) in
             var offset = 0
             while offset < bytes.count {
-                let written = Darwin.write(output, bytes.baseAddress! + offset, bytes.count - offset)
+                let written = systemWrite(output, bytes.baseAddress! + offset, bytes.count - offset)
                 if written < 0 {
                     if errno == EINTR { continue }
                     if errno == EAGAIN { Self.wait(for: output, events: Int16(POLLOUT)); continue }
-                    throw MCPError.transportError(Errno(rawValue: errno))
+                    throw MCPError.transportError(POSIXError.current)
                 }
                 offset += written
             }
@@ -107,4 +109,15 @@ public actor LineTransport: Transport {
         var target = pollfd(fd: descriptor, events: events, revents: 0)
         _ = poll(&target, 1, -1)
     }
+}
+
+#if canImport(Glibc)
+private let systemWrite = Glibc.write
+#else
+private let systemWrite = Darwin.write
+#endif
+
+extension POSIXError {
+    /// The error `errno` holds now.
+    static var current: POSIXError { POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
 }

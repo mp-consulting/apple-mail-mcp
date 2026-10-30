@@ -161,7 +161,7 @@ public final class SettingsProvider: @unchecked Sendable {
         defer { lock.unlock() }
         // One stat(2) per look (this runs several times per tool call); the file is read again only when it changed.
         var info = stat()
-        let modified = stat(url.path, &info) == 0 ? info.st_mtimespec : nil
+        let modified = stat(url.path, &info) == 0 ? info.modification : nil
         if !loaded || modified?.tv_sec != cachedModification?.tv_sec || modified?.tv_nsec != cachedModification?.tv_nsec {
             // A file caught mid-write or broken by hand keeps the last good settings; with none yet, fail closed.
             var settings = Settings.read(from: url) ?? (loaded ? base : Settings.failClosed)

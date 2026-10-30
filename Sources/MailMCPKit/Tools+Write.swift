@@ -1,4 +1,6 @@
+#if os(macOS)
 import AppKit
+#endif
 import Foundation
 import MCP
 import MailAutomation
@@ -25,6 +27,7 @@ extension MailToolbox {
     /// Marks a saved attachment the way Mail does, so Gatekeeper checks it before it can run.
     /// Without this an emailed app or `.command` script saved here would open unchecked.
     static func quarantine(_ path: String) {
+        #if os(macOS)
         var url = URL(filePath: path)
         var values = URLResourceValues()
         values.quarantineProperties = [
@@ -32,6 +35,7 @@ extension MailToolbox {
             kLSQuarantineAgentNameKey as String: "Apple Mail MCP",
         ]
         try? url.setResourceValues(values)
+        #endif
     }
 
     /// A path in `directory` for `name` that does not overwrite anything (unless asked).

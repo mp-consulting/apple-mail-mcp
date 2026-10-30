@@ -118,6 +118,7 @@ case nil, "serve":
         readOnly: readOnly)
     try await MailMCPServer.runStdio(toolbox: toolbox)
 
+#if os(macOS)
 case "remote":
     // Started by the menu bar app: ends with it.
     if ProcessInfo.processInfo.environment["APPLE_MAIL_MCP_REMOTE_CHILD"] != nil { watchParent() }
@@ -160,6 +161,7 @@ case "remote":
     }
     termination.resume()
     while true { try await Task.sleep(nanoseconds: 3_600_000_000_000) }
+#endif
 
 case "index":
     let store = openStore()

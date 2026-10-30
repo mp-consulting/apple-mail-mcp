@@ -1,3 +1,4 @@
+#if os(macOS)
 import CommonCrypto
 import CryptoKit
 import Foundation
@@ -358,3 +359,4 @@ public final class RemoteAccess: @unchecked Sendable {
         return zip(a, b).reduce(UInt8(0)) { $0 | ($1.0 ^ $1.1) } == 0
     }
 }
+#endif

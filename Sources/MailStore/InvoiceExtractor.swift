@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(PDFKit)
 import PDFKit
+#endif
 
 /// Fields an invoice or receipt email usually carries, found in its text.
 public struct InvoiceFields: Sendable, Equatable {
@@ -351,6 +353,7 @@ extension MailStore {
 
     /// Text of the first pages of a PDF; nil for scans and unreadable files.
     static func pdfText(_ data: Data, maxPages: Int = 3) -> String? {
+        #if canImport(PDFKit)
         pdfLock.lock()
         defer { pdfLock.unlock() }
         guard let document = PDFDocument(data: data), !document.isLocked else { return nil }
@@ -359,6 +362,9 @@ extension MailStore {
             text += (document.page(at: index)?.string ?? "") + "\n"
         }
         return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : text
+        #else
+        return nil  // no PDFKit: the message text alone
+        #endif
     }
 }
 

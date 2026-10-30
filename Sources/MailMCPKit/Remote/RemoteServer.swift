@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import MCP
 import MailStore
@@ -505,3 +506,4 @@ public final class LazyStore: @unchecked Sendable {
         }
     }
 }
+#endif

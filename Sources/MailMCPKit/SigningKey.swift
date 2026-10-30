@@ -1,4 +1,6 @@
+#if canImport(CryptoKit)
 import CryptoKit
+#endif
 import Foundation
 import MailStore
 
@@ -6,11 +8,15 @@ import MailStore
 /// server of this bundle wrote it. Approvals and schedules are plain files that any process running as the
 /// user can edit; without the key, from the Keychain, it cannot produce a valid signature.
 public struct SigningKey: Sendable {
+    #if canImport(CryptoKit)
     let key: SymmetricKey
+    #endif
 
     public init(bytes: [UInt8]) {
         precondition(bytes.count == 32, "the signing key is 32 bytes")
+        #if canImport(CryptoKit)
         key = SymmetricKey(data: bytes)
+        #endif
     }
 
     public static let service = "apple-mail-mcp.approvals"
@@ -23,7 +29,11 @@ public struct SigningKey: Sendable {
                 service: service, account: account, length: 32, label: "Apple Mail MCP approval key",
                 description: "Signs the emails you approve in Apple Mail MCP"))
         } catch KeychainSecret.Failure.keychain(let status) {
+            #if canImport(Security)
             let message = SecCopyErrorMessageString(status, nil) as String? ?? "OSStatus \(status)"
+            #else
+            let message = "no Keychain on this system"
+            #endif
             throw ToolError("The approval key is not available from the Keychain (\(message)), so nothing can be approved or scheduled.")
         } catch {
             throw ToolError("The approval key in the Keychain is malformed; delete \"Apple Mail MCP approval key\" in Keychain Access.")
@@ -31,6 +41,7 @@ public struct SigningKey: Sendable {
     }
 
     /// Base64 HMAC-SHA256 of `fields`, each length-prefixed so no two lists of fields sign alike.
+    #if canImport(CryptoKit)
     public func sign(_ fields: [String]) -> String {
         Data(HMAC<SHA256>.authenticationCode(for: Self.canonical(fields), using: key)).base64EncodedString()
     }
@@ -39,6 +50,12 @@ public struct SigningKey: Sendable {
         guard let signature, let code = Data(base64Encoded: signature) else { return false }
         return HMAC<SHA256>.isValidAuthenticationCode(code, authenticating: Self.canonical(fields), using: key)
     }
+    #else
+    // No CryptoKit on Linux, where nothing can be sent anyway: nothing is signed, so no approval or schedule counts.
+    public func sign(_ fields: [String]) -> String { "" }
+
+    public func verify(_ signature: String?, _ fields: [String]) -> Bool { false }
+    #endif
 
     static func canonical(_ fields: [String]) -> Data {
         var data = Data()

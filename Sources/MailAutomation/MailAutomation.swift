@@ -173,6 +173,7 @@ public final class AutomationMetrics: @unchecked Sendable {
     }
 }
 
+#if os(macOS)
 /// Drives Mail.app with raw Apple Events (see ``MailSpec``). Calls run on a
 /// private serial queue and are serialized across every server process by
 /// ``AutomationLock``, because Mail handles one scripting request at a time.
@@ -447,6 +448,45 @@ public final class MailAutomation: MailAutomating {
         }
     }
 }
+#else
+/// Linux (the container Glama reads the tools from): there is no Mail.app to drive, so every change says so.
+public final class MailAutomation: MailAutomating {
+    public init(eventTimeout: TimeInterval = 60, messageEventTimeout: TimeInterval = 20, lockTimeout: TimeInterval = 30) {}
+
+    /// -600: Mail is not running (there is none here).
+    public func permissionStatus(askIfNeeded: Bool = false) -> Int { -600 }
+
+    struct Unavailable: Error, CustomStringConvertible {
+        var description: String { "Changing mail needs Mail.app on macOS: this server only reads the demo mailbox here." }
+    }
+
+    public func accounts() async throws -> [AutomationAccount] { throw Unavailable() }
+    public func move(_ messages: [MessageRef], from: MailboxTarget, to: MailboxTarget) async throws -> Int { throw Unavailable() }
+    public func setState(_ messages: [MessageRef], in mailbox: MailboxTarget, read: Bool?, flagged: Bool?, flagColor: FlagColor?) async throws -> Int {
+        throw Unavailable()
+    }
+    public func trash(_ messages: [MessageRef], in mailbox: MailboxTarget, to trash: MailboxTarget) async throws -> Int { throw Unavailable() }
+    public func createMailbox(_ target: MailboxTarget) async throws { throw Unavailable() }
+    public func checkForNewMail(accountID: String?) async throws { throw Unavailable() }
+    public func compose(_ message: OutgoingMessage, mode: DeliveryMode) async throws -> ComposeHandle? { throw Unavailable() }
+    public func reply(
+        to id: Int64, in mailbox: MailboxTarget, body: String, html: String?, replyAll: Bool, cc: [String], bcc: [String],
+        attachments: [String], mode: DeliveryMode
+    ) async throws -> ComposeHandle? { throw Unavailable() }
+    public func closeCompose(_ handle: ComposeHandle) async throws { throw Unavailable() }
+    public func open(_ id: Int64, in mailbox: MailboxTarget) async throws { throw Unavailable() }
+    public func createRule(_ rule: RuleSpec) async throws { throw Unavailable() }
+    public func setRuleEnabled(named name: String, enabled: Bool) async throws { throw Unavailable() }
+    public func deleteRule(named name: String) async throws { throw Unavailable() }
+    public func updateRule(named name: String, _ update: RuleUpdate) async throws { throw Unavailable() }
+    public func replaceRule(named name: String, with spec: RuleSpec) async throws { throw Unavailable() }
+    public func copy(_ messages: [MessageRef], from: MailboxTarget, to: MailboxTarget) async throws -> Int { throw Unavailable() }
+    public func setColor(_ messages: [MessageRef], in mailbox: MailboxTarget, color: RuleColor?) async throws -> Int { throw Unavailable() }
+    public func ruleNames() async throws -> [String] { throw Unavailable() }
+
+    public static func mailLaunchDate() -> Date? { nil }
+}
+#endif
 
 /// Cross-process advisory lock (flock) so concurrent server instances queue
 /// their Apple Events instead of piling onto Mail's single scripting thread.
@@ -490,6 +530,7 @@ public enum AutomationLock {
     }
 }
 
+#if os(macOS)
 extension MailAutomation {
     /// Read status, flag state and flag index of a message, straight from Mail (used to verify writes).
     public func state(of id: Int64, in mailbox: MailboxTarget) async throws -> (read: Bool, flagged: Bool, flagIndex: Int) {
@@ -502,3 +543,4 @@ extension MailAutomation {
         }
     }
 }
+#endif

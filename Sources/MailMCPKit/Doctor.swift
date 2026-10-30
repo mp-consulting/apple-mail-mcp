@@ -1,4 +1,6 @@
+#if os(macOS)
 import AppKit
+#endif
 import Foundation
 import MCP
 import MailAutomation
@@ -40,7 +42,11 @@ public enum Doctor {
             checks.append(Check(name: "Mail data", state: .failed, detail: "\(error)"))
         }
 
+        #if os(macOS)
         let running = !NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.mail").isEmpty
+        #else
+        let running = false  // no Mail.app outside macOS
+        #endif
         checks.append(Check(name: "Mail app", state: running ? .ok : .warning, detail: running ? "running" : "not running (reads still work; it is launched for changes)"))
         if running {
             let status = MailAutomation().permissionStatus(askIfNeeded: false)

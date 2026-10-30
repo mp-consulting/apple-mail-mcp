@@ -1,4 +1,6 @@
+#if canImport(Contacts)
 import Contacts
+#endif
 import Foundation
 
 /// A card from the user's Contacts.
@@ -39,6 +41,9 @@ public struct SystemContacts: ContactsProviding {
     public init() {}
 
     public func search(_ text: String, limit: Int) async -> ContactsLookup {
+        #if !canImport(Contacts)
+        return .unavailable("Contacts are macOS only; only people from your mail history are listed.")
+        #else
         let store = CNContactStore()
         switch CNContactStore.authorizationStatus(for: .contacts) {
         case .authorized:
@@ -69,6 +74,7 @@ public struct SystemContacts: ContactsProviding {
             guard !name.isEmpty else { return nil }
             return ContactCard(name: name, organization: contact.organizationName.isEmpty ? nil : contact.organizationName, emails: emails)
         })
+        #endif
     }
 
     static let hint = """

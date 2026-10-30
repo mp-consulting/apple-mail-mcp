@@ -1,4 +1,6 @@
+#if canImport(Darwin)
 import Darwin
+#endif
 import Foundation
 import MailStore
 
@@ -57,6 +59,7 @@ public enum LaunchContext {
         return nil
     }
 
+    #if os(macOS)
     static func executablePath(_ pid: pid_t) -> String? {
         var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN) * 4)
         let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
@@ -70,6 +73,12 @@ public enum LaunchContext {
         guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
         return pid_t(info.pbi_ppid)
     }
+    #else
+    // Full Disk Access is macOS's: elsewhere there is no responsible app to name.
+    static func executablePath(_ pid: pid_t) -> String? { nil }
+
+    static func parent(of pid: pid_t) -> pid_t? { nil }
+    #endif
 
     /// A tool-facing explanation for a Mail store that cannot be opened.
     public static func explain(_ error: Error) -> ToolError {

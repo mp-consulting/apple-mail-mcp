@@ -1,4 +1,6 @@
+#if os(macOS)
 import AppKit
+#endif
 import Foundation
 import MailStore
 
@@ -226,6 +228,7 @@ public enum RuleChange<Value: Sendable & Hashable>: Sendable, Hashable {
 /// `delete` (`removeRuleAtIndex:`). The save copies the list as it is 1.5 s to a minute later. So every change here
 /// ends by renaming the rule to a temporary name and back: two real changes, which save everything done before them,
 /// whatever Mail's change flag says.
+#if os(macOS)
 extension MailAutomation {
     public func createRule(_ rule: RuleSpec) async throws {
         try await run { mail in
@@ -424,3 +427,4 @@ extension String {
         self = String(bytes: withUnsafeBytes(of: code.bigEndian) { Array($0) }, encoding: .macOSRoman) ?? "????"
     }
 }
+#endif

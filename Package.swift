@@ -20,8 +20,11 @@ let package = Package(
         // Read side: Mail's SQLite index, .emlx files, MIME parsing, full-text index.
         .target(
             name: "MailStore",
+            dependencies: [.target(name: "CSQLite", condition: .when(platforms: [.linux]))],
             linkerSettings: [.linkedLibrary("sqlite3")]
         ),
+        // The system's SQLite where the SDK has no SQLite3 module (Linux: the image Glama reads the tools from).
+        .systemLibrary(name: "CSQLite", pkgConfig: "sqlite3", providers: [.apt(["libsqlite3-dev"])]),
         // Write side: raw Apple Events to Mail.app, built from Mail's scripting dictionary (no AppleScript).
         .target(
             name: "MailAutomation",

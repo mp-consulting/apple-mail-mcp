@@ -33,6 +33,10 @@ swift Scripts/make-icon.swift Resources
 
 ## Rules
 
+- The server also builds on Linux with `mail-bench demo` data: the `Dockerfile` is what Glama runs to read the
+  tools (its quality grade). Fence Apple-only code (AppKit, Contacts, PDFKit, Security, CryptoKit, CoreFoundation,
+  Darwin, Apple Events, remote access) with `#if os(macOS)` / `canImport`; on Linux `MailAutomation` only says Mail.app
+  is needed and SQLite comes from `CSQLite`. CI's `linux` job builds the image and lists the tools.
 - **Never touch real mail in tests.** Tests run on `MailFixtures`; live checks are opt-in
   (`APPLE_MAIL_MCP_LIVE=1`). Benchmarks and logs print counts and timings, never message content.
   Screenshots use `mail-bench demo` data (`APPLE_MAIL_MCP_MAIL_ROOT`, `APPLE_MAIL_MCP_ACCOUNTS_DB`,

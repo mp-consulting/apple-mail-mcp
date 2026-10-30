@@ -52,7 +52,7 @@ public enum TextFold {
         guard n >= m else { return false }
         return haystack.withUnsafeBufferPointer { h in
             needle.withUnsafeBufferPointer { p in
-                memmem(h.baseAddress, n, p.baseAddress, m) != nil
+                memmem(h.baseAddress!, n, p.baseAddress!, m) != nil
             }
         }
     }

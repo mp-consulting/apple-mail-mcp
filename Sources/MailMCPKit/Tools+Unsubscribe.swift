@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import MCP
 import MailAutomation
 import MailStore
@@ -62,8 +65,13 @@ enum UnsubscribeMethod: Equatable {
         guard !name.isEmpty, name != "localhost", !name.hasSuffix(".localhost"), !name.hasSuffix(".local"),
               !name.hasSuffix(".internal"), !name.hasSuffix(".lan"), !name.hasSuffix(".home.arpa")
         else { return false }
-        var hints = addrinfo(ai_flags: 0, ai_family: AF_UNSPEC, ai_socktype: SOCK_STREAM, ai_protocol: 0,
-                             ai_addrlen: 0, ai_canonname: nil, ai_addr: nil, ai_next: nil)
+        var hints = addrinfo()
+        hints.ai_family = AF_UNSPEC
+        #if os(Linux)
+        hints.ai_socktype = Int32(SOCK_STREAM.rawValue)
+        #else
+        hints.ai_socktype = SOCK_STREAM
+        #endif
         var list: UnsafeMutablePointer<addrinfo>?
         guard getaddrinfo(name, "443", &hints, &list) == 0, let first = list else { return false }
         defer { freeaddrinfo(list) }

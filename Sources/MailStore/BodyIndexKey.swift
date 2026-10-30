@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(Security)
 import Security
+#else
+public typealias OSStatus = Int32
+#endif
 
 /// The secret that turns indexed words into opaque tokens (see ``BodyIndex``).
 ///
@@ -78,6 +82,7 @@ public enum KeychainSecret {
         case malformed
     }
 
+    #if canImport(Security)
     static let accessGroup = "4HWBUF2R8D.com.mpconsulting.AppleMailMCP"
 
     /// Whether this build claims the team's access group (a release build with its provisioning profile), so its
@@ -165,6 +170,21 @@ public enum KeychainSecret {
             return bytes
         }
     }
+    #else
+    // No Keychain on Linux (the container Glama reads the tools from): indexes there use the test key.
+    public static var claimsSharedGroup: Bool { false }
+
+    public static func inLoginKeychain(service: String, account: String) -> Bool { false }
+
+    public static func random(_ length: Int) -> [UInt8] {
+        var generator = SystemRandomNumberGenerator()
+        return (0..<length).map { _ in UInt8.random(in: .min ... .max, using: &generator) }
+    }
+
+    public static func load(service: String, account: String, length: Int, label: String, description: String) throws -> [UInt8] {
+        throw Failure.keychain(-25291)  // errSecNotAvailable
+    }
+    #endif
 }
 
 public enum BodyIndexKeyError: Error, CustomStringConvertible, Sendable {
@@ -174,7 +194,11 @@ public enum BodyIndexKeyError: Error, CustomStringConvertible, Sendable {
     public var description: String {
         switch self {
         case .keychain(let status):
+            #if canImport(Security)
             let message = SecCopyErrorMessageString(status, nil) as String? ?? "OSStatus \(status)"
+            #else
+            let message = "no Keychain on this system"
+            #endif
             return "The search index key is not available from the Keychain (\(message)). Body searches scan messages instead."
         case .malformed:
             return "The search index key in the Keychain is malformed; delete \"Apple Mail MCP search index key\" in Keychain Access to start over."

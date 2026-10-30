@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 import CoreServices
 import Foundation
@@ -259,3 +260,4 @@ final class MailEventSender: @unchecked Sendable {
         return try send("core", "crel", parameters)
     }
 }
+#endif

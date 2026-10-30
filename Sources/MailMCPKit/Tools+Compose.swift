@@ -1,4 +1,6 @@
+#if os(macOS)
 import AppKit
+#endif
 import Foundation
 import MCP
 import MailAutomation
@@ -373,11 +375,13 @@ extension MailToolbox {
             let store = try self.store
             let id = try arguments.id("id")
             let message = try store.message(id: id)
+            #if os(macOS)
             // A message:// link needs no Apple Events or automation permission.
             if let link = message.mailLink, let url = URL(string: link) {
                 let opened = await MainActor.run { NSWorkspace.shared.open(url) }
                 if opened { return ToolReply(json: .obj([("opened", .int(id))]), summary: "opened \(id)", messageID: id) }
             }
+            #endif
             guard let mailbox = try store.mailbox(id: message.mailboxID) else { throw ToolError("Mailbox of message \(id) not found") }
             try await automation.open(id, in: MailboxTarget(mailbox))
             return ToolReply(json: .obj([("opened", .int(id))]), summary: "opened \(id)")

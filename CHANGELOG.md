@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-30
+
+### Added
+
+- The server builds and runs on Linux with a made-up mailbox (`mail-bench demo`), and the repository has a
+  `Dockerfile` for directories that start a server to read its tools, such as Glama. Reading works there; changing
+  and sending mail, Contacts and the Keychain still need the Mac app.
+- `glama.json`, and a CI job that builds the image and lists the tools.
+
 ## [0.7.0] - 2026-10-28
 
 ### Added
@@ -475,7 +484,10 @@ First release.
   and a reply or forward waiting for approval links to the original.
 - Skills in the Claude tab are listed by their Claude Code slash command (`/mail-triage`…); click to copy.
 
-[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.7...HEAD
+[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.7.0...v0.7.1
+[0.7.0]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.8...v0.7.0
+[0.6.8]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.7...v0.6.8
 [0.6.7]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.6...v0.6.7
 [0.6.6]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.4...v0.6.5

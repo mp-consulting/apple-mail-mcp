@@ -93,6 +93,22 @@ swift Scripts/make-icon.swift Resources
   probes keep their `MCP Probe …` mailboxes and empty them into Trash instead.
 - **Do not** delete a rule condition with Apple Events: `-[MFMessageRule(Applescript) removeFromCriteriaAtIndex:]`
   calls itself until Mail crashes (stack overflow). Rewrite conditions in place, or make the rule again.
+- **A body set by scripting is wrapped as shared content** (macOS 27, Mail 16): `content` (plain or RTF), `html content`
+  and new paragraphs all go through `ScriptingComposeViewControllerFactory` → `sharedMessageContentHTMLString`, and the
+  saved HTML is `<div class="Apple-Mail-URLShareUserContentTopClass"><br></div><div class="Apple-Mail-URLShareWrapperClass">
+  <blockquote type="cite" style="border-left-style: none…">…</blockquote></div>`; sent mail also gets `> ` before every
+  line of its plain-text part. Other mail apps show that as a quoted reply (issue #2). Not wrapped: a `mailto:` compose
+  (plain text, not scriptable) and messages Mail did not compose. The import route (`ImportComposer`, opt-in
+  `importCompose`) avoids it: `import Mail mailbox` of a folder in Mail's own format (`<name>.mbox/Messages/1.emlx`) keeps
+  each message's source and its `flags` from the `.emlx` property list (an mbox file loses them); with the draft bit
+  (Mail's drafts: `0x200030041`) and moved to a Drafts mailbox, it opens as an editable draft. `redirect` (`emal`/`rdms`)
+  sends a message's stored source as is, adding `Resent-From/To/Date` (`Date` stays the draft's), but only once Mail has the
+  message's file: a draft just moved to Drafts is listed seconds before its `.emlx` is written, and redirecting it then
+  sends text/plain "undefined" (live; a redirect's `content` reads empty either way, so wait for the file, and open the
+  window: the redirects that worked had it shown). Redirecting a draft
+  replaces it, so it leaves Drafts once sent (and a redirect *saved* as a draft replaces the original). Each import makes a
+  new top-level "Import", "Import-2"… mailbox in On My Mac: scripting can rename it but not delete or move it (-10000), and
+  removing its folder while Mail is quit leaves Mail listing it.
 - `reply`/`forward` always open a window. `save` is asynchronous: closing or deleting the compose object
   right after it discards the draft, so the server waits for the draft row (ROWID above the
   pre-compose maximum) before closing it.

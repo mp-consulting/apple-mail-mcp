@@ -48,6 +48,8 @@ public final class MailToolbox: @unchecked Sendable {
     private let storeProvider: @Sendable () throws -> MailStore
     private var _store: MailStore?
     public let automation: any MailAutomating
+    /// How long the import route waits for each step to show in Mail's database (``ImportComposer``).
+    var importTimeout: TimeInterval = 30
     public let settings: SettingsProvider
     public let approvals: ApprovalCenter
     public let activity: ActivityLog?

@@ -378,6 +378,12 @@ struct SettingsTab: View {
             .labelsHidden()
             .fixedSize()
         }
+        SettingRow("Write new mail without Mail's reply quote") { Toggle("", isOn: $model.settings.importCompose).labelsHidden() }
+        if model.settings.importCompose {
+            Text("Each new message leaves an empty “Import” mailbox in On My Mac; delete them in Mail now and then.")
+                .font(.caption).foregroundStyle(.secondary)
+                .padding(.horizontal, 16)
+        }
         SectionDivider()
         SectionHeader("Changes")
         SettingRow("Allow moving, flagging and Trash") { Toggle("", isOn: $model.settings.allowMailChanges).labelsHidden() }

@@ -62,6 +62,28 @@ extension MailToolbox {
         return found
     }
 
+    /// Saves or sends `outgoing` through the import route when ``Settings/importCompose`` is on; nil when the usual
+    /// compose should run (setting off, `.open`, or the route cannot take this message, e.g. no Drafts mailbox).
+    func composeViaImport(_ outgoing: OutgoingMessage, mode: DeliveryMode) async throws -> ImportComposer.Result? {
+        guard settings.current.importCompose, mode != .open else { return nil }
+        do {
+            var composer = ImportComposer(store: try store, automation: automation)
+            composer.timeout = importTimeout
+            return try await composer.deliver(outgoing, mode: mode)
+        } catch is ImportComposer.Unavailable {
+            return nil
+        }
+    }
+
+    /// The reply fields that tell the user about the import route's leftover mailbox.
+    static func importNotes(_ result: ImportComposer.Result) -> [(String, JSON?)] {
+        [
+            ("via", .string("import")),
+            ("leftover_mailbox", result.leftover.map(JSON.string)),
+            ("note", result.leftover.map { .string("Mail left an empty mailbox, \($0); delete it in Mail when convenient.") }),
+        ]
+    }
+
     func draftResult(_ mode: DeliveryMode, draftID: Int64?) -> [(String, JSON?)] {
         guard mode == .draft else { return [("result", .string(describe(mode)))] }
         if let draftID { return [("result", .string(describe(mode))), ("draft_id", .int(draftID))] }
@@ -120,10 +142,16 @@ extension MailToolbox {
                     tool: "compose_email", from: from, to: to, cc: cc, bcc: bcc, subject: subject, body: body,
                     attachments: attachments)
             }
+            let outgoing = OutgoingMessage(from: from, to: to, cc: cc, bcc: bcc, subject: subject, body: body, html: html, attachments: attachments)
+            if let imported = try await self.composeViaImport(outgoing, mode: mode) {
+                return ToolReply(
+                    json: .obj(
+                        self.draftResult(mode, draftID: imported.draftID) + [("to", .array(to.map { .string($0) })), ("subject", .string(subject))]
+                            + Self.importNotes(imported)),
+                    summary: "\(mode.rawValue) (import): \(Render.truncate(subject, 60))", messageID: imported.draftID)
+            }
             let started = (try? self.store.maxMessageRowID()) ?? .max
-            let handle = try await automation.compose(
-                OutgoingMessage(from: from, to: to, cc: cc, bcc: bcc, subject: subject, body: body, html: html, attachments: attachments),
-                mode: mode)
+            let handle = try await automation.compose(outgoing, mode: mode)
             let draftID = mode == .draft ? await self.settleDraft(handle, subject: subject, after: started) : nil
             return ToolReply(
                 json: .obj(self.draftResult(mode, draftID: draftID) + [("to", .array(to.map { .string($0) })), ("subject", .string(subject))]),

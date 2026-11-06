@@ -110,6 +110,14 @@ public protocol MailAutomating: Sendable {
     /// Closes a compose object without saving again.
     func closeCompose(_ handle: ComposeHandle) async throws
     func open(_ id: Int64, in mailbox: MailboxTarget) async throws
+    /// `import Mail mailbox`: Mail copies a mailbox folder in its own format (`<name>.mbox/Messages/<n>.emlx`)
+    /// into a new top-level "Import" mailbox in On My Mac, keeping each message's source and flags.
+    func importMailbox(at path: String) async throws
+    /// Mail's Redirect: sends a message's own source, as stored, to new recipients (Mail adds `Resent-*` headers).
+    /// A draft redirected this way leaves Drafts once it is sent.
+    func redirect(_ id: Int64, in mailbox: MailboxTarget, to: [String], cc: [String], bcc: [String]) async throws
+    /// The sender a new message would get ("Name <address>"): Mail's default, or `address` with its account's name.
+    func sender(for address: String?) async throws -> String?
     /// Makes a rule; Mail saves it (see ``RuleSpec``).
     func createRule(_ rule: RuleSpec) async throws
     /// Turns a rule on or off.
@@ -136,6 +144,18 @@ public protocol MailAutomating: Sendable {
 extension MailAutomating {
     public func exclusive<T>(_ body: () async throws -> T) async throws -> T { try await body() }
     public var messageEventTimeout: TimeInterval { 0 }
+    public func importMailbox(at path: String) async throws { throw AutomationUnsupported(command: "import Mail mailbox") }
+    public func redirect(_ id: Int64, in mailbox: MailboxTarget, to: [String], cc: [String], bcc: [String]) async throws {
+        throw AutomationUnsupported(command: "redirect")
+    }
+    public func sender(for address: String?) async throws -> String? { nil }
+}
+
+/// A command this automation backend does not implement.
+public struct AutomationUnsupported: Error, CustomStringConvertible, Sendable {
+    public var command: String
+    public init(command: String) { self.command = command }
+    public var description: String { "\(command) is not available here" }
 }
 
 /// Where a tool call's time went: waiting for the automation lock, and inside Mail. The toolbox sets one per call
@@ -445,6 +465,38 @@ public final class MailAutomation: MailAutomating {
         try await run { mail in
             try mail.send("aevt", "odoc", direct: MailSpec.message(id, in: mailbox))
             try mail.send("misc", "actv")
+        }
+    }
+
+    public func importMailbox(at path: String) async throws {
+        try await run { mail in _ = try mail.send("emal", "immx", ["mbpt": MailSpec.fileURL(path)]) }
+    }
+
+    public func redirect(_ id: Int64, in mailbox: MailboxTarget, to: [String], cc: [String], bcc: [String]) async throws {
+        try await run { mail in
+            // `redirect` is not a change to the draft (it reads it), so the direct `id` lookup is safe here.
+            // With its window hidden, Mail sends before its editor has loaded the message: the mail goes out as
+            // text/plain "undefined" and the draft stays (live, 2026-11-06). Shown and given 2 s, it loads (live).
+            // Its `content` reads as empty either way, so there is nothing to poll.
+            let message = try mail.send(
+                "emal", "rdms", direct: MailSpec.message(id, in: mailbox), ["ropw": NSAppleEventDescriptor(boolean: true)])
+            Thread.sleep(forTimeInterval: 2.5)
+            try Self.addRecipients(mail, to: message, to: to, cc: cc, bcc: bcc)
+            try Self.finish(mail, message, mode: .send)
+        }
+    }
+
+    public func sender(for address: String?) async throws -> String? {
+        try await run { mail in
+            // A hidden compose object with no content (so nothing for Mail to wrap): Mail fills in the sender, and
+            // turns an address into "Name <address>" with the account's name.
+            let message = try mail.make("bcke", properties: ["pvis": NSAppleEventDescriptor(boolean: false)])
+            defer { _ = try? mail.send("core", "clos", direct: message, ["savo": NSAppleEventDescriptor(enumCode: fourCC("no  "))]) }
+            if let address, !address.isEmpty {
+                try mail.set(MailSpec.property("sndr", of: message), to: NSAppleEventDescriptor(string: address))
+            }
+            let sender = try mail.get(MailSpec.property("sndr", of: message)).stringValue
+            return (sender?.isEmpty ?? true) ? nil : sender
         }
     }
 }

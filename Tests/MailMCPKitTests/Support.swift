@@ -24,6 +24,8 @@ final class RecordingAutomation: MailAutomating, @unchecked Sendable {
         case replaceRule(String, RuleSpec)
         case copy([Int64], MailboxTarget, MailboxTarget)
         case setColor([Int64], MailboxTarget, RuleColor?)
+        case importMailbox(String)
+        case redirect(Int64, MailboxTarget, [String], [String], [String])
     }
 
     private let lock = NSLock()
@@ -39,6 +41,10 @@ final class RecordingAutomation: MailAutomating, @unchecked Sendable {
     var onCreateMailbox: (@Sendable (MailboxTarget) -> Void)?
     /// Runs inside `compose`, e.g. to simulate Mail sending and then the Apple Event timing out.
     var onCompose: (@Sendable (OutgoingMessage, DeliveryMode) throws -> Void)?
+    /// Runs inside `importMailbox` with the folder's path, e.g. to add the message to a local mailbox.
+    var onImport: (@Sendable (String) throws -> Void)?
+    /// What `sender(for:)` answers for Mail's default.
+    var defaultSender: String?
     /// Runs inside `trash`, e.g. to simulate Mail moving the messages to Trash (or more than that).
     var onTrash: (@Sendable ([Int64], MailboxTarget) -> Void)?
     /// The longest one message event may take (0: no limit, as the protocol's default).
@@ -121,6 +127,17 @@ final class RecordingAutomation: MailAutomating, @unchecked Sendable {
     }
 
     func open(_ id: Int64, in mailbox: MailboxTarget) async throws { record(.open(id)) }
+
+    func importMailbox(at path: String) async throws {
+        record(.importMailbox(path))
+        try onImport?(path)
+    }
+
+    func redirect(_ id: Int64, in mailbox: MailboxTarget, to: [String], cc: [String], bcc: [String]) async throws {
+        record(.redirect(id, mailbox, to, cc, bcc))
+    }
+
+    func sender(for address: String?) async throws -> String? { address ?? defaultSender }
 
     func createRule(_ rule: RuleSpec) async throws {
         recordChange(.createRule(rule))

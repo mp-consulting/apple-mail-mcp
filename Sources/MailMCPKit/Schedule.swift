@@ -471,11 +471,16 @@ extension MailToolbox {
     private func deliver(_ send: ScheduledSend) async throws {
         guard settings.current.sendPolicy != .never else { throw ToolError("Sending is turned off (send policy \"never\").") }
         guard let reply = send.reply else {
-            _ = try await automation.compose(
-                OutgoingMessage(
-                    from: send.from, to: send.to, cc: send.cc, bcc: send.bcc, subject: send.subject, body: send.body, html: send.html,
-                    attachments: send.attachments),
-                mode: .send)
+            let outgoing = OutgoingMessage(
+                from: send.from, to: send.to, cc: send.cc, bcc: send.bcc, subject: send.subject, body: send.body, html: send.html,
+                attachments: send.attachments)
+            if settings.current.importCompose {
+                do {
+                    _ = try await ImportComposer(store: try self.store, automation: automation).deliver(outgoing, mode: .send)
+                    return
+                } catch is ImportComposer.Unavailable {}
+            }
+            _ = try await automation.compose(outgoing, mode: .send)
             return
         }
         let store = try self.store

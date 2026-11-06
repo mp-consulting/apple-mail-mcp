@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-11-06
+
+### Added
+
+- Settings › Sending › **Write new mail without Mail's reply quote** (`importCompose`, off by default), for issue #2.
+  On macOS 27, Mail puts any body a script sets inside the wrapper it uses for shared content
+  (`<blockquote type="cite">` with an empty line above it), and fills the plain-text part with `> ` quotes when it
+  sends, so other mail apps show a new message as a quoted reply. With the setting on, `compose_email`, `send_draft`
+  and scheduled sends write the message source themselves (HTML, plain text, attachments), Mail imports it
+  (`import Mail mailbox`) and moves it to the sender's Drafts, and sending is Mail's Redirect of that draft. Replies,
+  forwards and `mode: "open"` still go through Mail's compose. Each message leaves an empty "Import" mailbox in On My
+  Mac, which scripts cannot delete: the reply names it (`leftover_mailbox`).
+
 ## [0.7.2] - 2026-11-06
 
 Fixes from a 35,000-message cleanup of Archive year folders (macOS 27.2, Mail 16.0).
@@ -512,7 +525,8 @@ First release.
   and a reply or forward waiting for approval links to the original.
 - Skills in the Claude tab are listed by their Claude Code slash command (`/mail-triage`…); click to copy.
 
-[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.7.3...HEAD
+[0.7.3]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.8...v0.7.0

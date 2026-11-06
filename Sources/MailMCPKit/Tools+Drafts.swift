@@ -82,11 +82,11 @@ extension MailToolbox {
             }
             try await self.authorizeSend(
                 tool: "send_draft", from: from, to: to, cc: cc, bcc: bcc, subject: draft.summary.subject, body: body, attachments: files)
-            _ = try await automation.compose(
-                OutgoingMessage(
-                    from: from, to: to, cc: cc, bcc: bcc, subject: draft.summary.subject, body: body, html: draft.htmlBody,
-                    attachments: files),
-                mode: .send)
+            let outgoing = OutgoingMessage(
+                from: from, to: to, cc: cc, bcc: bcc, subject: draft.summary.subject, body: body, html: draft.htmlBody,
+                attachments: files)
+            let imported = try await self.composeViaImport(outgoing, mode: .send)
+            if imported == nil { _ = try await automation.compose(outgoing, mode: .send) }
             // The message went out; the draft goes to Trash like Mail does after sending it.
             let report = try? await self.applyVerified(try self.trashSteps([(mailbox, [draft.summary])]), tool: "send_draft", send: self.sendToTrash)
             let removed = report?.done.contains(id) ?? false
@@ -95,6 +95,7 @@ extension MailToolbox {
                     ("result", .string("sent")), ("to", .array(to.map(JSON.string))), ("subject", .string(draft.summary.subject)),
                     ("attachments", files.isEmpty ? nil : .int(Int64(files.count))),
                     ("draft_removed", .bool(removed)),
+                    ("leftover_mailbox", imported?.leftover.map(JSON.string)),
                     ("note", removed ? nil : .string("The draft is still in Drafts; delete it in Mail so it is not sent twice.")),
                 ]),
                 summary: "sent draft: \(Render.truncate(draft.summary.subject, 60))")

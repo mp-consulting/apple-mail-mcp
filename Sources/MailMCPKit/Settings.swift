@@ -71,6 +71,9 @@ public struct Settings: Codable, Sendable, Equatable {
     public var callBudget: Double = 90
     /// Put back at once the messages Mail moved or trashed although nobody asked it to.
     public var restoreStrays = true
+    /// Write new messages with the import route (``ImportComposer``) instead of setting the body in Mail, which
+    /// macOS 27's Mail wraps in a hidden reply quote. Each message then leaves an empty "Import" mailbox in On My Mac.
+    public var importCompose = false
     /// Serve MCP over HTTP for claude.ai and the Claude apps (through a tunnel such as cloudflared), with OAuth.
     public var remoteAccess = false
     /// The address clients use, as published by the tunnel: `https://mcp.example.com/me/mail`. Its path is where the
@@ -116,6 +119,7 @@ public struct Settings: Codable, Sendable, Equatable {
         approveChangesAbove = field(.approveChangesAbove, defaults.approveChangesAbove)
         callBudget = field(.callBudget, defaults.callBudget)
         restoreStrays = field(.restoreStrays, defaults.restoreStrays)
+        importCompose = field(.importCompose, defaults.importCompose)
         remoteAccess = field(.remoteAccess, defaults.remoteAccess)
         remoteAddress = field(.remoteAddress, defaults.remoteAddress)
         remotePort = field(.remotePort, defaults.remotePort)

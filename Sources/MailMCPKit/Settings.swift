@@ -17,6 +17,7 @@ public enum SharedPaths {
     public static var changeJournal: URL { supportDirectory.appending(path: "changes.json") }
     /// Mailboxes where a change went wrong, next to the change journal (see ``ChangeBreaker``).
     public static var changeBreaker: URL { supportDirectory.appending(path: ChangeBreaker.fileName) }
+    public static var unseenMessages: URL { supportDirectory.appending(path: UnseenMessages.fileName) }
     public static var schedule: URL { supportDirectory.appending(path: "scheduled.json") }
     public static var scheduledFiles: URL { supportDirectory.appending(path: "scheduled-files", directoryHint: .isDirectory) }
 

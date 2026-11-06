@@ -248,6 +248,14 @@ extension MailToolbox {
                     .string(
                         "Body search stopped after scanning \(page.scannedMessages) messages without a complete index. Narrow it (account, mailbox, days) or build the index with body_index action \"update\"."))
             }
+            let unseen = self.unseen?.unseen(among: page.messages) ?? []
+            if !unseen.isEmpty {
+                let boxes = Set(unseen.map(\.mailboxPath)).sorted().joined(separator: ", ")
+                notes.append(.string("""
+                    Mail could not find the messages in mail_cannot_see when asked to change them lately: leave them \
+                    out of moves and trashes until the user rebuilds \(boxes) in Mail (Mailbox › Rebuild).
+                    """))
+            }
             let json = JSON.obj([
                 ("total", page.total.map { .int(Int64($0)) }),
                 ("offset", .int(Int64(page.offset))),
@@ -255,6 +263,7 @@ extension MailToolbox {
                 ("has_more", .bool(page.hasMore)),
                 ("body_search", page.bodySearchMode.map { .string($0) }),
                 ("notes", notes.isEmpty ? nil : .array(notes)),
+                ("mail_cannot_see", unseen.isEmpty ? nil : .array(unseen.map { .int($0.id) })),
                 ("messages", .array(page.messages.map { Render.message($0, preview: !compact, link: true) })),
             ])
             return ToolReply(json: json, summary: "\(page.total.map(String.init) ?? "\(page.messages.count)+") results")

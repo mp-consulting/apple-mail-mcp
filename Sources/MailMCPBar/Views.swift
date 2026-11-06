@@ -207,7 +207,7 @@ struct MailTab: View {
         VStack(alignment: .leading, spacing: 0) { status }
             .animatesChanges(of: [
                 model.attention.map(\.id), model.snoozedCount, model.scheduledSends.count, model.needsReply.count,
-                model.activity.first?.id,
+                model.unseen, model.activity.first?.id,
             ] as [AnyHashable])
     }
 
@@ -266,6 +266,21 @@ struct MailTab: View {
                     ?? "They come back on time while this app runs.")
             {
                 EmptyView()
+            }
+        }
+        // Quiet on purpose: nothing is lost, and the fix is the user's to make in Mail when it suits them.
+        if let line = UnseenMessages.line(for: model.unseen) {
+            Row(systemImage: "eye.slash", iconColor: .secondary, title: line.title, detail: line.detail) {
+                HStack(spacing: 6) {
+                    Button("Open Mail") { model.openMail() }.glassButton().controlSize(.small)
+                    Button { model.dismissUnseen() } label: {
+                        Image(systemName: "xmark").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                            .frame(width: 22, height: 22).contentShape(Rectangle())
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                    .help("Hide until Mail misses messages again")
+                    .accessibilityLabel("Hide")
+                }
             }
         }
         if !model.needsReply.isEmpty {

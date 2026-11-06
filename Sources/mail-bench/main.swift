@@ -748,6 +748,15 @@ case "demo":
             attachments: ["estimates-q3.xlsx"], status: .pending, decided: nil,
             originalLink: "message://%3Croadmap@northwind.test%3E"))
     }
+    if options.values["unseen"] != nil {
+        // Messages Mail "could not find" during a cleanup: the menu bar app suggests rebuilding their mailbox.
+        let archive = try store.mailboxes().filter { $0.role == .archive || $0.role == .other }
+            .max { try store.liveCount(mailboxID: $0.id) < store.liveCount(mailboxID: $1.id) }
+        if let archive {
+            let ids = try store.headerRows(mailboxID: archive.id).keys.sorted().prefix(options.int("unseen", 3))
+            UnseenMessages(url: support.appending(path: UnseenMessages.fileName)).update(add: Array(ids), remove: [])
+        }
+    }
     #if os(macOS)
     if options.values["remote"] != nil {
         let access = RemoteAccess(url: support.appending(path: "remote-access.json"))

@@ -62,7 +62,8 @@ struct ChangeReport {
     /// Already gone from their mailbox when the change started.
     var gone: [Int64] = []
     /// Mail did not find them (or, found by id, they were not the message the store has there).
-    var missing: [Int64] = []
+    /// With the mailbox each is in: Mail's index of it is out of step with the database.
+    var missing: [(id: Int64, mailbox: Mailbox)] = []
     /// Left alone because something went wrong before them: not to be sent again blindly.
     var notAttempted: [Int64] = []
     /// Left alone because the call ran out of time: safe to send again.
@@ -94,11 +95,20 @@ struct ChangeReport {
         Mail also moved messages nobody asked for; they were put back (strays_restored). Stop bulk changes on this \
         mailbox for a few minutes and tell the user what happened.
         """
+    static let unexpectedWarning = """
+        The rows in collateral_suspected.unexpected reached that mailbox during the change and nothing explains them \
+        (new mail and late copies of earlier changes are already left out): show them to the user.
+        """
     static let unverifiedWarning = """
         Some messages had not left their mailbox when the wait ran out (Mail may be busy). Do not resend them; \
         search again later to see where they are.
         """
     static let resumeWarning = "The call stopped before its time ran out: send resume_ids in a new call."
+    static let unseenWarning = """
+        Mail's database lists the messages in mail_cannot_see, but Mail itself could not find them: its index of the \
+        mailbox in rebuild_mailbox is out of step. Do not send them again; leave them out of further batches (search \
+        marks them) and tell the user to select that mailbox in Mail and choose Mailbox › Rebuild.
+        """
     static let oneByOneWarning = """
         Messages in retry_one_by_one have no Message-ID of their own in their mailbox, so Mail can only find them by \
         position: send each in a call of its own.
@@ -110,14 +120,20 @@ struct ChangeReport {
         var warnings: [String] = []
         if collateral != nil {
             warnings.append(straysAllRestored ? Self.restoredWarning : Self.collateralWarning)
+            if evidence.first?.newcomers.isEmpty == false { warnings.append(Self.unexpectedWarning) }
         } else if !unverified.isEmpty {
             warnings.append(Self.unverifiedWarning)
         }
         if !resume.isEmpty { warnings.append(Self.resumeWarning) }
         if !oneByOne.isEmpty { warnings.append(Self.oneByOneWarning) }
+        if !missing.isEmpty { warnings.append(Self.unseenWarning) }
+        let missingIDs = missing.map(\.id)
+        let rebuild = Set(missing.map(\.mailbox.path)).sorted()
         return [
             ("unverified", list(unverified)),
-            ("not_found", list(notFound + gone + missing)),
+            ("not_found", list(notFound + gone + missingIDs)),
+            ("mail_cannot_see", list(missingIDs)),
+            ("rebuild_mailbox", rebuild.isEmpty ? nil : .array(rebuild.map { .string($0) })),
             ("collateral_suspected", collateral),
             ("strays_restored", straysRestored > 0 ? .int(Int64(straysRestored)) : nil),
             ("stray_change_id", strayChangeID.map(JSON.string)),
@@ -157,7 +173,36 @@ struct ChangeCheck {
         var expected: Int
         var actual: Int
         var strays: [Stray] = []
+        /// For a gain: how much of it rows that are not collateral explain (see ``Newcomer``).
+        var explained = 0
+        /// For a gain: the new rows nothing explains.
+        var newcomers: [Newcomer] = []
     }
+
+    /// A row that reached the destination during the change without being one of the requested messages.
+    struct Newcomer {
+        enum Reason: String {
+            /// Its Message-ID is one of the source's other messages: Mail took it (as a copy, or a move it has
+            /// not finished removing from the source).
+            case fromSource = "from_source"
+            /// Nothing explains it.
+            case unexplained
+        }
+
+        var message: MessageSummary
+        var reason: Reason
+
+        var json: JSON {
+            .obj([
+                ("id", .int(message.id)), ("header", message.messageIDHeader.map(JSON.string)),
+                ("received", Render.date(message.dateReceived)), ("reason", .string(reason.rawValue)),
+            ])
+        }
+    }
+
+    /// New mail that a gain in the destination may hold without it being collateral: received this recently, it can
+    /// be mail the user deleted on another device during the change.
+    static let newMailAge: TimeInterval = 24 * 3600
 
     let store: MailStore
     /// The step, narrowed to the messages still in the source mailbox.
@@ -175,11 +220,16 @@ struct ChangeCheck {
     let maxRowID: Int64
     /// The source is too big to find messages by Message-ID quickly (see ``MailToolbox/headerLookupLimit``).
     let byID: Bool
+    /// Message-IDs this server moved or trashed into the destination's account lately (from the change journal): Mail
+    /// can bring a late copy of one into the destination minutes after its own change, which is not collateral. Read
+    /// only when the destination gained rows nobody asked for.
+    let recentlyMoved: () -> Set<String>
 
     var sourceCount: Int { snapshot.count }
 
-    init(_ step: ChangeStep, store: MailStore, headerLookupLimit: Int) throws {
+    init(_ step: ChangeStep, store: MailStore, headerLookupLimit: Int, recentlyMoved: @escaping () -> Set<String> = { [] }) throws {
         self.store = store
+        self.recentlyMoved = recentlyMoved
         maxRowID = try store.maxMessageRowID()
         let snapshot = try store.headerRows(mailboxID: step.source.id)
         self.snapshot = snapshot
@@ -272,11 +322,53 @@ struct ChangeCheck {
         }
         if let destination = step.destination, let before = destinationCount, let after = destinationNow {
             let expected = outcome.arrived.count + outcome.left.filter(headerless.contains).count
-            if after - before > expected {
-                return (outcome, Collateral(mailbox: destination, drop: false, expected: expected, actual: after - before))
+            let gain = after - before
+            if gain > expected {
+                // Only rows shown not to be collateral excuse part of the gain; the rest of it still stops the change.
+                let (explained, suspects) = try newcomers(in: destination, outcome: outcome)
+                if gain - explained > expected {
+                    return (outcome, Collateral(
+                        mailbox: destination, drop: false, expected: expected, actual: gain, explained: explained, newcomers: suspects))
+                }
             }
         }
         return (outcome, nil)
+    }
+
+    /// The destination's rows above the pre-change maximum that are not the requested messages' arrivals, sorted into
+    /// the ones that are not collateral (counted) and the rest. Not collateral: another copy of a requested message, a
+    /// late copy of one this server moved lately (``recentlyMoved``), or mail received in the last ``newMailAge``
+    /// (deleted on another device meanwhile). Collateral: one of the source's other messages, or anything else.
+    func newcomers(in destination: Mailbox, outcome: Outcome, now: Date = Date()) throws -> (explained: Int, suspects: [Newcomer]) {
+        let arrived = Set(outcome.arrived.values)
+        let requested = Set(step.messages.compactMap(\.messageIDHeader))
+        // Headerless requested messages are in the expected gain already; their rows cannot be told apart.
+        var headerlessLeft = outcome.left.filter(headerless.contains).count
+        var moved: Set<String>?
+        var explained = 0
+        var suspects: [Newcomer] = []
+        for row in try store.messages(mailboxID: destination.id, above: maxRowID) where !arrived.contains(row.id) {
+            let reason: Newcomer.Reason?
+            if let header = row.messageIDHeader {
+                if requested.contains(header) {
+                    reason = nil
+                } else if headerCounts[header] != nil {
+                    reason = .fromSource
+                } else if now.timeIntervalSince(row.dateReceived) < Self.newMailAge {
+                    reason = nil
+                } else {
+                    if moved == nil { moved = recentlyMoved() }
+                    reason = moved!.contains(header) ? nil : .unexplained
+                }
+            } else if headerlessLeft > 0 {
+                headerlessLeft -= 1
+                continue
+            } else {
+                reason = .unexplained
+            }
+            if let reason { suspects.append(Newcomer(message: row, reason: reason)) } else { explained += 1 }
+        }
+        return (explained, suspects)
     }
 
     /// The messages that left the source although nobody asked for them, and where they went.
@@ -391,6 +483,98 @@ public final class ChangeBreaker: @unchecked Sendable {
     }
 }
 
+/// Messages Mail's database lists but Mail itself could not find when asked to move or trash them: its index of the
+/// mailbox is out of step (Mailbox › Rebuild fixes it). Kept so searches can mark them and callers stop sending them
+/// again in every batch. Shared by every server process; entries go after `keep`, or once a change finds the message.
+public final class UnseenMessages: @unchecked Sendable {
+    /// A message by ROWID, which Mail changes when the message moves (or the mailbox is rebuilt).
+    public struct Entry: Codable, Sendable, Hashable {
+        public var id: Int64
+        public var seen: Date
+    }
+
+    public static let fileName = "unseen.json"
+    /// How long an entry stays.
+    public var keep: TimeInterval = 7 * 24 * 3600
+    /// The most entries kept (the newest).
+    public var limit = 500
+    private let file: SharedJSONFile<[Entry]>
+
+    /// Messages Mail could not find in one mailbox, still there (by the store) and recorded lately.
+    public struct MailboxCount: Sendable, Hashable, CustomStringConvertible {
+        public var mailbox: String
+        public var account: String
+        public var count: Int
+
+        /// "3 in Archive/2020 (iCloud)".
+        public var description: String { "\(count) in \(mailbox) (\(account))" }
+    }
+
+    /// What the user does about them, for one mailbox or `several`.
+    public static func advice(several: Bool) -> String {
+        "Select \(several ? "each" : "it") in Mail and choose Mailbox › Rebuild."
+    }
+
+    public init(url: URL = SharedPaths.unseenMessages) {
+        file = SharedJSONFile(url: url, empty: [])
+    }
+
+    public var entries: [Entry] { file.value }
+
+    /// A short summary of `mailboxes` ("Mail can't see 3 messages"), and where they are and what to do; nil when
+    /// there are none.
+    public static func line(for mailboxes: [MailboxCount]) -> (title: String, detail: String)? {
+        guard !mailboxes.isEmpty else { return nil }
+        let total = mailboxes.reduce(0) { $0 + $1.count }
+        // A mailbox name two accounts share is told apart by its account.
+        let shared = Set(Dictionary(grouping: mailboxes, by: \.mailbox).filter { $0.value.count > 1 }.keys)
+        let names = mailboxes.prefix(3).map { shared.contains($0.mailbox) ? "\($0.mailbox) (\($0.account))" : $0.mailbox }
+            .joined(separator: ", ") + (mailboxes.count > 3 ? "…" : "")
+        return (
+            "Mail can't see \(total == 1 ? "1 message" : "\(total) messages")",
+            "In \(names). " + advice(several: mailboxes.count > 1))
+    }
+
+    /// Per mailbox, most first: the recorded messages still in their mailbox. Rows gone since (moved, or given
+    /// new ids by a rebuild) drop out, so a rebuilt mailbox leaves the list without anyone clearing it.
+    public func mailboxes(in store: MailStore, now: Date = Date()) throws -> [MailboxCount] {
+        let ids = file.value.filter { now.timeIntervalSince($0.seen) < keep }.map(\.id)
+        guard !ids.isEmpty else { return [] }
+        var counts: [MailboxCount] = []
+        for (mailboxID, messages) in Dictionary(grouping: try store.messages(ids: ids), by: \.mailboxID) {
+            let present = try store.present(ids: messages.map(\.id), mailboxID: mailboxID).count
+            guard present > 0, let first = messages.first else { continue }
+            counts.append(MailboxCount(mailbox: first.mailboxPath, account: first.accountName, count: present))
+        }
+        return counts.sorted { ($0.count, $1.mailbox) > ($1.count, $0.mailbox) }
+    }
+
+    /// Records `add` as not found by Mail just now and forgets `remove` (found after all), in one write.
+    public func update(add: [Int64], remove: [Int64], now: Date = Date()) {
+        let drop = Set(add + remove)
+        // Most changes find every message: no write unless there is something to add or to forget.
+        guard !add.isEmpty || file.value.contains(where: { drop.contains($0.id) }) else { return }
+        try? file.modify { entries in
+            entries.removeAll { drop.contains($0.id) || now.timeIntervalSince($0.seen) >= keep }
+            entries += add.sorted().map { Entry(id: $0, seen: now) }
+            if entries.count > limit { entries.removeFirst(entries.count - limit) }
+        }
+    }
+
+    /// Forgets every entry: the user rebuilt the mailboxes, or does not want to hear about them. A change that misses
+    /// messages again records them again.
+    public func clear() {
+        guard !file.value.isEmpty else { return }
+        try? file.modify { $0.removeAll() }
+    }
+
+    /// Those of `messages` Mail could not find lately.
+    func unseen(among messages: [MessageSummary], now: Date = Date()) -> [MessageSummary] {
+        let known = Set(file.value.filter { now.timeIntervalSince($0.seen) < keep }.map(\.id))
+        return known.isEmpty ? [] : messages.filter { known.contains($0.id) }
+    }
+}
+
 extension MailToolbox {
     /// The time a call started, for its time budget (set by `call`).
     @TaskLocal static var callStart: Date?
@@ -428,12 +612,17 @@ extension MailToolbox {
         let started = Self.callStart ?? Date()
         let perMessage = automation.messageEventTimeout + timing.timeout
         let alone = steps.reduce(0) { $0 + $1.messages.count } == 1
+        let lookupBudget = headerLookupBudget
         enum Stop { case problem, budget }
 
         var (report, troubled) = try await automation.exclusive { () async throws -> (ChangeReport, [(ChangeCheck, [Int64])]) in
             var report = ChangeReport()
             var stop: Stop?
             var troubled: [(check: ChangeCheck, unverified: [Int64])] = []
+            // Messages Mail has read for `whose message id` lookups so far in this call.
+            var lookupWork = 0
+            // Message-IDs earlier steps of this call moved, by account: not in the journal until the call ends.
+            var movedThisCall: [String: Set<String>] = [:]
             func skip(_ id: Int64) {
                 if stop == .budget { report.resume.append(id) } else { report.notAttempted.append(id) }
             }
@@ -442,7 +631,11 @@ extension MailToolbox {
                     step.messages.forEach { skip($0.id) }
                     continue
                 }
-                let check = try ChangeCheck(step, store: store, headerLookupLimit: headerLookupLimit)
+                let check = try ChangeCheck(
+                    step, store: store, headerLookupLimit: headerLookupLimit,
+                    recentlyMoved: { [weak self, earlier = step.destination.flatMap { movedThisCall[$0.accountID] } ?? []] in
+                        earlier.union(step.destination.map { self?.recentlyMovedHeaders(accountID: $0.accountID) ?? [] } ?? [])
+                    })
                 report.gone += check.gone
                 guard !check.step.messages.isEmpty else { continue }
                 var sent: [Int64] = []
@@ -460,15 +653,31 @@ extension MailToolbox {
                         report.oneByOne.append(message.id)
                         continue
                     }
+                    // A lookup by Message-ID makes Mail read the whole source mailbox: past the budget, the rest
+                    // waits for a new call rather than piling up behind a busy Mail until an event times out.
+                    if ref.header != nil {
+                        if lookupWork > 0, lookupBudget > 0, lookupWork + check.sourceCount > lookupBudget {
+                            stop = .budget
+                            skip(message.id)
+                            continue
+                        }
+                        lookupWork += check.sourceCount
+                    }
                     var found = true
+                    let sendStarted = Date()
                     do {
                         found = try await send(check.step, ref)
                     } catch {
                         report.error = error
                         stop = .problem
                     }
+                    // Mail took half its event timeout for one message: it is falling behind, so stop after this one.
+                    if stop == nil, automation.messageEventTimeout > 0,
+                        Date().timeIntervalSince(sendStarted) > automation.messageEventTimeout / 2 {
+                        stop = .budget
+                    }
                     guard found else {
-                        report.missing.append(message.id)
+                        report.missing.append((message.id, check.step.source))
                         continue
                     }
                     sent.append(message.id)
@@ -483,6 +692,9 @@ extension MailToolbox {
                 guard !sent.isEmpty else { continue }
                 try? await Task.sleep(for: .seconds(timing.settle))
                 let (outcome, collateral) = try check.verdict()
+                for message in check.step.messages where outcome.done.contains(message.id) {
+                    if let header = message.messageIDHeader { movedThisCall[check.step.source.accountID, default: []].insert(header) }
+                }
                 let unverified = sent.filter { !outcome.done.contains($0) }
                 report.done += sent.filter { outcome.done.contains($0) }
                 report.unverified += unverified
@@ -506,6 +718,9 @@ extension MailToolbox {
             return (report, troubled.map { ($0.check, $0.unverified) })
         }
 
+        if let unseen {
+            unseen.update(add: report.missing.map(\.id), remove: report.done)
+        }
         let accounts = (try? store.accounts()) ?? []
         if let first = report.evidence.first {
             let strays = report.strays
@@ -514,6 +729,8 @@ extension MailToolbox {
                 ("account", accounts.first { $0.id == first.mailbox.accountID }.map { .string($0.name) }),
                 (first.drop ? "expected_drop" : "expected_gain", .int(Int64(first.expected))),
                 (first.drop ? "actual_drop" : "actual_gain", .int(Int64(first.actual))),
+                ("explained_gain", first.explained > 0 ? .int(Int64(first.explained)) : nil),
+                ("unexpected", first.newcomers.isEmpty ? nil : .array(first.newcomers.map(\.json))),
                 ("strays", strays.isEmpty ? nil : .array(strays.map(\.json))),
             ])
             report.strayChangeID = journalStrays(strays, tool: tool)
@@ -526,6 +743,18 @@ extension MailToolbox {
         }
         if let error = report.error, report.done.isEmpty, report.collateral == nil { throw error }
         return report
+    }
+
+    /// Message-IDs this server moved or trashed in `accountID` in the last ``ChangeCheck/newMailAge``: Mail can bring
+    /// a late copy of one into Trash minutes later. Strays are left out: their copies are no one's request.
+    func recentlyMovedHeaders(accountID: String, now: Date = Date()) -> Set<String> {
+        let cutoff = now.addingTimeInterval(-ChangeCheck.newMailAge)
+        var headers: Set<String> = []
+        for record in changes?.records() ?? [] where record.date > cutoff && record.stray != true
+            && (record.kind == .trash || record.kind == .move) {
+            for item in record.items where item.accountID == accountID { headers.insert(item.messageID) }
+        }
+        return headers
     }
 
     /// Moves strays back where they were, found by Message-ID and checked the same way; sets their `restoredID`.

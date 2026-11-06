@@ -23,6 +23,8 @@ final class AgentModel {
     private var seenNeedsReply: Set<Int64>?
     /// Snoozes and scheduled sends waiting, shown in the Mail tab.
     var snoozedCount = 0
+    /// Mailboxes where Mail could not find messages a change asked for: they need Mailbox › Rebuild.
+    var unseen: [UnseenMessages.MailboxCount] = []
     var scheduledSends: [ScheduledSend] = []
     let schedule = ScheduleStore()
     /// Carries out snoozes and scheduled sends; made on first use, Mail's store opens when needed.
@@ -255,6 +257,12 @@ final class AgentModel {
         NSWorkspace.shared.open(URL(filePath: "/System/Applications/Mail.app"))
     }
 
+    /// Hides the "Mail can't see" row until a change misses messages again.
+    func dismissUnseen() {
+        UnseenMessages().clear()
+        unseen = []
+    }
+
     // MARK: Status
 
     /// Reads the log only when its size or date changed, and publishes only a different list.
@@ -271,6 +279,7 @@ final class AgentModel {
         var needsReply: [MessageSummary]?
         var indexStatus: BodyIndex.Status?
         var notIndexed = 0
+        var unseen: [UnseenMessages.MailboxCount] = []
     }
 
     func refreshChecks() async {
@@ -283,6 +292,7 @@ final class AgentModel {
             let readings = await Task(priority: .utility) { await Self.read(store, index: index) }.value
             if readings.messageCount != messageCount { messageCount = readings.messageCount }
             if let current = readings.needsReply { applyNeedsReply(current) }
+            if readings.unseen != unseen { unseen = readings.unseen }
             if let status = readings.indexStatus {
                 if status != indexStatus { indexStatus = status }
                 if readings.notIndexed != notIndexed { notIndexed = readings.notIndexed }
@@ -362,6 +372,7 @@ final class AgentModel {
         var readings = StoreReadings()
         readings.messageCount = (try? store.messageCount()) ?? 0
         readings.needsReply = try? store.needsResponse(days: 3, limit: 50)
+        readings.unseen = (try? UnseenMessages().mailboxes(in: store)) ?? []
         if let status = try? index?.status() {
             readings.indexStatus = status
             readings.notIndexed = (try? store.countMessages(after: status.coveredThrough)) ?? 0

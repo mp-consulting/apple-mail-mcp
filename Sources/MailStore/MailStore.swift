@@ -465,6 +465,22 @@ public final class MailStore: @unchecked Sendable {
             })
     }
 
+    /// Messages in a mailbox now (directly or through a label) whose ROWID is above `rowID`: the rows that reached
+    /// it since `maxMessageRowID()` returned `rowID`.
+    public func messages(mailboxID: Int64, above rowID: Int64) throws -> [MessageSummary] {
+        let (mailboxes, names) = try lookupTables()
+        return try withDB { db in
+            try db.all(
+                """
+                SELECT \(summaryColumns) \(Self.summaryJoins)
+                WHERE m.deleted = 0 AND m.ROWID > ?
+                AND (m.mailbox = ? OR m.ROWID IN (SELECT message_id FROM labels WHERE mailbox_id = ?))
+                ORDER BY m.ROWID
+                """, [.int(rowID), .int(mailboxID), .int(mailboxID)]
+            ) { summary(from: $0, mailboxes: mailboxes, accountNames: names) }
+        }
+    }
+
     /// Every message in a mailbox now (directly or through a label), with its Message-ID header without brackets
     /// ("" when it has none). One pass over the mailbox index, for telling which messages a change took.
     public func headerRows(mailboxID: Int64) throws -> [Int64: String] {

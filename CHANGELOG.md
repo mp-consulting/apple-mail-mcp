@@ -6,6 +6,34 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-11-06
+
+Fixes from a 35,000-message cleanup of Archive year folders (macOS 27.2, Mail 16.0).
+
+### Added
+
+- `trash_messages` and `move_messages` list ids that Mail's database holds but Mail itself cannot find in
+  `mail_cannot_see` (still in `not_found` too), name the mailbox to rebuild in `rebuild_mailbox`, and warn not to
+  send them again. `search_messages` marks such messages for a week (`mail_cannot_see` and a note), or until a
+  change finds them, so bulk scripts stop sending them in every batch.
+- The menu bar app's Mail tab shows a quiet row while such messages are still in their mailbox ("Mail can't see 3
+  messages · In Archive/2020. Select it in Mail and choose Mailbox › Rebuild."); it goes once the mailbox is
+  rebuilt, the week is over, or the user hides it with its close button. `doctor` reports them too ("Mail can't see"), and `mail-bench demo --unseen N`
+  adds some for screenshots.
+
+### Changed
+
+- A move or trash no longer stops on `collateral_suspected` because Trash (or the destination) gained rows the
+  batch did not ask for, when those rows are explained: another copy of a requested message, a late copy of a
+  message this server moved or trashed in the last day (from the change journal), or mail received in the last
+  day (deleted on another device meanwhile). Only the rest counts: one of the source mailbox's other messages, or
+  a row nothing explains. `collateral_suspected` now lists them in `unexpected` (id, Message-ID, date, `reason`
+  `from_source` or `unexplained`) and gives `explained_gain`.
+- In mailboxes small enough for `whose message id` lookups (up to 1,000 messages), a call stops once Mail has read
+  about 5,000 messages for them (5 lookups in 900 messages, 10 in 500) and returns the rest as `resume_ids`; so does
+  a message that took Mail more than half its event timeout. Batches of 20 there had run into "Mail did not answer
+  in time".
+
 ## [0.7.1] - 2026-10-30
 
 ### Added
@@ -484,7 +512,8 @@ First release.
   and a reply or forward waiting for approval links to the original.
 - Skills in the Claude tab are listed by their Claude Code slash command (`/mail-triage`…); click to copy.
 
-[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.8...v0.7.0
 [0.6.8]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.6.7...v0.6.8

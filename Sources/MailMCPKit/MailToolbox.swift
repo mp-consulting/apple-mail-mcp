@@ -59,6 +59,8 @@ public final class MailToolbox: @unchecked Sendable {
     public let pendingRules: PendingRuleStore?
     /// Mailboxes where a change just went wrong, next to the change journal; nil with undo off.
     public let breaker: ChangeBreaker?
+    /// Messages Mail could not find although its database lists them, next to the change journal; nil with undo off.
+    public let unseen: UnseenMessages?
     /// The user's address book, for `find_contact`.
     public let contacts: any ContactsProviding
     public let bodyIndexURL: URL
@@ -76,6 +78,11 @@ public final class MailToolbox: @unchecked Sendable {
     /// than by Message-ID: `whose message id` makes Mail read every message there, about 2.5 ms each (live,
     /// 2026-10-22: 0.55 s in 257 messages, 5.5 s in 2,215, 10.7 s in 4,507, 16–38 s in 9,440; by id 0.2 s).
     public var headerLookupLimit = 1_000
+    /// How many messages one call may make Mail read through `whose message id` lookups (each reads the whole source
+    /// mailbox): the rest of the call goes back as `resume_ids`. Live (2026-11, 35,000-message cleanup): batches of 20
+    /// in mailboxes of 500–900 messages ran into Mail's event timeout while it was busy; batches of 5 did not.
+    /// 0: no limit.
+    public var headerLookupBudget = 5_000
     /// How long rule changes wait for Mail to save its rule files (tests shorten it).
     public var ruleVerification = RuleVerification()
     /// When the running Mail started (nil when it is not running); tests fix it.
@@ -124,6 +131,7 @@ public final class MailToolbox: @unchecked Sendable {
         self.pendingRules = pendingRules
         // Next to the journal, so a toolbox with its own support folder (tests) has its own.
         breaker = changes.map { ChangeBreaker(url: $0.url.deletingLastPathComponent().appending(path: ChangeBreaker.fileName)) }
+        unseen = changes.map { UnseenMessages(url: $0.url.deletingLastPathComponent().appending(path: UnseenMessages.fileName)) }
         self.contacts = contacts
         self.bodyIndexURL = bodyIndexURL
         self.bodyIndexKey = bodyIndexKey ?? BodyIndexKey.provider(forIndexAt: bodyIndexURL)

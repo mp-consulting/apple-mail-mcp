@@ -152,7 +152,8 @@ extension MailToolbox {
                 Move messages to another mailbox (e.g. archive them). Returns the messages' new ids, since Mail \
                 assigns new ids on move. Use dry_run to preview. "moved" counts only messages Mail's database shows \
                 in the destination; stop if the reply has "unverified" or "collateral_suspected". Send "resume_ids" \
-                in a new call, and each id in "retry_one_by_one" in a call of its own.
+                in a new call, and each id in "retry_one_by_one" in a call of its own. Leave ids in "mail_cannot_see" \
+                out of later calls: Mail cannot find them until the mailbox is rebuilt.
                 """,
                 Schema.object(
                     [
@@ -268,7 +269,8 @@ extension MailToolbox {
                 Move messages to their account's Trash (recoverable). Messages already in Trash or Junk are left alone. \
                 "trashed" counts only messages Mail's database shows in Trash; stop if the reply has \
                 "unverified" or "collateral_suspected". Send "resume_ids" in a new call, and each id in \
-                "retry_one_by_one" in a call of its own.
+                "retry_one_by_one" in a call of its own. Leave ids in "mail_cannot_see" out of later calls: Mail \
+                cannot find them until the mailbox is rebuilt.
                 """,
                 Schema.object(
                     [

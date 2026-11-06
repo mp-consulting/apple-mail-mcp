@@ -95,6 +95,8 @@ public enum Doctor {
                     """))
         }
 
+        if let store, let check = unseenCheck(try? UnseenMessages().mailboxes(in: store)) { checks.append(check) }
+
         let agent = ApprovalCenter().isAgentRunning()
         checks.append(Check(
             name: "Menu bar app", state: agent || settings.sendPolicy != .confirm ? .ok : .failed,
@@ -103,6 +105,16 @@ public enum Doctor {
             name: "Settings", state: .ok,
             detail: "send policy \(settings.sendPolicy.rawValue), mail changes \(settings.allowMailChanges ? "allowed" : "off"), batch limit \(settings.maxBatchSize)"))
         return checks
+    }
+
+    /// Mailboxes holding messages Mail could not find when a change asked for them (see ``UnseenMessages``).
+    static func unseenCheck(_ mailboxes: [UnseenMessages.MailboxCount]?) -> Check? {
+        guard let mailboxes, !mailboxes.isEmpty else { return nil }
+        return Check(
+            name: "Mail can't see", state: .warning,
+            detail: mailboxes.map(\.description).joined(separator: ", ")
+                + ": Mail's database lists them, but Mail could not find them. "
+                + UnseenMessages.advice(several: mailboxes.count > 1))
     }
 
     /// The server build each client used last (from the activity log), and a warning when one used an older server

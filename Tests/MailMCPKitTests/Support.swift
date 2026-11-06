@@ -41,6 +41,11 @@ final class RecordingAutomation: MailAutomating, @unchecked Sendable {
     var onCompose: (@Sendable (OutgoingMessage, DeliveryMode) throws -> Void)?
     /// Runs inside `trash`, e.g. to simulate Mail moving the messages to Trash (or more than that).
     var onTrash: (@Sendable ([Int64], MailboxTarget) -> Void)?
+    /// The longest one message event may take (0: no limit, as the protocol's default).
+    var eventTimeout: TimeInterval = 0
+    var messageEventTimeout: TimeInterval { eventTimeout }
+    /// Messages Mail cannot find (its index of the mailbox is out of step): trash and move report 0 for them.
+    var unfound: Set<Int64> = []
     /// Runs inside the rule calls, e.g. to write the rule files as Mail would.
     var onRuleChange: (@Sendable (Call) -> Void)?
     /// What `ruleNames` returns: the rules Mail has in memory.
@@ -87,6 +92,8 @@ final class RecordingAutomation: MailAutomating, @unchecked Sendable {
     func trash(_ messages: [MessageRef], in mailbox: MailboxTarget, to trash: MailboxTarget) async throws -> Int {
         let ids = record(messages)
         recordChange(.trash(ids, mailbox, trash))
+        let unfound = self.unfound
+        guard !ids.contains(where: unfound.contains) else { return 0 }
         onTrash?(ids, mailbox)
         return ids.count
     }
@@ -208,6 +215,15 @@ struct Harness {
     }
 
     func id(_ name: String) -> Int64 { fixture.ids[name]! }
+
+    /// Mail carrying out every trash as asked, then `extra` (e.g. a row arriving in Trash meanwhile).
+    func trashWorks(then extra: (@Sendable () -> Void)? = nil) {
+        let fixture = self.fixture
+        automation.onTrash = { ids, _ in
+            for id in ids { _ = try? fixture.store.moveMessage(id, to: fixture.trash) }
+            extra?()
+        }
+    }
 
     /// Calls a tool and returns its text and error flag.
     func call(_ name: String, _ arguments: [String: Value] = [:]) async -> (text: String, isError: Bool) {

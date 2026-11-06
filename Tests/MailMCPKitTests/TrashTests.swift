@@ -19,10 +19,7 @@ final class TrashTests {
     var icloudTrash: MailboxTarget { MailboxTarget(accountID: h.fixture.icloud, path: "Deleted Messages") }
 
     /// Mail carrying out every trash as asked.
-    func trashWorks() {
-        let fixture = h.fixture
-        h.automation.onTrash = { ids, _ in for id in ids { _ = try? fixture.store.moveMessage(id, to: fixture.trash) } }
-    }
+    func trashWorks() { h.trashWorks() }
 
     /// Calls that are not a move to Trash.
     func notTrash() -> [RecordingAutomation.Call] {

@@ -7,7 +7,8 @@ import MailStore
 // Benchmarks for apple-mail-mcp. Prints timings and counts only, never message content.
 //
 //   mail-bench compare [--servers imdinu,mgcrea,…] [--server PATH] [--account NAME] [--runs N] [--other-runs N] [--fresh-index] [--out FILE]
-//       The same questions to this server and to the other Apple Mail MCP servers, over real MCP stdio sessions.
+//       The same questions to this server and to the other Apple Mail MCP servers, over real MCP sessions (stdio, or HTTP
+//       for the servers that only serve that).
 //       Run Scripts/bench-servers.sh first: it fetches the servers that ship as release files and builds their indexes.
 //   mail-bench store [--runs N]
 //       In-process timings of MailStore operations on your own Mail data.
@@ -173,20 +174,30 @@ func mailWriteScenario(store: MailStore) throws -> StoreScenario {
 
 // MARK: MCP comparison
 
-/// An MCP client talking to a server subprocess over stdio.
+/// A server that speaks MCP over Streamable HTTP on localhost instead of stdio.
+struct HTTPEndpoint {
+    var port: Int
+    var path = "/mcp"
+    var token: String?
+}
+
+/// An MCP client talking to a server subprocess over stdio (or, for `http`, over HTTP to the subprocess).
 final class MCPProcess {
     let process = Process()
     let client: Client
     let label: String
 
-    init(label: String, command: [String], environment: [String: String] = [:], startTimeout: TimeInterval = 120) async throws {
+    init(
+        label: String, command: [String], environment: [String: String] = [:], http: HTTPEndpoint? = nil,
+        startTimeout: TimeInterval = 120
+    ) async throws {
         self.label = label
         let input = Pipe()
         let output = Pipe()
         process.executableURL = URL(filePath: "/usr/bin/env")
         process.arguments = command
         process.standardInput = input
-        process.standardOutput = output
+        process.standardOutput = http == nil ? output : FileHandle(forWritingAtPath: "/dev/null")
         // With APPLE_MAIL_MCP_TRACE set, our server's stage timings (numbers only) go to this run's stderr.
         process.standardError = ProcessInfo.processInfo.environment["APPLE_MAIL_MCP_TRACE"] != nil && label.hasPrefix("ours")
             ? FileHandle.standardError : FileHandle(forWritingAtPath: "/dev/null")
@@ -194,10 +205,34 @@ final class MCPProcess {
         env["APPLE_MAIL_MCP_NO_ACTIVITY"] = "1"  // keep benchmark calls out of the user's Activity
         for (key, value) in environment { env[key] = value }
         process.environment = env
+        // Another process on the port (one still exiting after a restart) would answer in this server's place.
+        if let http, Self.listening(port: http.port) == true {
+            throw MCPError.internalError("port \(http.port) is already in use")
+        }
         try process.run()
-        // Blocking reads, not the SDK's 10 ms polling, so the client adds no latency of its own to any server.
-        let transport = LineTransport(
-            input: output.fileHandleForReading.fileDescriptor, output: input.fileHandleForWriting.fileDescriptor)
+        let transport: any Transport
+        if let http {
+            // Plain request and response (no SSE stream), once the server listens.
+            let endpoint = URL(string: "http://127.0.0.1:\(http.port)\(http.path)")!
+            let deadline = Date().addingTimeInterval(startTimeout)
+            while Self.listening(port: http.port) == false {
+                guard process.isRunning, Date() < deadline else {
+                    process.terminate()
+                    throw MCPError.internalError("did not listen on port \(http.port)")
+                }
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            let token = http.token
+            transport = HTTPClientTransport(endpoint: endpoint, streaming: false) { request in
+                var request = request
+                if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+                return request
+            }
+        } else {
+            // Blocking reads, not the SDK's 10 ms polling, so the client adds no latency of its own to any server.
+            transport = LineTransport(
+                input: output.fileHandleForReading.fileDescriptor, output: input.fileHandleForWriting.fileDescriptor)
+        }
         let client = Client(name: "mail-bench", version: "1.0")
         self.client = client
         // A server that never answers `initialize` would hang the whole run: give up on it.
@@ -209,6 +244,27 @@ final class MCPProcess {
         }
         defer { watchdog.cancel() }
         _ = try await client.connect(transport: transport)
+    }
+
+    /// Whether something accepts TCP connections on the local port; nil off macOS (the Linux demo build), where
+    /// there is no probe and the first request finds out.
+    static func listening(port: Int) -> Bool? {
+        #if os(macOS)
+        let socket = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        guard socket >= 0 else { return false }
+        defer { close(socket) }
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = in_port_t(UInt16(port).bigEndian)
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        return withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(socket, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0
+            }
+        }
+        #else
+        return nil
+        #endif
     }
 
     /// Calls a tool with a client-side timeout. Returns elapsed ms, whether it succeeded, and the result text
@@ -246,9 +302,12 @@ final class MCPProcess {
 
     /// Disconnects first: once the server is gone, the SDK's receive loop spins on the closed stream
     /// (a full core per stopped server) until the client is disconnected.
+    /// Then waits (up to 5 s) for the server to exit, so a fresh one can take its port.
     func stop() async {
         await client.disconnect()
         process.terminate()
+        let deadline = Date().addingTimeInterval(5)
+        while process.isRunning, Date() < deadline { try? await Task.sleep(nanoseconds: 50_000_000) }
     }
 }
 
@@ -266,6 +325,7 @@ struct BenchServer {
     var title: String
     var command: [String]
     var environment: [String: String] = [:]
+    var http: HTTPEndpoint? = nil
     var runs: Int
     var calls: [String: Call]
     /// Run once before the server starts, untimed: building its index.
@@ -303,13 +363,17 @@ let scenarioNames = [
 /// Where `Scripts/bench-servers.sh` puts the servers that ship as release files rather than packages.
 let benchServersDirectory = FileManager.default.homeDirectoryForCurrentUser
     .appending(path: "Library/Caches/AppleMailMCP/bench-servers").path
+/// The sinkingsugar/mail-mcp commit `Scripts/bench-servers.sh` checked out and built (it has no releases).
+let sinkingsugarCommit = (try? String(contentsOfFile: "\(benchServersDirectory)/sinkingsugar-src/.git/HEAD", encoding: .utf8))
+    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) } ?? "unknown"
 
 func runComparison(options: Options) async throws -> String {
     let store = try MailStore.open()
-    let accountName = options.string("account", try store.accounts().max {
-        ($0.emailAddresses.count, try! store.mailboxes(accountID: $0.id).count)
-            < ($1.emailAddresses.count, try! store.mailboxes(accountID: $1.id).count)
-    }?.name ?? "iCloud")
+    // The biggest account, where the servers differ most.
+    let sizes = try store.accounts().map { account in
+        (account.name, try store.mailboxes(accountID: account.id).reduce(0) { $0 + $1.totalCount })
+    }
+    let accountName = options.string("account", sizes.max { $0.1 < $1.1 }?.0 ?? "iCloud")
     let account = try store.resolveAccount(accountName)
     let inbox = try store.resolveMailboxes("inbox", accountID: account.id)
     let inboxMessages = inbox.reduce(0) { $0 + $1.totalCount }
@@ -359,6 +423,7 @@ func runComparison(options: Options) async throws -> String {
     let emptySupport = FileManager.default.temporaryDirectory.appending(path: "bench-noindex-\(UUID().uuidString)").path
     // Generated mail instead of the user's: `APPLE_MAIL_MCP_MAIL_ROOT` set, as `mail-bench demo` prints.
     let testMailRoot = ProcessInfo.processInfo.environment["APPLE_MAIL_MCP_MAIL_ROOT"]
+    let sinkingsugarToken = BodyIndexKey.random().hex
     var allServers: [BenchServer] = [
         BenchServer(key: "ours", title: "**Apple Mail MCP**", command: [serverPath, "--read-only"], runs: runs, calls: ours),
         BenchServer(
@@ -413,12 +478,14 @@ func runComparison(options: Options) async throws -> String {
                 "Subject search (all mailboxes)": Call(tool: "search_emails", arguments: ["account": name, "mailbox": "ALL", "subject_filter": "invoice", "limit": 20]),
                 "Sender search (inbox)": Call(tool: "search_emails", arguments: ["account": name, "mailbox": box, "from_filter": "github", "limit": 20]),
             ]),
-        // kiki830621/che-apple-mail-mcp: Swift; Envelope Index SQLite for search, AppleScript for the rest.
+        // PsychQuant/che-apple-mail-mcp (was kiki830621): Swift; Envelope Index SQLite and .emlx files where it can,
+        // AppleScript for the rest.
         BenchServer(
-            key: "kiki830621", title: "kiki830621 2.0.1", command: ["\(dir)/CheAppleMailMCP"], runs: otherRuns,
+            key: "psychquant", title: "PsychQuant 3.3.1", command: ["\(dir)/che-3.3.1/CheAppleMailMCP"], runs: otherRuns,
             calls: [
                 "List accounts": Call(tool: "list_accounts", arguments: [:]),
-                "Unread counts per mailbox": Call(tool: "list_mailboxes", arguments: ["account_name": name]),
+                // An account named by its address is refused here: its id instead.
+                "Unread counts per mailbox": Call(tool: "list_mailboxes", arguments: ["account_id": uuid]),
                 "Latest 20 inbox messages": Call(tool: "list_emails", arguments: ["account_name": name, "mailbox": box, "limit": 20]),
                 "Subject search (inbox)": Call(tool: "search_emails", arguments: ["query": "invoice", "field": "subject", "account_name": name, "mailbox": box, "limit": 20]),
                 "Subject search (all mailboxes)": Call(tool: "search_emails", arguments: ["query": "invoice", "field": "subject", "account_name": name, "limit": 20]),
@@ -458,6 +525,23 @@ func runComparison(options: Options) async throws -> String {
                         "search_emails", ["query": .string(threadKeyword), "account": uuid, "mailbox": box, "limit": 1], timeout: timeout)
                     return firstMatch(#""thread_id"\s*:\s*"([^"]+)""#, in: found.text).map { ["thread_id": .string($0)] }
                 },
+            ]),
+        // sinkingsugar/mail-mcp: Swift; Envelope Index plus its own FTS5 index (`mail-mcp index` first), Apple Events
+        // for changes. Streamable HTTP only, on a port of its own here with a throwaway token (no token file).
+        BenchServer(
+            key: "sinkingsugar", title: "sinkingsugar \(sinkingsugarCommit.prefix(7))",
+            command: ["\(dir)/sinkingsugar-build/release/mail-mcp", "serve"],
+            environment: ["MAIL_MCP_PORT": "17373", "MAIL_MCP_TOKEN": sinkingsugarToken],
+            http: HTTPEndpoint(port: 17373, token: sinkingsugarToken), runs: otherRuns,
+            calls: [
+                "List accounts": Call(tool: "list_accounts", arguments: [:]),
+                "Unread counts per mailbox": Call(tool: "list_mailboxes", arguments: ["account": name]),
+                "Latest 20 inbox messages": Call(tool: "search_messages", arguments: ["account": name, "mailbox": box, "limit": 20]),
+                "Subject search (inbox)": Call(tool: "search_messages", arguments: ["subject": "invoice", "account": name, "mailbox": box, "limit": 20]),
+                "Subject search (all mailboxes)": Call(tool: "search_messages", arguments: ["subject": "invoice", "account": name, "limit": 20]),
+                "Sender search (inbox)": Call(tool: "search_messages", arguments: ["from": "github", "account": name, "mailbox": box, "limit": 20]),
+                "Body text search (inbox)": Call(tool: "search_messages", arguments: ["fts": "body:kubernetes", "account": name, "mailbox": box, "limit": 10]),
+                "Conversation thread": Call(tool: "get_thread", arguments: ["id": .int(Int(thread?.id ?? 0))]),
             ]),
         // The Python apple-mail-mcp on PyPI (mcp-apple-mail): AppleScript.
         BenchServer(
@@ -512,7 +596,7 @@ func runComparison(options: Options) async throws -> String {
     // called once per round, so a change in the machine's load hits them all alike instead of whichever one was
     // running then. Those that drive Mail with AppleScript go last, one at a time: when one leaves Mail stuck, it
     // can no longer spoil the numbers of the others.
-    let appleScriptHeavy = ["kiki830621", "ipsupport", "jakobfigur", "jayvee6", "python"]
+    let appleScriptHeavy = ["ipsupport", "jakobfigur", "jayvee6", "python"]
     let groups = [servers.filter { !appleScriptHeavy.contains($0.key) }] + servers.filter { appleScriptHeavy.contains($0.key) }.map { [$0] }
 
     final class Runner {
@@ -535,7 +619,8 @@ func runComparison(options: Options) async throws -> String {
             do {
                 runners.append(Runner(
                     server: server,
-                    process: try await MCPProcess(label: server.key, command: server.command, environment: server.environment)))
+                    process: try await MCPProcess(
+                        label: server.key, command: server.command, environment: server.environment, http: server.http)))
             } catch {
                 notes.append("\(server.title): did not start (\(String("\(error)".prefix(120))))")
             }
@@ -594,7 +679,8 @@ func runComparison(options: Options) async throws -> String {
                 if cell.failure == "timeout" {
                     // The server may still be busy with the abandoned call: start a fresh one.
                     await runner.process.stop()
-                    if let fresh = try? await MCPProcess(label: server.key, command: server.command, environment: server.environment) {
+                    if let fresh = try? await MCPProcess(
+                        label: server.key, command: server.command, environment: server.environment, http: server.http) {
                         runner.process = fresh
                     } else {
                         runner.timeoutsInARow = 2  // it did not come back: skip the rest of its questions
@@ -616,10 +702,12 @@ func runComparison(options: Options) async throws -> String {
     }
     let header = "| Operation | " + servers.map(\.title).joined(separator: " | ") + " |"
     let rule = "|---|" + String(repeating: "---:|", count: servers.count)
+    let overHTTP = servers.filter { $0.http != nil }.map(\.title).joined(separator: ", ")
     var lines = [
         "## Apple Mail MCP vs other Apple Mail MCP servers",
         "",
-        "Same questions over real MCP stdio sessions, account with \(accountMessages.formatted()) messages "
+        "Same questions over real MCP stdio sessions\(overHTTP.isEmpty ? "" : " (HTTP on localhost for \(overHTTP))"), "
+            + "account with \(accountMessages.formatted()) messages "
             + "(\(inboxMessages.formatted()) in its inbox). Median of \(runs) warm runs for Apple Mail MCP, \(otherRuns) for the others "
             + "(\(Int(timeout)) s timeout). Servers that read Mail's files are called in turns, one call each per round, "
             + "so they share the same conditions; those that use AppleScript run afterwards, one at a time. \(machineDescription()).",

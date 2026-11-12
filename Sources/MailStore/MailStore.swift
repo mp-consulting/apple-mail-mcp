@@ -546,6 +546,9 @@ public final class MailStore: @unchecked Sendable {
         var sql: String
         var countSQL: String
         var bindings: [SQLValue]
+        /// The subject and sender filters every match must pass, as the `messages` column and the lookup ROWIDs
+        /// matched in memory (see `fewCandidates`).
+        var required: [(column: String, ids: [Int64])] = []
     }
 
     /// Mailboxes holding up to this many messages are walked, testing each row, rather than reached through a
@@ -555,6 +558,20 @@ public final class MailStore: @unchecked Sendable {
     /// How many messages the query's mailboxes hold; nil when it is not limited to mailboxes.
     static func scopeSize(of query: MessageQuery, mailboxes: [Int64: Mailbox]) -> Int? {
         query.mailboxIDs.isEmpty ? nil : query.mailboxIDs.reduce(0) { $0 + (mailboxes[$1]?.totalCount ?? 0) }
+    }
+
+    /// The plain mailboxes a query without mailbox ids searches: its accounts', without Trash and Junk unless asked.
+    static func allowedMailboxes(for query: MessageQuery, mailboxes: [Int64: Mailbox]) -> [Mailbox] {
+        mailboxes.values.filter {
+            $0.sourceMailboxID == nil && (query.accountIDs.isEmpty || query.accountIDs.contains($0.accountID))
+                && (query.includeTrashAndJunk || ($0.role != .trash && $0.role != .junk))
+        }
+    }
+
+    /// `ORDER BY` for date order, newest first unless `ascending`; the ROWID breaks ties.
+    static func dateOrder(ascending: Bool) -> String {
+        let direction = ascending ? "ASC" : "DESC"
+        return "ORDER BY m.date_received \(direction), m.ROWID \(direction)"
     }
 
     /// The page's clause alone, or the count's (see `whereClauses`).
@@ -597,10 +614,8 @@ public final class MailStore: @unchecked Sendable {
             }
             clauses.append(parts.isEmpty ? "0" : "(" + parts.joined(separator: " OR ") + ")")
         } else {
-            var allowed = mailboxes.values.filter { $0.sourceMailboxID == nil }
-            if !query.accountIDs.isEmpty { allowed = allowed.filter { query.accountIDs.contains($0.accountID) } }
-            if !query.includeTrashAndJunk { allowed = allowed.filter { $0.role != .trash && $0.role != .junk } }
             if !query.accountIDs.isEmpty || !query.includeTrashAndJunk {
+                let allowed = Self.allowedMailboxes(for: query, mailboxes: mailboxes)
                 let list = allowed.map { String($0.id) }.joined(separator: ",")
                 mailboxClause = ("m.mailbox IN (\(list))", "\(countHint ? "+" : "")m.mailbox IN (\(list))")
                 if allowed.isEmpty { clauses.append("0") }
@@ -614,26 +629,28 @@ public final class MailStore: @unchecked Sendable {
             if loadedLookups == nil { loadedLookups = .some(currentTextLookups()) }
             return loadedLookups!
         }
-        /// `SELECT …` of the subject or address ROWIDs matching any of `terms`, and its bindings.
-        func matching(_ table: LookupTableName, _ terms: [String]) -> (sql: String, bindings: [SQLValue]) {
+        /// `SELECT …` of the subject or address ROWIDs matching any of `terms`, its bindings, and the ROWIDs
+        /// themselves when they were matched in memory.
+        func matching(_ table: LookupTableName, _ terms: [String]) -> (sql: String, bindings: [SQLValue], ids: [Int64]?) {
             if let loaded = lookups(),
                 let ids = textLookups.matches("\(table)\u{0}" + terms.joined(separator: "\u{0}"), generation: loaded.generation, compute: {
                     let rows = table == .subjects ? loaded.subjects : loaded.addresses
                     return Self.union(terms.map { rows.ids(containing: $0) })
                 })
             {
-                return ("SELECT value FROM json_each(?)", [Self.idArray(ids)])
+                return ("SELECT value FROM json_each(?)", [Self.idArray(ids)], ids)
             }
             let patterns = terms.map { SQLValue.text(SQLiteConnection.likePattern(containing: $0)) }
             switch table {
             case .subjects:
-                return ("SELECT ROWID FROM subjects WHERE \(Self.repeated("subject LIKE ? ESCAPE '\\'", terms.count))", patterns)
+                return ("SELECT ROWID FROM subjects WHERE \(Self.repeated("subject LIKE ? ESCAPE '\\'", terms.count))", patterns, nil)
             case .addresses:
                 return (
                     "SELECT ROWID FROM addresses WHERE \(Self.repeated("address LIKE ? ESCAPE '\\' OR comment LIKE ? ESCAPE '\\'", terms.count))",
-                    patterns.flatMap { [$0, $0] })
+                    patterns.flatMap { [$0, $0] }, nil)
             }
         }
+        var required: [(column: String, ids: [Int64])] = []
         let textTerms = MessageQuery.cleaned(([query.text].compactMap { $0 }) + query.textTerms)
         if !textTerms.isEmpty {
             // Any term in the subject, the sender or Mail's preview snippet.
@@ -704,11 +721,13 @@ public final class MailStore: @unchecked Sendable {
             let subjects = matching(.subjects, subjectTerms)
             clauses.append("\(walk)m.subject IN (\(subjects.sql))")
             bindings += subjects.bindings
+            if let ids = subjects.ids { required.append(("subject", ids)) }
         }
         if !MessageQuery.blank(query.sender) {
             let senders = matching(.addresses, MessageQuery.cleaned([query.sender ?? ""]))
             clauses.append("\(walk)m.sender IN (\(senders.sql))")
             bindings += senders.bindings
+            if let ids = senders.ids { required.append(("sender", ids)) }
         }
         if !MessageQuery.blank(query.recipient) {
             let addresses = matching(.addresses, MessageQuery.cleaned([query.recipient ?? ""]))
@@ -751,7 +770,53 @@ public final class MailStore: @unchecked Sendable {
         }
         return WhereClause(
             sql: joined(deletedClause.page, mailboxClause?.page), countSQL: joined(deletedClause.count, mailboxClause?.count),
-            bindings: bindings)
+            bindings: bindings, required: required)
+    }
+
+    /// The ROWIDs of every message, in any mailbox, that passes one of the clause's subject or sender filters, when
+    /// there are few enough of them; nil otherwise. A page in date order walks the date index of its scope and
+    /// tests each row: when the filter is rare, that reads most of the scope (all of it when the page stays short),
+    /// while looking the few candidates up by ROWID reads only them. Walking `scope` rows to fill `page` matches
+    /// out of at most M costs at least scope × page / M rows; M lookups cost about 3 rows' worth each. So the
+    /// candidates win below M = √(scope × page / 3), about 750 for 85,000 messages and a page of 20. The probe
+    /// reads only the column's index, and is skipped when even the lookup ROWIDs exceed that; a later probe only
+    /// has to beat the best so far.
+    func fewCandidates(_ clause: WhereClause, scope: Int, page: Int) throws -> [Int64]? {
+        let cap = Int((Double(scope) * Double(page) / 3).squareRoot())
+        var best: [Int64]?
+        for (column, ids) in clause.required.sorted(by: { $0.ids.count < $1.ids.count }) where ids.count <= cap {
+            let bound = min(cap, (best?.count ?? .max) - 1)
+            guard bound >= 0 else { break }  // no candidates at all: nothing beats that
+            let found = try withDB { db in
+                try db.all(
+                    "SELECT ROWID FROM messages WHERE \(column) IN (SELECT value FROM json_each(?)) LIMIT ?",
+                    [Self.idArray(ids), .int(Int64(bound + 1))]) { $0.int(0) }
+            }
+            if found.count <= bound { best = found }
+        }
+        return best
+    }
+
+    /// The `candidates` that pass the clause, in `order`. CROSS JOIN keeps the candidates first: SQLite cannot
+    /// tell how few they are and would walk the date index again.
+    func matches(among candidates: [Int64], whereSQL: String, bindings: [SQLValue], order: String) throws -> [Int64] {
+        guard !candidates.isEmpty else { return [] }
+        let joins = Self.minimalJoins(for: whereSQL).replacingOccurrences(
+            of: "FROM messages m", with: "FROM json_each(?) c CROSS JOIN messages m ON m.ROWID = c.value")
+        return try withDB { db in
+            try db.all("SELECT m.ROWID \(joins) WHERE \(whereSQL) \(order)", [Self.idArray(candidates)] + bindings) { $0.int(0) }
+        }
+    }
+
+    /// One page of `allIDs`, every match in scope in order; their number is the total.
+    private func page(
+        of allIDs: [Int64], offset: Int, limit: Int, needsTotal: Bool, mailboxes: [Int64: Mailbox], accountNames names: [String: String]
+    ) throws -> SearchPage {
+        let pageIDs = Array(allIDs.dropFirst(offset).prefix(limit))
+        return SearchPage(
+            messages: try messages(ids: pageIDs, mailboxes: mailboxes, accountNames: names), total: needsTotal ? allIDs.count : nil,
+            offset: offset, limit: limit, hasMore: offset + pageIDs.count < allIDs.count, bodySearchMode: nil,
+            scanLimited: false, scannedMessages: 0)
     }
 
     /// Mail's lookup tables that text filters match first.
@@ -834,8 +899,7 @@ public final class MailStore: @unchecked Sendable {
         let clause = whereClauses(for: query, mailboxes: mailboxes)
         let (whereSQL, bindings) = (clause.sql, clause.bindings)
         let scopeSize = Self.scopeSize(of: query, mailboxes: mailboxes)
-        let direction = query.sortAscending ? "ASC" : "DESC"
-        let order = "ORDER BY m.date_received \(direction), m.ROWID \(direction)"
+        let order = Self.dateOrder(ascending: query.sortAscending)
         let limit = max(1, min(query.limit, 500))
         let offset = max(0, query.offset)
 
@@ -846,11 +910,14 @@ public final class MailStore: @unchecked Sendable {
             // make each re-read its pages.
             if needsTotal, (scopeSize ?? .max) <= Self.walkScopeLimit, indexOnlyCountStatement(query, mailboxes: mailboxes) == nil {
                 let allIDs = try walkMatches(query, mailboxes: mailboxes, whereSQL: whereSQL, bindings: bindings, order: order)
-                let pageIDs = Array(allIDs.dropFirst(offset).prefix(limit))
-                return SearchPage(
-                    messages: try messages(ids: pageIDs, mailboxes: mailboxes, accountNames: names), total: allIDs.count,
-                    offset: offset, limit: limit, hasMore: offset + pageIDs.count < allIDs.count, bodySearchMode: nil,
-                    scanLimited: false, scannedMessages: 0)
+                return try page(of: allIDs, offset: offset, limit: limit, needsTotal: true, mailboxes: mailboxes, accountNames: names)
+            }
+            // A rare subject or sender: its few messages by ROWID, every match in scope at once; the page is a slice
+            // and the total their number.
+            let scope = scopeSize ?? Self.allowedMailboxes(for: query, mailboxes: mailboxes).reduce(0) { $0 + $1.totalCount }
+            if let candidates = try fewCandidates(clause, scope: scope, page: offset + limit) {
+                let allIDs = try matches(among: candidates, whereSQL: whereSQL, bindings: bindings, order: order)
+                return try page(of: allIDs, offset: offset, limit: limit, needsTotal: needsTotal, mailboxes: mailboxes, accountNames: names)
             }
             // The total, on the second connection meanwhile; a short page gives it anyway (then unused).
             let pendingTotal = needsTotal ? countInBackground(countStatement(query, mailboxes: mailboxes, clause: clause)) : nil
@@ -1043,8 +1110,7 @@ public final class MailStore: @unchecked Sendable {
     public func allMatchingIDs(_ query: MessageQuery, bodyIndex: (any BodySearchIndex)? = nil, cap: Int = 200_000) throws -> MatchResult {
         let (mailboxes, _) = try lookupTables()
         let (whereSQL, bindings) = whereClause(for: query, mailboxes: mailboxes)
-        let direction = query.sortAscending ? "ASC" : "DESC"
-        let order = "ORDER BY m.date_received \(direction), m.ROWID \(direction)"
+        let order = Self.dateOrder(ascending: query.sortAscending)
         guard let bodyText = query.bodyText?.trimmingCharacters(in: .whitespaces), !bodyText.isEmpty else {
             let ids = try withDB { db in
                 try db.all(

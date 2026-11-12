@@ -1,12 +1,14 @@
 #!/bin/bash
 # Prepares the other Apple Mail MCP servers for `mail-bench compare`, then runs it.
-# Run from a terminal that has Full Disk Access: the indexes of imdinu and parasxos read Mail's files.
+# Run from a terminal that has Full Disk Access: the indexes of imdinu, parasxos and sinkingsugar read Mail's files.
 #
 #   Scripts/bench-servers.sh            fetch, index, then benchmark into Benchmarks/compare-mcp-servers.md
 #                                       (servers reading Mail's files) and compare-servers.md (AppleScript ones)
 #   Scripts/bench-servers.sh --prepare  fetch and index only
 #
-# Versions are pinned; release files are checked against the SHA-256 published in the MCP registry.
+# Versions are pinned; release files are checked against the SHA-256 published in the MCP registry, or by GitHub
+# for the release (che-apple-mail-mcp is in the registry only up to 2.0.1); sinkingsugar has no releases and is
+# built from the commit pinned below (mail-bench reads it back from the checkout for its report).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 dir="$HOME/Library/Caches/AppleMailMCP/bench-servers"
@@ -27,12 +29,19 @@ fetch() {  # url sha256 destination
   fi
 }
 
-fetch https://github.com/kiki830621/che-apple-mail-mcp/releases/download/v2.0.1/CheAppleMailMCP \
-  a532b80e0d0390dc755d0b64a319398df5806f399f982b427fe56d527726513a "$dir/CheAppleMailMCP"
-chmod +x "$dir/CheAppleMailMCP"
+mkdir -p "$dir/che-3.3.1"
+fetch https://github.com/PsychQuant/che-apple-mail-mcp/releases/download/v3.3.1/CheAppleMailMCP \
+  186e86e793a8d20d2e24a390b0b19af50af520f0f607e4a5f9db8a9a55303aeb "$dir/che-3.3.1/CheAppleMailMCP"
+chmod +x "$dir/che-3.3.1/CheAppleMailMCP"
 fetch https://github.com/ipsupport-llc/apple-mail-mcp/releases/download/v1.6.1/apple-mail-mcp.mcpb \
   651ba036870674fb93ca58bf1d209686af32ff40897038cab3633dbf0810ad11 "$dir/ipsupport-llc.mcpb"
 rm -rf "$dir/ipsupport-llc" && unzip -q "$dir/ipsupport-llc.mcpb" -d "$dir/ipsupport-llc"
+
+sinkingsugar=9533abbbd5d28433617e42f4ff1694e072d418c6
+[ -d "$dir/sinkingsugar-src/.git" ] || git clone -q https://github.com/sinkingsugar/mail-mcp "$dir/sinkingsugar-src"
+git -C "$dir/sinkingsugar-src" fetch -q origin "$sinkingsugar"
+git -C "$dir/sinkingsugar-src" checkout -q --detach "$sinkingsugar"
+swift build -c release --package-path "$dir/sinkingsugar-src" --scratch-path "$dir/sinkingsugar-build" --product mail-mcp
 
 # Package downloads happen now, not inside the first timed call.
 for package in @jakobf1/apple-mail-mcp@0.6.2 @jdot6/apple-mail-mcp@0.1.0 @mgcrea/mcp-apple-mail@1.28.0; do
@@ -44,14 +53,16 @@ echo "Building the imdinu index…"
 uvx apple-mail-mcp@0.5.0 index || echo "warning: the imdinu index failed (exit $?)" >&2
 echo "Building the parasxos index…"
 uvx --from apple-mailbox-mcp@1.8.0 apple-mailbox-mcp fts --build || echo "warning: the parasxos index failed (exit $?)" >&2
+echo "Building the sinkingsugar index…"
+"$dir/sinkingsugar-build/release/mail-mcp" index || echo "warning: the sinkingsugar index failed (exit $?)" >&2
 
 [ "${1:-}" = "--prepare" ] && exit 0
 
 swift build -c release --scratch-path "$build" --product apple-mail-mcp
 swift build -c release --scratch-path "$build" --product mail-bench
 # The servers that read Mail's files, in turns, 25 runs each; our server gets a throwaway index (no Keychain prompt).
-"$build/release/mail-bench" compare --server "$build/release/apple-mail-mcp" --servers imdinu,mgcrea,parasxos \
+"$build/release/mail-bench" compare --server "$build/release/apple-mail-mcp" --servers imdinu,mgcrea,parasxos,psychquant,sinkingsugar \
   --runs 25 --other-runs 25 --fresh-index --out Benchmarks/compare-mcp-servers.md
 # The ones that drive Mail with AppleScript, one run each (they take seconds per question and keep Mail busy).
 "$build/release/mail-bench" compare --server "$build/release/apple-mail-mcp" \
-  --servers ipsupport,jakobfigur,jayvee6,kiki830621,python --fresh-index --out Benchmarks/compare-servers.md
+  --servers ipsupport,jakobfigur,jayvee6,python --fresh-index --out Benchmarks/compare-servers.md

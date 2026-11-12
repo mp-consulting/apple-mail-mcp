@@ -163,6 +163,47 @@ final class MailStoreTests {
         #expect(try store.indexOnlyCount(unread, mailboxes: mailboxes) == nil)
     }
 
+    @Test func rareFiltersByCandidatesMatchTheFullQuery() throws {
+        let (mailboxes, _) = try store.lookupTables()
+        let f = fixture
+        let cases: [(inout MessageQuery) -> Void] = [
+            { $0.subjectTerms = ["invoice"] },
+            { $0.subjectTerms = ["kickoff", "invoice"] },
+            { $0.subjectTerms = ["no such subject"] },
+            { $0.sender = "carol@" },
+            { $0.sender = "alice"; $0.subjectTerms = ["kickoff"] },
+            { $0.sender = "alice"; $0.accountIDs = [f.icloud] },
+            { $0.sender = "alice"; $0.mailboxIDs = [f.inbox] },
+            { $0.subjectTerms = ["e"]; $0.isRead = false },
+            { $0.subjectTerms = ["e"]; $0.includeTrashAndJunk = true; $0.sortAscending = true },
+        ]
+        for configure in cases {
+            var query = MessageQuery()
+            configure(&query)
+            let clause = store.whereClauses(for: query, mailboxes: mailboxes)
+            let expected = try store.allMatchingIDs(query).ids
+            // The candidates path itself: the fixture is too small for `search` to take it every time.
+            let candidates = try #require(try store.fewCandidates(clause, scope: 100_000, page: 20))
+            #expect(
+                try store.matches(
+                    among: candidates, whereSQL: clause.sql, bindings: clause.bindings,
+                    order: MailStore.dateOrder(ascending: query.sortAscending)) == expected)
+            // And `search`, whichever path the fixture's size picks.
+            for (offset, limit) in [(0, 20), (0, 1), (1, 2), (expected.count, 5)] {
+                query.offset = offset
+                query.limit = limit
+                let page = try store.search(query)
+                #expect(page.messages.map(\.id) == Array(expected.dropFirst(offset).prefix(limit)))
+                #expect(page.total == expected.count)
+                #expect(page.hasMore == (offset + limit < expected.count))
+            }
+        }
+        // More candidates than looking them up is worth: the date walk instead.
+        var common = MessageQuery()
+        common.subjectTerms = ["e"]
+        #expect(try store.fewCandidates(store.whereClauses(for: common, mailboxes: mailboxes), scope: 3, page: 1) == nil)
+    }
+
     @Test func inMemoryLookupsMatchLike() throws {
         let writer = try SQLiteConnection(path: fixture.location.envelopeIndex.path, readOnly: false)
         try writer.execute("INSERT INTO subjects (subject) VALUES ('Café ÉTÉ report'), ('re: 100% done_now'), ('RE:Upper')")

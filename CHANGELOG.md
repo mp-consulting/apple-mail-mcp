@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-11-12
+
+### Changed
+
+- Searches for a rare subject or sender (a few hundred messages or fewer across the account) look those messages up
+  directly instead of walking the scope in date order, and return the page and the total from one query. The
+  threshold depends on the scope's size and the page's end, counting only the mailboxes the search covers.
+- `mail-bench compare` adds PsychQuant 3.3.1 (che-apple-mail-mcp, formerly kiki830621) among the servers that read
+  Mail's files, and sinkingsugar/mail-mcp, built from a pinned commit and reached over Streamable HTTP on localhost.
+  It benchmarks the account with the most messages.
+- swift-log 1.17.0.
+
 ## [0.7.3] - 2026-11-06
 
 ### Added
@@ -525,7 +537,8 @@ First release.
   and a reply or forward waiting for approval links to the original.
 - Skills in the Claude tab are listed by their Claude Code slash command (`/mail-triage`…); click to copy.
 
-[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.7.3...HEAD
+[Unreleased]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.7.4...HEAD
+[0.7.4]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/mp-consulting/apple-mail-mcp/compare/v0.7.0...v0.7.1
